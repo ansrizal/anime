@@ -35,6 +35,7 @@ jobs:
         env:
           DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASSWORD }}
           DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
+          JAVA_TOOL_OPTIONS: ""
         run: |
           chmod +x gradlew
           ./gradlew make makePluginsJson --no-daemon

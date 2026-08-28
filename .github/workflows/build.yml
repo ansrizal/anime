@@ -16,8 +16,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      JAVA_TOOL_OPTIONS: -Xmx2048m
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -29,15 +27,19 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+          cache: 'gradle'
 
       - name: Build Plugins
         env:
           DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASSWORD }}
           DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
         run: |
+          # Remove malformed environment variables that cause JVM crashes
+          unset JAVA_TOOL_OPTIONS
+          unset _JAVA_OPTIONS
+          unset GRADLE_OPTS
+          unset JAVA_OPTS
+          
           chmod +x gradlew
           ./gradlew make makePluginsJson --no-daemon
 

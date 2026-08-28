@@ -87,7 +87,7 @@ jobs:
           user_email: 'github-actions[bot]@users.noreply.github.com'
 
       - name: Automated GitHub Release with CS3 Binaries
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
           files: |

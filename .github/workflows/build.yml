@@ -16,6 +16,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      JAVA_TOOL_OPTIONS: -Xmx2048m
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -29,13 +31,12 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Build Plugins
         env:
           DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASSWORD }}
           DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
-          JAVA_TOOL_OPTIONS: ""
         run: |
           chmod +x gradlew
           ./gradlew make makePluginsJson --no-daemon

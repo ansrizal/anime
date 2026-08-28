@@ -1,16 +1,13 @@
-name: Build
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+name: Build and Deploy Plugins
 
 on:
   push:
     branches:
-      - master
       - main
+      - master
     paths-ignore:
       - '*.md'
+      - '.gitignore'
   workflow_dispatch:
 
 permissions:
@@ -21,53 +18,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
-          path: "src"
+          fetch-depth: 0
 
-      - name: Checkout Builds Branch
-        uses: actions/checkout@v7
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
         with:
-          ref: "builds"
-          path: "builds"
-
-      - name: Clean old builds
-        run: |
-          rm $GITHUB_WORKSPACE/builds/*.cs3 || true
-          rm $GITHUB_WORKSPACE/builds/*.jar || true
-
-      - name: Setup JDK 21
-        uses: actions/setup-java@v5
-        with:
-          java-version: 21
-          distribution: temurin
-          cache: gradle
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v3
 
       - name: Build Plugins
-        working-directory: ${{ github.workspace }}/src
         env:
-          DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASS }}
-          DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USER }}
+          DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASSWORD }}
+          DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
         run: |
           chmod +x gradlew
-          ./gradlew make makePluginsJson
-          cp **/build/*.cs3 ${{ github.workspace }}/builds/
-          cp build/plugins.json ${{ github.workspace }}/builds/
+          ./gradlew make makePluginsJson --no-daemon
 
-      - name: Push builds
-        working-directory: ${{ github.workspace }}/builds
+      - name: Prepare Deployment Folder
         run: |
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .
-          
-          if git diff --staged --quiet; then
-            echo "do not error if nothing to commit."
-            exit 0
-          fi
-          
-          git commit --amend -m "Build ${{ github.sha }}"
-          git push --force
+          mkdir -p deploy
+          # Copy all generated .cs3 files
+          find . -name "*.cs3" -exec cp {} deploy/ \;
+          # Copy plugins.json and repo.json
+          [ -f build/plugins.json ] && cp build/plugins.json deploy/ || cp plugins.json deploy/
+          [ -f repo.json ] && cp repo.json deploy/
+
+      - name: Deploy to Builds Branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./deploy
+          publish_branch: builds
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: "Build: ${{ github.sha }}"

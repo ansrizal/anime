@@ -44,7 +44,7 @@ class NomatProvider : MainAPI() {
         val url = "$mainUrl/${request.data}/$page/"
         val document = app.get(url).document
 
-        val home = document.select("a:has(div.item-content)").mapNotNull { it.toSearchResult() }
+        val home = document.select("a:has(div.item-content)").asIterable().mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, home)
     }
@@ -144,18 +144,18 @@ class NomatProvider : MainAPI() {
                 ?.substringBefore("')")
         )?.fixImageQuality()
 
-        val tags = document.select("div.video-genre a").map { it.text() }
+        val tags = document.select("div.video-genre a").asIterable().map { it.text() }
         val year = document.select("div.video-duration a[href*=/category/year/]").text().toIntOrNull()
         val description = document.selectFirst("div.video-synopsis")?.text()?.trim()
         val trailer = document.selectFirst("div.video-trailer iframe")?.attr("src")
         val rating = document.selectFirst("div.rtg")?.text()?.trim()
-        val actors = document.select("div.video-actor a").map { it.text() }
-        val recommendations = document.select("div.section .item-content").mapNotNull { it.toRecommendResult() }
+        val actors = document.select("div.video-actor a").asIterable().map { it.text() }
+        val recommendations = document.select("div.section .item-content").asIterable().mapNotNull { it.toRecommendResult() }
 
         val isSeries = url.contains("/serial-tv/") || document.select("div.video-episodes a").isNotEmpty()
 
         return if (isSeries) {
-            val episodes = document.select("div.video-episodes a").map { eps ->
+            val episodes = document.select("div.video-episodes a").asIterable().map { eps ->
                 val href = fixUrl(eps.attr("href"))
                 val name = eps.text()
                 val episode = Regex("\\d+").find(name)?.value?.toIntOrNull()
@@ -203,7 +203,7 @@ class NomatProvider : MainAPI() {
         return try {
             val nhDoc = app.get(data, referer = mainUrl, timeout = 100L).document
 
-            nhDoc.select("div.server-item").forEach { el ->
+            nhDoc.select("div.server-item").asIterable().forEach { el ->
                 val encoded = el.attr("data-url")
                 if (encoded.isNotBlank()) {
                     try {

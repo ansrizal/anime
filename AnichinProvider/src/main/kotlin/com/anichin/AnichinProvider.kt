@@ -31,7 +31,7 @@ class AnichinProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("${mainUrl}/${request.data}&page=$page").document
-        val home = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        val home = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
@@ -55,7 +55,7 @@ class AnichinProvider : MainAPI() {
         val searchResponse = mutableListOf<SearchResponse>()
         for (i in 1..3) {
             val document = app.get("${mainUrl}/page/$i/?s=$query").document
-            val results = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+            val results = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
             if (results.isEmpty()) break
             searchResponse.addAll(results)
         }
@@ -74,7 +74,7 @@ class AnichinProvider : MainAPI() {
         }
 
         return if (tvType == TvType.TvSeries) {
-            val episodes = document.select(".eplister li").map { ep ->
+            val episodes = document.select(".eplister li").asIterable().map { ep ->
                 val link = fixUrl(ep.selectFirst("a")?.attr("href").orEmpty())
                 val epTitle = ep.selectFirst(".epl-title")?.text()?.trim().orEmpty()
                 val epSub = ep.selectFirst(".epl-sub span")?.text()?.trim().orEmpty()
@@ -115,7 +115,7 @@ class AnichinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(fixUrl(data)).document
-        document.select(".mobius option").forEach { server ->
+        document.select(".mobius option").asIterable().forEach { server ->
             val base64 = server.attr("value")
             if (base64.isNotBlank()) {
                 val decoded = base64Decode(base64)

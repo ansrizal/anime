@@ -68,7 +68,7 @@ class OtakudesuProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val document = app.get(request.data + page).document
-        val home = document.select("div.venz > ul > li").mapNotNull {
+        val home = document.select("div.venz > ul > li").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -88,6 +88,7 @@ class OtakudesuProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query&post_type=anime").document.select("ul.chivsrc > li")
+            .asIterable()
             .map {
                 val title = it.selectFirst("h2 > a")!!.ownText().trim()
                 val href = it.selectFirst("h2 > a")!!.attr("href")
@@ -105,7 +106,7 @@ class OtakudesuProvider : MainAPI() {
         val title = document.selectFirst("div.infozingle > p:nth-child(1) > span")?.ownText()
             ?.replace(":", "")?.trim().toString()
         val poster = document.selectFirst("div.fotoanime > img")?.attr("src")
-        val tags = document.select("div.infozingle > p:nth-child(11) > span > a").map { it.text() }
+        val tags = document.select("div.infozingle > p:nth-child(11) > span > a").asIterable().map { it.text() }
         val type = getType(
             document.selectFirst("div.infozingle > p:nth-child(5) > span")?.ownText()
                 ?.replace(":", "")?.trim() ?: "tv"
@@ -183,7 +184,7 @@ class OtakudesuProvider : MainAPI() {
         }.filterNotNull().reversed()
 
         val recommendations =
-            document.select("div.isi-recommend-anime-series > div.isi-konten").map {
+            document.select("div.isi-recommend-anime-series > div.isi-konten").asIterable().map {
                 val recName = it.selectFirst("span.judul-anime > a")!!.text()
                 val recHref = it.selectFirst("a")!!.attr("href")
                 val recPosterUrl = it.selectFirst("a > img")?.attr("src").toString()
@@ -283,9 +284,9 @@ class OtakudesuProvider : MainAPI() {
                 }
             },
             {
-                document.select("div.download li").map { ele ->
+                document.select("div.download li").asIterable().map { ele ->
                     val quality = getQuality(ele.select("strong").text())
-                    ele.select("a").map {
+                    ele.select("a").asIterable().map {
                         it.attr("href") to it.text()
                     }.filter {
                         !inBlacklist(it.first) && quality != Qualities.P360.value

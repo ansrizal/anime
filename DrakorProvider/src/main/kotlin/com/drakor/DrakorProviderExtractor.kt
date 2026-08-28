@@ -63,7 +63,7 @@ object DrakorProviderExtractor : DrakorProvider() {
             val idlixNonce = match?.groups?.get(1)?.value ?: ""
             val idlixTime = match?.groups?.get(2)?.value ?: ""
 
-            document.select("ul#playeroptionsul > li").map {
+            document.select("ul#playeroptionsul > li").asIterable().map {
                 Triple(
                     it.attr("data-post"),
                     it.attr("data-nume"),
@@ -160,7 +160,7 @@ object DrakorProviderExtractor : DrakorProvider() {
             val doc = app.get(targetUrl, headers = DrakorHelper.headers).document
 
             if (season != null && episode != null) {
-                val episodeHref = doc.select("div.episode-item a, .episode-list a").find { 
+                val episodeHref = doc.select("div.episode-item a, .episode-list a").asIterable().find {
                     val text = it.text().trim()
                     val epNum = Regex("""(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
                     epNum == episode
@@ -423,7 +423,7 @@ object DrakorProviderExtractor : DrakorProvider() {
         cookies = gomoviesCookies ?: res.cookies.filter { it.key == "advanced-frontendgomovies7" }
             .also { gomoviesCookies = it }
         val doc = res.document
-        val media = doc.select("div.$mediaSelector").map {
+        val media = doc.select("div.$mediaSelector").asIterable().map {
             Triple(it.attr("data-filmName"), it.attr("data-year"), it.select("a").attr("href"))
         }.let { el ->
             if (el.size == 1) {
@@ -1216,7 +1216,7 @@ object DrakorProviderExtractor : DrakorProvider() {
     }
 
     private fun extractPlayer4uLinks(document: Document, season:Int?, episode:Int?, title:String, year:Int?): List<Player4uLinkData> {
-        return document.select(".playbtnx").mapNotNull { element ->
+        return document.select(".playbtnx").asIterable().mapNotNull { element ->
             val titleText = element.text()?.split(" | ")?.lastOrNull() ?: return@mapNotNull null
             if (season == null && episode == null) {
                 if (year != null && (titleText.startsWith("$title $year", ignoreCase = true) ||

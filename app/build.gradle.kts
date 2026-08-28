@@ -9,7 +9,7 @@ val cloudstreamApiVersion = "-SNAPSHOT"
 cloudstream {
     setRepo("https://github.com/ansrizal/anime")
     authors = listOf("Ans Rizal")
-    description = "Streaming anime provider and extensions for CloudStream 3 and StreamCloud (Shokuja: https://x6.shokuja.uk)"
+    description = "Streaming anime provider and extensions for CloudStream 3 and StreamCloud (Shokuja: https://x6.sokuja.uk)"
 }
 
 android {

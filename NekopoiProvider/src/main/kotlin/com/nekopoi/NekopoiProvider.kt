@@ -75,7 +75,7 @@ class NekopoiProvider : MainAPI() {
             "div.result ul li, " +
             "div.nk-search-results ul li, " +
             "article"
-        ).mapNotNull {
+        ).asIterable().mapNotNull {
             it.toSearchResult()
         }
         
@@ -178,7 +178,7 @@ class NekopoiProvider : MainAPI() {
 
         val table = document.select("div.listinfo ul, div.konten")
         
-        val tags = table.select("li:contains(Genres) a").map { it.text() }.takeIf { it.isNotEmpty() }
+        val tags = table.select("li:contains(Genres) a").asIterable().map { it.text() }.takeIf { it.isNotEmpty() }
             ?: table.select("p:contains(Genre)").text().substringAfter(":").split(",")
                 .map { it.trim() }.filter { it.isNotBlank() }
                 
@@ -220,7 +220,7 @@ class NekopoiProvider : MainAPI() {
                 newEpisode(link) { this.name = name }
             }
         } else {
-            mainContent.select("div.episodelist ul li, div.nk-episode-nav a, ul.nk-episode-list li a, div.nk-post-card").mapNotNull {
+            mainContent.select("div.episodelist ul li, div.nk-episode-nav a, ul.nk-episode-list li a, div.nk-post-card").asIterable().mapNotNull {
                 if (it.hasClass("nk-post-card")) {
                     val aTag = it.selectFirst("div.nk-post-meta h2 a") ?: return@mapNotNull null
                     val rawName = aTag.text().trim()
@@ -426,7 +426,7 @@ class NekopoiProvider : MainAPI() {
                         nextUrl = "${uri.scheme}://${uri.host}$nextUrl"
                     }
 
-                    val data = form.select("input").associate {
+                    val data = form.select("input").asIterable().associate {
                         it.attr("name") to it.attr("value")
                     }.toMutableMap()
 

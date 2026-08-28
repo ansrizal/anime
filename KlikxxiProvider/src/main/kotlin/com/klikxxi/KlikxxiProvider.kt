@@ -64,7 +64,7 @@ class KlikxxiProvider : MainAPI() {
     val document = app.get(url).document
 
     val items = document.select("article.has-post-thumbnail, article.item, article.item-infinite")
-        .mapNotNull { it.toSearchResult() }
+        .asIterable().mapNotNull { it.toSearchResult() }
 
     return newHomePageResponse(request.name, items)
 }
@@ -128,7 +128,7 @@ class KlikxxiProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", timeout = 50L).document
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        return document.select("article.item").asIterable().mapNotNull { it.toSearchResult() }
     }
 
     /** Kadang rekomendasi punya struktur HTML beda */
@@ -186,12 +186,12 @@ class KlikxxiProvider : MainAPI() {
 
         val actors = document
             .select("div.gmr-moviedata span[itemprop=actors] a")
-            .map { it.text() }
+            .asIterable().map { it.text() }
             .takeIf { it.isNotEmpty() }
 
         val recommendations = document
     .select("article.item.col-md-20")
-    .mapNotNull { it.toRecommendResult() }
+    .asIterable().mapNotNull { it.toRecommendResult() }
 
         val seasonBlocks = document.select("div.gmr-season-block")
         val allEpisodes = mutableListOf<Episode>()
@@ -206,7 +206,7 @@ class KlikxxiProvider : MainAPI() {
                 ?: 1
 
             val eps = block.select("div.gmr-season-episodes a")
-                .filter { a ->
+                .asIterable().filter { a ->
                     val t = a.text().lowercase()
                     !t.contains("view all") && !t.contains("batch")
                 }
@@ -277,7 +277,7 @@ class KlikxxiProvider : MainAPI() {
 
         if (postId.isNullOrBlank()) return false
 
-        document.select("div.tab-content-ajax").forEach { tab ->
+        document.select("div.tab-content-ajax").asIterable().forEach { tab ->
             val tabId = tab.attr("id")
             if (tabId.isNullOrBlank()) return@forEach
 

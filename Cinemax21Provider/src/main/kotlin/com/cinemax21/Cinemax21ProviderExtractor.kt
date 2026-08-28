@@ -63,7 +63,7 @@ object Cinemax21ProviderExtractor : Cinemax21Provider() {
             val idlixNonce = match?.groups?.get(1)?.value ?: ""
             val idlixTime = match?.groups?.get(2)?.value ?: ""
 
-            document.select("ul#playeroptionsul > li").map {
+            document.select("ul#playeroptionsul > li").asIterable().map {
                 Triple(it.attr("data-post"), it.attr("data-nume"), it.attr("data-type"))
             }.amap { (id, nume, type) ->
                 val json = app.post(
@@ -143,7 +143,7 @@ object Cinemax21ProviderExtractor : Cinemax21Provider() {
             val doc = app.get(targetUrl, headers = DramaHelper.headers).document
 
             if (season != null && episode != null) {
-                val episodeHref = doc.select("div.episode-item a, .episode-list a").find { 
+                val episodeHref = doc.select("div.episode-item a, .episode-list a").asIterable().find {
                     val text = it.text().trim()
                     val epNum = Regex("""(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
                     epNum == episode
@@ -271,7 +271,7 @@ object Cinemax21ProviderExtractor : Cinemax21Provider() {
         var res = app.get("$api/search/$query", cookies = cookies)
         cookies = gomoviesCookies ?: res.cookies.filter { it.key == "advanced-frontendgomovies7" }.also { gomoviesCookies = it }
         val doc = res.document
-        val media = doc.select("div.$mediaSelector").map { Triple(it.attr("data-filmName"), it.attr("data-year"), it.select("a").attr("href")) }
+        val media = doc.select("div.$mediaSelector").asIterable().map { Triple(it.attr("data-filmName"), it.attr("data-year"), it.select("a").attr("href")) }
             .let { el -> if (el.size == 1) el.firstOrNull() else el.find { if (season == null) (it.first.equals(title, true) || it.first.equals("$title ($year)", true)) && it.second.equals("$year") else it.first.equals("$title - Season $season", true) } ?: el.find { it.first.contains("$title", true) && it.second.equals("$year") } } ?: return
         val iframe = if (season == null) media.third else app.get(fixUrl(media.third, api)).document.selectFirst("div#$episodeSelector a:contains(Episode ${slug.second})")?.attr("href") ?: return
         res = app.get(fixUrl(iframe, api), cookies = cookies)
@@ -514,7 +514,7 @@ object Cinemax21ProviderExtractor : Cinemax21Provider() {
     }
 
     private fun extractPlayer4uLinks(document: Document, season:Int?, episode:Int?, title:String, year:Int?): List<Player4uLinkData> {
-        return document.select(".playbtnx").mapNotNull { element ->
+        return document.select(".playbtnx").asIterable().mapNotNull { element ->
             val titleText = element.text().split(" | ").lastOrNull() ?: return@mapNotNull null
             if (season == null && episode == null) { if (year != null && (titleText.startsWith("$title $year", ignoreCase = true) || titleText.startsWith("$title ($year)", ignoreCase = true))) Player4uLinkData(name = titleText, url = element.attr("onclick")) else null } else { if (season != null && episode != null && titleText.startsWith("$title S${"%02d".format(season)}E${"%02d".format(episode)}", ignoreCase = true)) Player4uLinkData(name = titleText, url = element.attr("onclick")) else null }
         }

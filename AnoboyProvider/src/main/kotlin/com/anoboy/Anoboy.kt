@@ -699,9 +699,11 @@ class Anoboy : MainAPI() {
 
         fun extractFromDoc(baseUrl: String, doc: org.jsoup.nodes.Document) {
             doc.select("iframe#mediaplayer, iframe#videoembed, div.player-embed iframe, iframe[src], iframe[data-src], iframe[data-litespeed-src]")
+                .asIterable()
                 .forEach { queueUrl(it.getIframeAttr(), baseUrl) }
 
             doc.select("a[href*=\"yourupload.com/embed/\"], a[href*=\"yourupload.com/watch/\"], a[href*=\"www.yourupload.com/embed/\"], a[href*=\"www.yourupload.com/watch/\"]")
+                .asIterable()
                 .forEach { queueUrl(it.attr("href"), baseUrl) }
 
             doc.select(
@@ -711,15 +713,17 @@ class Anoboy : MainAPI() {
                     "a[href*=\"/uploads/yupbatch\"], " +
                     "a[href*=\"blogger.com/video.g\"], " +
                     "a[href*=\"blogger.googleusercontent.com\"]"
-            ).forEach { queueUrl(it.attr("href"), baseUrl) }
+            ).asIterable().forEach { queueUrl(it.attr("href"), baseUrl) }
 
             doc.select("#fplay a#allmiror[data-video], #fplay a[data-video], a#allmiror[data-video], a[data-video], [data-video]")
+                .asIterable()
                 .forEach { anchor ->
                     queueUrl(anchor.attr("data-video"), baseUrl)
                     queueUrl(anchor.attr("href"), baseUrl)
                 }
 
             doc.select("[data-embed], [data-iframe], [data-url], [data-src]")
+                .asIterable()
                 .forEach { el ->
                     queueUrl(el.attr("data-embed"), baseUrl)
                     queueUrl(el.attr("data-iframe"), baseUrl)
@@ -728,12 +732,13 @@ class Anoboy : MainAPI() {
                 }
 
             doc.select("div.download a.udl[href], div.download a[href], div.dlbox li span.e a[href]")
+                .asIterable()
                 .forEach { queueUrl(it.attr("href"), baseUrl) }
 
             val bloggerRegex = Regex("""https?://(?:www\.)?blogger\.com/video\.g\?[^"'<\s]+""", RegexOption.IGNORE_CASE)
             val batchRegex = Regex("""/uploads/(?:adsbatch[^"'\s]+|yupbatch[^"'\s]+|acbatch[^"'\s]+|stream/embed\.php\?[^"'\s]+)""", RegexOption.IGNORE_CASE)
             val yourUploadRegex = Regex("""https?://(?:www\.)?yourupload\.com/(?:embed|watch)/[^"'<\s]+""", RegexOption.IGNORE_CASE)
-            doc.select("script").forEach { script ->
+            doc.select("script").asIterable().forEach { script ->
                 val scriptData = script.data()
                 bloggerRegex.findAll(scriptData).forEach { match ->
                     queueUrl(match.value, baseUrl)
@@ -1002,7 +1007,7 @@ class Anoboy : MainAPI() {
 
             val bloggerRegex = Regex("""https?://(?:www\.)?blogger\.com/video\.g\?[^"'<\s]+""", RegexOption.IGNORE_CASE)
             val fileRegex = Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
-            doc.select("script").forEach { script ->
+            doc.select("script").asIterable().forEach { script ->
                 val scriptData = script.data()
                 bloggerRegex.findAll(scriptData).forEach { addCandidate(it.value) }
                 fileRegex.findAll(scriptData).forEach { addCandidate(it.value) }

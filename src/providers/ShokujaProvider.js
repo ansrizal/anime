@@ -1,6 +1,6 @@
 /**
  * Shokuja Anime Provider for StreamCloud / CloudStream
- * Target Website: https://x6.shokuja.uk
+ * Target Website: https://x6.sokuja.uk
  * Author: Ans Rizal (@ansrizal)
  */
 
@@ -11,7 +11,7 @@ import {
   extractDirectHlsOrMp4
 } from "../extractors.js";
 
-const BASE_URL = "https://x6.shokuja.uk";
+const BASE_URL = "https://x6.sokuja.uk";
 
 export default {
   id: "com.ansrizal.anime.shokuja",
@@ -20,7 +20,7 @@ export default {
   type: "anime",
   language: "id",
   baseUrl: BASE_URL,
-  iconUrl: "https://x6.shokuja.uk/favicon.ico",
+  iconUrl: "https://x6.sokuja.uk/favicon.ico",
 
   /**
    * Search anime catalog on Shokuja
@@ -81,7 +81,7 @@ export default {
             items.push({
               title,
               url: lMatch[1].startsWith("http") ? lMatch[1] : BASE_URL + lMatch[1],
-              poster: lMatch[2] || "https://x6.shokuja.uk/favicon.ico",
+              poster: lMatch[2] || "https://x6.sokuja.uk/favicon.ico",
               type: "anime",
             });
           }
@@ -126,7 +126,7 @@ export default {
         html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/i) ||
         html.match(/<div class="(?:fotoanime|thumb|bigcover|poster)">.*?<img[^>]*src="([^"]+)"/is) ||
         html.match(/<img[^>]*class="wp-post-image"[^>]*src="([^"]+)"/i);
-      const poster = posterMatch ? posterMatch[1] : "https://x6.shokuja.uk/favicon.ico";
+      const poster = posterMatch ? posterMatch[1] : "https://x6.sokuja.uk/favicon.ico";
 
       // Extract Synopsis
       const synMatch =
@@ -188,7 +188,7 @@ export default {
       console.error("[Shokuja] GetDetails error:", error);
       return {
         title: "Shokuja Anime",
-        poster: "https://x6.shokuja.uk/favicon.ico",
+        poster: "https://x6.sokuja.uk/favicon.ico",
         synopsis: "Gagal memuat detail anime dari server Shokuja.",
         episodes: [{ number: 1, title: "Stream", url: animeUrl }],
       };

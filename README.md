@@ -3,7 +3,7 @@
 Repositori resmi ekstensi streaming anime untuk **StreamCloud** dan **CloudStream 3**, dibuat oleh **Ans Rizal** (`@ansrizal`).
 
 ## ✨ Daftar Provider yang Tersedia:
-- **Shokuja Anime** (`https://x6.shokuja.uk`): Streaming anime Subtitle Indonesia terlengkap dengan berbagai resolusi dan server video cepat.
+- **Shokuja Anime** (`https://x6.sokuja.uk`): Streaming anime Subtitle Indonesia terlengkap dengan berbagai resolusi dan server video cepat.
 
 ---
 

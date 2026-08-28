@@ -30,7 +30,7 @@ class DonghubProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        val items = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
             hasNext = true
@@ -50,7 +50,7 @@ class DonghubProvider : MainAPI() {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..3) {
             val document = app.get("$mainUrl/page/$i/?s=$query").document
-            val result = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+            val result = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
         }
@@ -107,7 +107,7 @@ class DonghubProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        document.select(".mobius option").forEach { item ->
+        document.select(".mobius option").asIterable().forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {
                 val decoded = base64Decode(base64)

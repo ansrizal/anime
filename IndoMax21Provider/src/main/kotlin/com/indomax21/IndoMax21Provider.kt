@@ -119,7 +119,7 @@ class IndoMax21Provider : MainAPI() {
         val plot = document.select(".entry-content p").joinToString("\n") { it.text() }.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun:) a")?.text()?.toIntOrNull()
         val ratingString = document.selectFirst(".gmr-meta-rating span[itemprop=ratingValue]")?.text()
-        val tags = document.select(".gmr-moviedata:contains(Genre:) a").map { it.text() }
+        val tags = document.select(".gmr-moviedata:contains(Genre:) a").asIterable().map { it.text() }
 
         val episodesElements = document.select(".gmr-listseries a, .gmr-eps-list a, .button-seasons a, ul.gmr-episodes li a")
         
@@ -199,7 +199,7 @@ class IndoMax21Provider : MainAPI() {
                     try {
                         val serverDoc = if (serverUrl == data) document else app.get(serverUrl, referer = data).document
                         
-                        val iframes = serverDoc.select("iframe").mapNotNull { 
+                        val iframes = serverDoc.select("iframe").asIterable().mapNotNull {
                             it.attr("src").takeIf { src -> src.isNotBlank() }?.let { src -> fixUrl(src) } 
                         }
 

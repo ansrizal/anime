@@ -71,7 +71,7 @@ class NontonAnimeIDProvider : MainAPI() {
 
         val document = app.get(pageUrl).document
         
-        val home = document.select("article.animeseries, .animeseries, a.as-anime-card").mapNotNull {
+        val home = document.select("article.animeseries, .animeseries, a.as-anime-card").asIterable().mapNotNull {
             it.toSearchResult()
         }
         
@@ -102,7 +102,7 @@ class NontonAnimeIDProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = app.get(link).document
 
-        return document.select("article.animeseries, .animeseries, .result > ul > li").mapNotNull {
+        return document.select("article.animeseries, .animeseries, .result > ul > li").asIterable().mapNotNull {
             it.toSearchResult()
         }
     }
@@ -124,7 +124,7 @@ class NontonAnimeIDProvider : MainAPI() {
             ?.trim()
             ?: return null
         val poster = document.selectFirst(".anime-card__sidebar img, .poster > img, .thumb > img")?.getImageAttr()
-        val tags = document.select(".anime-card__genres .genre-tag, .tagline > a, .genxed a").map { it.text() }
+        val tags = document.select(".anime-card__genres .genre-tag, .tagline > a, .genxed a").asIterable().map { it.text() }
 
         val year = Regex("(19|20)\\d{2}").find(
             document.select(".details-list li:contains(Aired), .info-item.season, .bottomtitle, .info-content").text()
@@ -213,7 +213,7 @@ class NontonAnimeIDProvider : MainAPI() {
                         "series_id" to id
                     )
                 ).parsed<EpResponse>().content
-            ).select("li").map {
+            ).select("li").asIterable().map {
                 val episode = Regex("Episode\\s?(\\d+)").find(
                     it.selectFirst("a")?.text().toString()
                 )?.groupValues?.getOrNull(1) ?: it.selectFirst("a")?.text()
@@ -221,7 +221,7 @@ class NontonAnimeIDProvider : MainAPI() {
                 newEpisode(link) { this.episode = episode?.toIntOrNull() }
             }.reversed()
         } else {
-            document.select("ul.misha_posts_wrap2 > li, .lstepi > li, .episodelist > ul > li").map {
+            document.select("ul.misha_posts_wrap2 > li, .lstepi > li, .episodelist > ul > li").asIterable().map {
                 val episode = Regex("Episode\\s?(\\d+)").find(
                     it.selectFirst("a")?.text().toString()
                 )?.groupValues?.getOrNull(1) ?: it.selectFirst("a")?.text()
@@ -262,7 +262,7 @@ class NontonAnimeIDProvider : MainAPI() {
             }
         }
 
-        val recommendations = document.select(".related a.as-anime-card, .result > li, .animeseries").mapNotNull {
+        val recommendations = document.select(".related a.as-anime-card, .result > li, .animeseries").asIterable().mapNotNull {
             it.toSearchResult()
         }
 
@@ -321,7 +321,7 @@ class NontonAnimeIDProvider : MainAPI() {
         }
 
         fun collectIframes(doc: Document) {
-            doc.select("iframe").forEach { iframe ->
+            doc.select("iframe").asIterable().forEach { iframe ->
                 normalizeUrl(iframe.attr("data-src").ifEmpty { iframe.attr("src") })?.let { iframeLinks.add(it) }
             }
         }

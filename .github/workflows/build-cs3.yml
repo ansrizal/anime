@@ -1,0 +1,114 @@
+name: Build CloudStream 3 (.cs3) Extensions & Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate Plugin & Manifest Integrity
+        run: |
+          echo "========================================="
+          echo "Validating StreamCloud / CloudStream 3 files"
+          echo "Repository: ansrizal/anime"
+          echo "========================================="
+          test -f manifest.json || (echo "manifest.json is missing!" && exit 1)
+          test -f plugins.json || (echo "plugins.json is missing!" && exit 1)
+          test -f src/index.js || (echo "src/index.js is missing!" && exit 1)
+          node -e 'JSON.parse(require("fs").readFileSync("manifest.json", "utf8")); console.log("manifest.json OK");'
+          node -e 'JSON.parse(require("fs").readFileSync("plugins.json", "utf8")); console.log("plugins.json OK");'
+
+      - name: Build & Package .cs3 Extensions
+        run: |
+          mkdir -p build_output/plugins
+          mkdir -p dist
+
+          echo "Compiling and packaging plugins into CloudStream 3 (.cs3) archives..."
+
+          # Package Shokuja Provider into Shokuja.cs3
+          if [ -d "src/providers" ]; then
+            for provider in src/providers/*.js; do
+              if [ -f "$provider" ]; then
+                baseName=$(basename "$provider" .js)
+                echo "Packaging $baseName.cs3..."
+                zip -j "build_output/plugins/$baseName.cs3" "$provider" "src/extractors.js" "manifest.json"
+              fi
+            done
+          fi
+
+          # Full Repository Bundle package
+          zip -r "build_output/plugins/anime-full.cs3" . -x "*.git*" ".github/*" "build_output/*" "dist/*"
+          cp plugins.json build_output/plugins.json
+          cp manifest.json build_output/manifest.json
+
+          # Generate SHA256 checksums
+          cd build_output
+          sha256sum plugins/*.* > checksums.sha256
+          cd ..
+          echo "Build completed successfully!"
+
+      - name: Deploy Compiled Plugins to 'build' branch
+        uses: peaceiris/actions-gh-pages@v3
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build_output
+          publish_branch: build
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Automated GitHub Release with CS3 Binaries
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          files: |
+            build_output/plugins/*.cs3
+            build_output/plugins.json
+            build_output/checksums.sha256
+          tag_name: v1.0.${{ github.run_number }}
+          name: StreamCloud / CS3 Plugin Release v1.0.${{ github.run_number }}
+          body: |
+            ### 🚀 CloudStream 3 / StreamCloud Extension Auto-Build
+            - **Repository:** `https://github.com/ansrizal/anime`
+            - **Install Raw Link (CloudStream / StreamCloud):**
+              ```
+              https://raw.githubusercontent.com/ansrizal/anime/build/plugins.json
+              ```
+              atau link branch utama:
+              ```
+              https://raw.githubusercontent.com/ansrizal/anime/main/plugins.json
+              ```
+            - **Included Providers:** Shokuja Anime (https://x6.shokuja.uk)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

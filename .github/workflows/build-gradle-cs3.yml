@@ -1,0 +1,37 @@
+name: Build CloudStream 3 / Gradle 9.6.1 Extension
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Gradle 9.6.1
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '9.6.1'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle assembleRelease
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Built CS3 Plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs3-plugins
+          path: app/build/outputs/**/*.cs3

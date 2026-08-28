@@ -3,7 +3,15 @@
 Repositori resmi ekstensi streaming anime untuk **StreamCloud** dan **CloudStream 3**, dibuat oleh **Ans Rizal** (`@ansrizal`).
 
 ## ✨ Daftar Provider yang Tersedia:
-- **Shokuja Anime** (`https://x6.sokuja.uk`): Streaming anime Subtitle Indonesia terlengkap dengan berbagai resolusi dan server video cepat.
+### Anime & Streaming
+- **Shokuja Anime** (`https://x6.sokuja.uk`): Streaming anime Subtitle Indonesia terlengkap.
+- **Animasu**, **AnimeIndo**, **Anichin**, **Alqanime**, **AnimeSail**, **Animexin**, **Anoboy**, **Donghub**, **Hanime**, **Kuramanime**, **Kuronime**, **Nekopoi**, **Nimegami**, **NontonAnimeID**, **Otakudesu**, **Samehadaku**.
+
+### Movies & TV Series
+- **Filmkita**, **Filmlokal**, **Indomax**, **IndoMax21**, **Idlix**, **KlikXXi**, **LayarAsia**, **LayarKaca**, **LayarWarna**, **Moviebox**, **Ngefilm**, **NgeFilm21**, **Nomat**, **Oploverz**, **OppaDrama**, **Pahe**, **PencuriMovie**, **Pusatfilm**, **Pusatmovie**, **Rebahin**, **Sarangfilm**, **Savefilm**, **SemiRebahin**, **WGFilm21**.
+
+### Special / Others
+- **Drakor**, **Dubbindo**, **HidoriStream**, **JavHey**, **Kawanfilm**, **KlikxxiProvider**.
 
 ---
 
@@ -14,12 +22,14 @@ Repositori resmi ekstensi streaming anime untuk **StreamCloud** dan **CloudStrea
 3. Klik tombol **Tambah Repositori (Add Repository)**.
 4. Masukkan salah satu link Raw Repository berikut:
 
+**Link Rekomendasi (Otomatis Update):**
 ```text
-https://raw.githubusercontent.com/ansrizal/anime/main/plugins.json
+https://raw.githubusercontent.com/ansrizal/anime/builds/repo.json
 ```
-*(atau jika menggunakan build branch)*:
+
+*(Atau link alternatif jika yang di atas bermasalah):*
 ```text
-https://raw.githubusercontent.com/ansrizal/anime/build/plugins.json
+https://raw.githubusercontent.com/ansrizal/anime/builds/plugins.json
 ```
 
 5. Klik **Simpan & Sinkronisasikan**.
@@ -27,10 +37,10 @@ https://raw.githubusercontent.com/ansrizal/anime/build/plugins.json
 
 ---
 
-## ⚙️ GitHub Actions Auto-Build CS3:
-Repositori ini telah dilengkapi dengan workflow CI/CD otomatis di `.github/workflows/build-cs3.yml`.
+## ⚙️ GitHub Actions Auto-Build:
+Repositori ini telah dilengkapi dengan workflow CI/CD otomatis di `.github/workflows/build.yml`.
 Setiap kali Anda melakukan `git push` ke branch `main`, GitHub Actions akan secara otomatis:
 1. Memvalidasi file manifest dan kode JavaScript.
 2. Mengompilasi dan mengemas file `.cs3` untuk setiap provider.
-3. Menerbitkan rilis baru di GitHub Release.
-4. Mengunggah file `plugins.json` terbaru ke branch `build`.
+3. Menerbitkan rilis baru (jika dikonfigurasi).
+4. Mengunggah file `plugins.json` dan `repo.json` terbaru ke branch `builds`.

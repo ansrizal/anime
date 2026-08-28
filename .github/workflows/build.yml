@@ -27,19 +27,15 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Build Plugins
         env:
           DUBBINDO_PASSWORD: ${{ secrets.DUBBINDO_PASSWORD }}
           DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
         run: |
-          # Remove malformed environment variables that cause JVM crashes
-          unset JAVA_TOOL_OPTIONS
-          unset _JAVA_OPTIONS
-          unset GRADLE_OPTS
-          unset JAVA_OPTS
-          
           chmod +x gradlew
           ./gradlew make makePluginsJson --no-daemon
 

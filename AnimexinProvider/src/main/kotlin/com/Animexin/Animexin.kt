@@ -27,7 +27,7 @@ class Animexin : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val home     = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
+        val home     = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
             list    = HomePageList(
@@ -51,7 +51,7 @@ val document = app.get("$mainUrl/${request.data}&page=$page").document
 
     override suspend fun search(query: String,page: Int): SearchResponseList {
         val document = app.get("${mainUrl}/page/$page/?s=$query").document
-        val results = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }.toNewSearchResponseList()
+        val results = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }.toNewSearchResponseList()
         return results
     }
 
@@ -67,7 +67,7 @@ val document = app.get("$mainUrl/${request.data}&page=$page").document
         return if (tvtag == TvType.TvSeries) {
             val episodeRegex = Regex("(\\d+)")
 
-            val episodes = document.select("div.eplister > ul > li").map { info ->
+            val episodes = document.select("div.eplister > ul > li").asIterable().map { info ->
                 val href1 = info.select("a").attr("href")
                 val posterr = info.selectFirst("a img")?.attr("src") ?: ""
 
@@ -95,7 +95,7 @@ val document = app.get("$mainUrl/${request.data}&page=$page").document
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val document = app.get(data).document
-        document.select(".mobius option").forEach { server->
+        document.select(".mobius option").asIterable().forEach { server->
             val base64 = server.attr("value")
             val decoded=base64Decode(base64)
             val doc = Jsoup.parse(decoded)

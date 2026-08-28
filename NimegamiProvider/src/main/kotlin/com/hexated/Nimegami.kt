@@ -49,7 +49,7 @@ class Nimegami : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 val document = app.get("$mainUrl${request.data}/page/$page").document
-        val home = document.select("div.post-article article, div.archive article").mapNotNull { it.toSearchResult() }
+        val home = document.select("div.post-article article, div.archive article").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
@@ -75,7 +75,7 @@ val document = app.get("$mainUrl${request.data}/page/$page").document
     override suspend fun search(query: String): List<SearchResponse> {
         val searchResponse = mutableListOf<SearchResponse>()
         for (i in 1..2) {
-            val res = app.get("$mainUrl/page/$i/?s=$query&post_type=post").document.select("div.archive article").mapNotNull { it.toSearchResult() }
+            val res = app.get("$mainUrl/page/$i/?s=$query&post_type=post").document.select("div.archive article").asIterable().mapNotNull { it.toSearchResult() }
             searchResponse.addAll(res)
         }
         return searchResponse
@@ -87,20 +87,20 @@ val document = app.get("$mainUrl${request.data}/page/$page").document
         val title = table.getContent("Judul :").text()
         val poster = document.selectFirst("div.coverthumbnail img")?.attr("src")
         val bgPoster = document.selectFirst("div.thumbnail-a img")?.attr("src")
-        val tags = table.getContent("Kategori").select("a").map { it.text() }
+        val tags = table.getContent("Kategori").select("a").asIterable().map { it.text() }
         val year = table.getContent("Musim / Rilis").text().filter { it.isDigit() }.toIntOrNull()
         val status = getStatus(document.selectFirst("h1[itemprop=headline]")?.text())
         val type = getType(table.getContent("Type").text())
         val description = document.select("div#Sinopsis p").text().trim()
         val trailer = document.selectFirst("div#Trailer iframe")?.attr("src")
 
-        val episodes = document.select("div.list_eps_stream li").mapNotNull {
+        val episodes = document.select("div.list_eps_stream li").asIterable().mapNotNull {
             val episode = Regex("Episode\\s?(\\d+)").find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull()
             val link = it.attr("data")
             newEpisode(url = link, initializer = { this.episode = episode }, fix = false)
         }
 
-        val recommendations = document.select("div#randomList > a").mapNotNull {
+        val recommendations = document.select("div#randomList > a").asIterable().mapNotNull {
             val epHref = it.attr("href")
             val epTitle = it.select("h5.sidebar-title-h5.px-2.py-2").text()
             val epPoster = it.select(".product__sidebar__view__item.set-bg").attr("data-setbg")

@@ -50,7 +50,7 @@ class JavHeyProvider : MainAPI() {
         val url = if (page == 1) request.data.removeSuffix("/page=") else "${request.data}$page"
         val document = app.get(url, headers = headers).document
         
-        val home = document.select("div.article_standard_view > article.item").mapNotNull { it.toSearchResult() }
+        val home = document.select("div.article_standard_view > article.item").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
@@ -59,7 +59,7 @@ class JavHeyProvider : MainAPI() {
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
         val document = app.get(url, headers = searchHeaders).document
         
-        return document.select("div.article_standard_view > article.item").mapNotNull { it.toSearchResult() }
+        return document.select("div.article_standard_view > article.item").asIterable().mapNotNull { it.toSearchResult() }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -87,13 +87,13 @@ class JavHeyProvider : MainAPI() {
             ?: document.selectFirst("meta[name=description]")?.attr("content")
 
         val metaDiv = document.select("div.product_meta")
-        val tags = metaDiv.select("span:contains(Category) a, span:contains(Tag) a").map { it.text() }
-        val actorList = metaDiv.select("span:contains(Actor) a").map { ActorData(Actor(it.text())) }
+        val tags = metaDiv.select("span:contains(Category) a, span:contains(Tag) a").asIterable().map { it.text() }
+        val actorList = metaDiv.select("span:contains(Actor) a").asIterable().map { ActorData(Actor(it.text())) }
         
         val yearStr = metaDiv.select("span:contains(Release Day)").text()
         val yearInt = Regex("""\d{4}""").find(yearStr)?.value?.toIntOrNull()
 
-        val recommended = document.select("div.article_standard_view > article.item").mapNotNull { it.toSearchResult() }
+        val recommended = document.select("div.article_standard_view > article.item").asIterable().mapNotNull { it.toSearchResult() }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster

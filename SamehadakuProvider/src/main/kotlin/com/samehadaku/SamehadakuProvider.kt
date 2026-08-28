@@ -57,7 +57,7 @@ class SamehadakuProvider : MainAPI() {
             "New Episodes" -> document.select("li[itemtype='http://schema.org/CreativeWork']")
             "Ongoing Anime", "Complete Anime", "Most Popular", "Movies" -> document.select("div.animepost")
             else -> document.select("article.animpost")
-        }
+        }.asIterable()
 
         val homeList = items.mapNotNull {
             if (request.name == "New Episodes") it.toLatestAnimeResult()
@@ -100,7 +100,7 @@ class SamehadakuProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-        return document.select("div.animepost, article.animpost").mapNotNull { it.toSearchResult() }
+        return document.select("div.animepost, article.animpost").asIterable().mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -113,7 +113,7 @@ class SamehadakuProvider : MainAPI() {
         val title = rawTitle.replace(Regex("(?i)(Nonton|Anime|Subtitle\\s+Indonesia|Sub\\s+Indo|Lengkap|Batch)"), "").trim()
         
         val poster = document.selectFirst("div.thumb > img")?.attr("src")
-        val tags = document.select("div.genre-info > a").map { it.text() }
+        val tags = document.select("div.genre-info > a").asIterable().map { it.text() }
         
         val year = Regex("\\d, (\\d*)").find(
             document.select("div.spe > span:contains(Rilis)").text()
@@ -189,7 +189,7 @@ class SamehadakuProvider : MainAPI() {
             }
         }.filterNotNull().reversed()
 
-        val recommendations = document.select("aside#sidebar ul li, div.relat animepost").mapNotNull { it.toSearchResult() }
+        val recommendations = document.select("aside#sidebar ul li, div.relat animepost").asIterable().mapNotNull { it.toSearchResult() }
 
         val apiDescription = animeMetaData?.description?.replace(Regex("<.*?>"), "")
         val rawPlot = apiDescription ?: animeMetaData?.episodes?.get("1")?.overview

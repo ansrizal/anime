@@ -108,7 +108,7 @@ class LayarasiaProvider : MainAPI() {
         }
         val country = document.selectFirst("span:matchesOwn(Negara:)")?.ownText()?.trim()
         val type = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
-        val tags = document.select("div.genxed a").map { it.text() }
+        val tags = document.select("div.genxed a").asIterable().map { it.text() }
         val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
             .map { it.text().trim() }
         val rating = document.selectFirst("div.rating strong")

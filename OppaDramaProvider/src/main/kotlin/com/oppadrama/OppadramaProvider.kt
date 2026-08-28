@@ -67,6 +67,7 @@ class OppadramaProvider : MainAPI() {
         val url = "$mainUrl/${request.data}".plus("&page=$page")
         val document = app.get(url).document
         val items = document.select("div.listupd article.bs")
+                            .asIterable()
                             .mapNotNull { it.toSearchResult() }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
@@ -95,6 +96,7 @@ class OppadramaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
     val document = app.get("$mainUrl/?s=$query", timeout = 50L).document
     val results = document.select("div.listupd article.bs")
+        .asIterable()
         .mapNotNull { it.toSearchResult() }
     return results
 }
@@ -136,10 +138,11 @@ class OppadramaProvider : MainAPI() {
     val type = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
 
     // Genre / tags
-    val tags = document.select("div.genxed a").map { it.text() }
+    val tags = document.select("div.genxed a").asIterable().map { it.text() }
 
     // Aktor
     val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
+    .asIterable()
     .map { it.text().trim() }
 
     val rating = document.selectFirst("div.rating strong")
@@ -160,10 +163,11 @@ class OppadramaProvider : MainAPI() {
 
     
     val recommendations = document.select("div.listupd article.bs")
+        .asIterable()
         .mapNotNull { it.toRecommendResult() }
 
     
-val episodeElements = document.select("div.eplister ul li a")
+val episodeElements = document.select("div.eplister ul li a").asIterable()
 
 val episodes = episodeElements
     .reversed() // karena biasanya terbaru di atas

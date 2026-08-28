@@ -41,7 +41,7 @@ class LayarKacaProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val document = app.get(request.data + page).document
-        val home = document.select("li.slider article, article").mapNotNull {
+        val home = document.select("li.slider article, article").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -128,7 +128,7 @@ class LayarKacaProvider : MainAPI() {
         
         val title = document.selectFirst("div.movie-info h1, h1.poster-title")?.text()?.trim() ?: ""
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
-        val tags = document.select("div.tag-list span, .genre a").map { it.text() }
+        val tags = document.select("div.tag-list span, .genre a").asIterable().map { it.text() }
         val posterheaders = mapOf("Referer" to getSafeBaseUrl(poster))
 
         val yearRegex = Regex("\\d, (\\d{4})|\\((\\d{4})\\)").find(title)
@@ -139,7 +139,7 @@ class LayarKacaProvider : MainAPI() {
         val trailer = document.selectFirst("ul.action-left > li:nth-child(3) > a, a.trailer")?.attr("href")
         val rating = document.selectFirst("div.info-tag strong, .rating strong")?.text()
         
-        val recommendations = document.select("li.slider article").mapNotNull {
+        val recommendations = document.select("li.slider article").asIterable().mapNotNull {
             it.toSearchResult()
         }
 
@@ -196,7 +196,7 @@ class LayarKacaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        document.select("ul#player-list > li a, .player-list a").mapNotNull {
+        document.select("ul#player-list > li a, .player-list a").asIterable().mapNotNull {
             fixUrlNull(it.attr("href"))
         }.amap { url ->
             try {

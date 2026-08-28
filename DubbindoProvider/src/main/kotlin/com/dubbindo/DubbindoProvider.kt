@@ -168,7 +168,7 @@ class DubbindoProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         ensureSession()
         val document = app.get("${request.data}?page_id=$page", headers = authedHeaders).document
-        val home = document.select("div.video-wrapper").mapNotNull { it.toCategoryResult() }
+        val home = document.select("div.video-wrapper").asIterable().mapNotNull { it.toCategoryResult() }
         return newHomePageResponse(
             list = HomePageList(name = request.name, list = home, isHorizontalImages = true),
             hasNext = home.isNotEmpty()
@@ -216,7 +216,7 @@ class DubbindoProvider : MainAPI() {
             val page = app.get(
                 "$mainUrl/search?keyword=$query&page_id=$i",
                 headers = authedHeaders
-            ).document.select("div.video-list").mapNotNull { it.toSearchResult() }
+            ).document.select("div.video-list").asIterable().mapNotNull { it.toSearchResult() }
             results.addAll(page)
             if (page.isEmpty()) break
         }
@@ -224,7 +224,7 @@ class DubbindoProvider : MainAPI() {
     }
 
     private fun parseVideoSources(doc: Document): List<Video> =
-        doc.select("video#my-video source, video source").mapNotNull { el ->
+        doc.select("video#my-video source, video source").asIterable().mapNotNull { el ->
             val src = el.attr("src").trim().ifEmpty { return@mapNotNull null }
             Video(
                 src  = src,
@@ -272,7 +272,7 @@ class DubbindoProvider : MainAPI() {
         if (title.isEmpty()) return null
 
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
-        val tags   = document.select("div.pt_categories li a").map { it.text() }
+        val tags   = document.select("div.pt_categories li a").asIterable().map { it.text() }
 
         return if (url.contains("/articles/read/")) {
             val description    = document.selectFirst("div.read-article-description article")?.text()

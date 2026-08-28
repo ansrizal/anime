@@ -133,8 +133,8 @@ class HidoristreamProvider : MainAPI() {
         val typeText = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
         val type = getType(typeText)
 
-        val tags = document.select("div.genxed a").map { it.text() }
-        val actors = document.select("span:has(b:matchesOwn(Artis:)) a").map { it.text().trim() }
+        val tags = document.select("div.genxed a").asIterable().map { it.text() }
+        val actors = document.select("span:has(b:matchesOwn(Artis:)) a").asIterable().map { it.text().trim() }
         val rating = document.selectFirst("div.rating strong")
             ?.text()
             ?.replace("Rating", "")
@@ -146,7 +146,7 @@ class HidoristreamProvider : MainAPI() {
         val recommendations = document.select("div.listupd article.bs")
             .mapNotNull { it.toRecommendResult() }
 
-        val castList = document.select("div.bixbox.charvoice div.cvitem").mapNotNull { item ->
+        val castList = document.select("div.bixbox.charvoice div.cvitem").asIterable().mapNotNull { item ->
             val charBox = item.selectFirst(".cvsubitem.cvchar") ?: item
             val actorBox = item.selectFirst(".cvsubitem.cvactor") ?: item
 

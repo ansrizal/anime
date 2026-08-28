@@ -78,7 +78,7 @@ class AnimeSailProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = request(request.data + page).document
-        val home = document.select("article").map {
+        val home = document.select("article").asIterable().map {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -128,7 +128,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = request(link).document
 
-        return document.select("div.listupd article").map {
+        return document.select("div.listupd article").asIterable().map {
             it.toSearchResult()
         }
     }
@@ -143,7 +143,7 @@ class AnimeSailProvider : MainAPI() {
         val year = document.select("tbody th:contains(Dirilis)").next().text().trim().toIntOrNull()
         val statusText = document.select("tbody th:contains(Status)").next().text().trim()
         val plotText = document.selectFirst("div.entry-content > p")?.text()
-        val tagsList = document.select("tbody th:contains(Genre)").next().select("a").map { it.text() }
+        val tagsList = document.select("tbody th:contains(Genre)").next().select("a").asIterable().map { it.text() }
         val durationText = document.select("tbody th:contains(Durasi)").next().text().trim()
 
         val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(type), year, true)

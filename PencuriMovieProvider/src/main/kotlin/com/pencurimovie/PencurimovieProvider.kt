@@ -40,7 +40,7 @@ class PencurimovieProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data}/page/$page", timeout = 50L).document
-        val home = document.select("div.ml-item").mapNotNull { it.toSearchResult() }
+        val home = document.select("div.ml-item").asIterable().mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
             list = HomePageList(
@@ -66,7 +66,7 @@ class PencurimovieProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
             val document = app.get("${mainUrl}?s=$query", timeout = 50L).document
-            val results =document.select("div.ml-item").mapNotNull { it.toSearchResult() }
+            val results =document.select("div.ml-item").asIterable().mapNotNull { it.toSearchResult() }
         return results
     }
 
@@ -78,7 +78,7 @@ class PencurimovieProvider : MainAPI() {
         val description = document.selectFirst("div.desc p.f-desc")?.text()?.trim()
         val tvtag = if (url.contains("series")) TvType.TvSeries else TvType.Movie
         val trailer = document.select("meta[itemprop=embedUrl]").attr("content") ?: ""
-        val genre = document.select("div.mvic-info p:contains(Genre)").select("a").map { it.text() }
+        val genre = document.select("div.mvic-info p:contains(Genre)").select("a").asIterable().map { it.text() }
         val rating = document.selectFirst("span.imdb-r[itemprop=ratingValue]")
             ?.text()
             ?.toDoubleOrNull()
@@ -88,17 +88,17 @@ class PencurimovieProvider : MainAPI() {
             ?.toIntOrNull()
 
         val actors =
-            document.select("div.mvic-info p:contains(Actors)").select("a").map { it.text() }
+            document.select("div.mvic-info p:contains(Actors)").select("a").asIterable().map { it.text() }
         val year =
             document.select("div.mvic-info p:contains(Release)").select("a").text().toIntOrNull()
-        val recommendation=document.select("div.ml-item").mapNotNull {
+        val recommendation=document.select("div.ml-item").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return if (tvtag == TvType.TvSeries) {
             val episodes = mutableListOf<Episode>()
             document.select("div.tvseason").amap { info ->
                 val season = info.select("strong").text().substringAfter("Season").trim().toIntOrNull()
-                info.select("div.les-content a").forEach { it ->
+                info.select("div.les-content a").asIterable().forEach { it ->
                     Log.d("Phis","$it")
                     val name = it.select("a").text().substringAfter("-").trim()
                     val href = it.select("a").attr("href") ?: ""
@@ -149,7 +149,7 @@ class PencurimovieProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        document.select("div.movieplay iframe").forEach {
+        document.select("div.movieplay iframe").asIterable().forEach {
             val href = it.attr("data-src")
             loadExtractor(href,subtitleCallback, callback)
         }

@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.shokuja.uk"
+    override var mainUrl = "https://x6.sokuja.uk"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
@@ -26,7 +26,7 @@ class ShokujaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = "${request.data}$page"
         val document = app.get(url).document
-        val homeItems = document.select("article, div.bsx, div.animepost").mapNotNull {
+        val homeItems = document.select("article, div.bsx, div.animepost").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, homeItems)
@@ -46,7 +46,7 @@ class ShokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = app.get(searchUrl).document
 
-        return document.select("article, div.bsx, div.animepost, div.box-item").mapNotNull {
+        return document.select("article, div.bsx, div.animepost, div.box-item").asIterable().mapNotNull {
             it.toSearchResult()
         }
     }
@@ -58,7 +58,7 @@ class ShokujaProvider : MainAPI() {
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
 
-        val episodes = document.select("li[data-index], div.eplister li").mapNotNull { elem ->
+        val episodes = document.select("li[data-index], div.eplister li").asIterable().mapNotNull { elem ->
             val epUrl = fixUrl(elem.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
             val epName = elem.selectFirst("a")?.text() ?: "Episode"
             val epNum = elem.selectFirst("span.epstitle")?.text()?.filter { it.isDigit() }?.toIntOrNull()
@@ -87,7 +87,7 @@ class ShokujaProvider : MainAPI() {
         val document = app.get(data).document
 
         // Check iframe embeds
-        document.select("iframe").forEach { iframe ->
+        document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
 

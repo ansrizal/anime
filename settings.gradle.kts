@@ -1,3 +1,4 @@
+@file:Suppress("UnstableApiUsage")
 pluginManagement {
     repositories {
         google()
@@ -15,8 +16,8 @@ pluginManagement {
     plugins {
         id("com.android.application") version "8.7.3" apply false
         id("com.android.library") version "8.7.3" apply false
-        id("org.jetbrains.kotlin.android") version "1.9.24" apply false
-        id("org.jetbrains.kotlin.jvm") version "1.9.24" apply false
+        id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+        id("org.jetbrains.kotlin.jvm") version "2.0.21" apply false
     }
 }
 
@@ -33,9 +34,11 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "anime"
+include(":app")
 include(":AlqanimeProvider")
 include(":AnichinProvider")
+include(":Animasu")
+include(":AnimeIndo")
 include(":AnimeSailProvider")
 include(":AnimexinProvider")
 include(":AnoboyProvider")
@@ -44,24 +47,41 @@ include(":DonghubProvider")
 include(":DrakorProvider")
 include(":DubbindoProvider")
 include(":DutamovieProvider")
+include(":Filmkita")
+include(":Filmlokal")
+include(":Hanime")
 include(":HidoriStreamProvider")
 include(":IdlixProvider")
+include(":Indomax")
 include(":IndoMax21Provider")
 include(":JavHeyProvider")
+include(":Kawanfilm")
+include(":KlikXXi")
 include(":KlikxxiProvider")
 include(":KuramanimeProvider")
 include(":KuronimeProvider")
 include(":LayarAsiaProvider")
 include(":LayarKacaProvider")
+include(":LayarWarna")
 include(":MovieboxProvider")
 include(":NekopoiProvider")
+include(":Ngefilm")
 include(":NgeFilm21Provider")
 include(":NimegamiProvider")
 include(":NomatProvider")
 include(":NontonAnimeIDProvider")
+include(":Oploverz")
 include(":OppaDramaProvider")
 include(":OtakudesuProvider")
+include(":Pahe")
+include(":Pencurimovie")
 include(":PencuriMovieProvider")
+include(":Pusatfilm")
+include(":Pusatmovie")
+include(":Rebahin")
 include(":SamehadakuProvider")
+include(":Sarangfilm")
+include(":Savefilm")
+include(":SemiRebahin")
 include(":ShokujaProvider")
-include(":app")
+include(":WGFilm21")

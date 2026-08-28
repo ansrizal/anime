@@ -77,7 +77,7 @@ class KuramanimeProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data + page).document
-        val home = document.select("div.product__item").mapNotNull {
+        val home = document.select("div.product__item").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -107,7 +107,7 @@ class KuramanimeProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.get("$mainUrl/anime?search=$query&order_by=latest").document.select("div.product__item").mapNotNull {
+        return app.get("$mainUrl/anime?search=$query&order_by=latest").document.select("div.product__item").asIterable().mapNotNull {
             it.toSearchResult()
         }
     }
@@ -158,7 +158,7 @@ class KuramanimeProvider : MainAPI() {
         val type = getType(
             document.selectFirst("div.col-lg-6.col-md-6 ul li:contains(Tipe:) a")?.text()?.lowercase() ?: "tv", episodes.size
         )
-        val recommendations = document.select("div#randomList > a").mapNotNull {
+        val recommendations = document.select("div#randomList > a").asIterable().mapNotNull {
             val epHref = it.attr("href")
             val epTitle = it.select("h5.sidebar-title-h5.px-2.py-2").text()
             val epPoster = it.select(".product__sidebar__view__item.set-bg").attr("data-setbg")
@@ -189,7 +189,7 @@ class KuramanimeProvider : MainAPI() {
         val request = app.post(url, data = mapOf("authorization" to getAuth(authScriptUrl, refererUrl)), headers = headers, cookies = cookies)
         delay(2000)
         val document = request.document
-        document.select("video#player > source").map {
+        document.select("video#player > source").asIterable().map {
             val link = fixUrl(it.attr("src"))
             val quality = it.attr("size").toIntOrNull()
             callback.invoke(newExtractorLink(fixTitle(server), fixTitle(server), link, INFER_TYPE) {

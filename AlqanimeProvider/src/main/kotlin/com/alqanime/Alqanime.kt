@@ -70,7 +70,7 @@ class Alqanime : MainAPI() {
                 timeout = 15000L
             ).document
             document.select("div.listupd:not(.popularslider) article.bs")
-                .mapNotNull { it.toSearchResult() }
+                .asIterable().mapNotNull { it.toSearchResult() }
         }.getOrDefault(emptyList())
 
         return newHomePageResponse(request.name, home)
@@ -96,7 +96,7 @@ class Alqanime : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query", headers = commonHeaders).document
-        return document.select("article.bs").mapNotNull { it.toSearchResult() }
+        return document.select("article.bs").asIterable().mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -126,13 +126,14 @@ class Alqanime : MainAPI() {
         }
 
         val description = document.select("div.entry-content > p")
+            .asIterable()
             .filter { it.text().length > 10 }
             .joinToString("\n\n") { it.text().trim() }
             .ifBlank { null }
 
-        val genres = document.select("div.genxed a").map { it.text() }
+        val genres = document.select("div.genxed a").asIterable().map { it.text() }
 
-        val speMap = document.select("div.spe > span").associate { span ->
+        val speMap = document.select("div.spe > span").asIterable().associate { span ->
             val label = span.selectFirst("b")?.text()?.trim() ?: ""
             val value = span.text().replace(label, "").trim()
             label to value
@@ -152,13 +153,13 @@ class Alqanime : MainAPI() {
         val duration = Regex("(\\d+)\\s*min").find(
             speMap.entries.find { it.key.contains("Durasi", true) }?.value ?: ""
         )?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val actors = document.select("div.spe span:contains(Casts) a.casts").map { Actor(it.text()) }
+        val actors = document.select("div.spe span:contains(Casts) a.casts").asIterable().map { Actor(it.text()) }
         val scoreText = document.selectFirst("strong:contains(Score)")?.text()
             ?.replace("Score", "")?.trim()
 
         val episodes = mutableListOf<Episode>()
 
-        for (col in document.select("div.sorattl.collapsible")) {
+        for (col in document.select("div.sorattl.collapsible").asIterable()) {
             val epTitle = col.selectFirst("h3")?.text()?.trim() ?: continue
             if (epTitle.equals("Batch", ignoreCase = true)) continue
 
@@ -171,8 +172,8 @@ class Alqanime : MainAPI() {
 
             val pixeldrainFolderIds = mutableListOf<String>()
 
-            for (tr in contentDiv.select("tr")) {
-                for (a in tr.select("div.slink a")) {
+            for (tr in contentDiv.select("tr").asIterable()) {
+                for (a in tr.select("div.slink a").asIterable()) {
                     val resolved = resolveUrl(a.attr("href"))
                     val listId = Regex("pixeldrain\\.com/l/([A-Za-z0-9]+)")
                         .find(resolved)?.groupValues?.getOrNull(1)
@@ -220,9 +221,9 @@ class Alqanime : MainAPI() {
 
             if (pixeldrainFolderIds.isEmpty()) {
                 val linkList = mutableListOf<EpisodeLink>()
-                for (tr in contentDiv.select("tr")) {
+                for (tr in contentDiv.select("tr").asIterable()) {
                     val quality = tr.selectFirst("div.res")?.text()?.trim() ?: continue
-                    for (a in tr.select("div.slink a")) {
+                    for (a in tr.select("div.slink a").asIterable()) {
                         linkList.add(EpisodeLink(a.attr("href"), quality))
                     }
                 }
@@ -382,7 +383,7 @@ class Alqanime : MainAPI() {
         document.select(
             "a#downloadButton[href], a.input.popsok[href], a[aria-label*=Download][href], " +
                 "a[href*=download][href*=mediafire], a[href*=mediafire][href*=download]"
-        ).forEach { element ->
+        ).asIterable().forEach { element ->
             fixUrlNull(element.attr("href"))?.let { candidates.add(it.cleanEscaped()) }
         }
 
@@ -490,7 +491,7 @@ class Alqanime : MainAPI() {
             if (emitted) return true
 
             collectPlayableUrls(document, html, pageUrl)
-                .filterNot { it.isAcefileLandingPageUrl() }
+                .asIterable().filterNot { it.isAcefileLandingPageUrl() }
                 .forEach { direct ->
                     if (emitAcefileDirect(direct, pageUrl)) emitted = true
                 }
@@ -504,7 +505,7 @@ class Alqanime : MainAPI() {
             document.select(
                 "iframe[src], embed[src], video[src], video source[src], source[src], " +
                     "[data-url], [data-href], [data-link], [data-file], [data-source], [data-video], [data-src]"
-            ).forEach { element ->
+            ).asIterable().forEach { element ->
                 listOf("src", "data-url", "data-href", "data-link", "data-file", "data-source", "data-video", "data-src")
                     .map { element.attr(it) }
                     .map { it.cleanEscaped() }
@@ -538,7 +539,7 @@ class Alqanime : MainAPI() {
     ): List<String> {
         val pages = linkedSetOf<String>()
 
-        document.select("[data-holder=local][data-video], [data-video*=local]").forEach { element ->
+        document.select("[data-holder=local][data-video], [data-video*=local]").asIterable().forEach { element ->
             listOf("data-video", "data-src", "src", "href")
                 .map { element.attr(it) }
                 .mapNotNull { normalizeUrl(it, baseUrl) }
@@ -698,7 +699,7 @@ class Alqanime : MainAPI() {
             document.select(
                 "a[href], form[action], button[data-url], button[data-href], " +
                     "[data-url], [data-href], [data-link], [data-download]"
-            ).forEach { element ->
+            ).asIterable().forEach { element ->
                 listOf("href", "action", "data-url", "data-href", "data-link", "data-download")
                     .map { element.attr(it) }
                     .mapNotNull { normalizeUrl(it, pageUrl) }
@@ -789,11 +790,11 @@ class Alqanime : MainAPI() {
             if (emitted) return true
 
             document.select("iframe[src], embed[src], video[src], video source[src], source[src]")
-                .map { it.attr("src") }
+                .asIterable().map { it.attr("src") }
                 .forEach { addPage(it, pageUrl) }
 
             document.select("a[href], [data-url], [data-href], [data-link], [data-iframe], [data-src]")
-                .forEach { element ->
+                .asIterable().forEach { element ->
                     listOf("href", "data-url", "data-href", "data-link", "data-iframe", "data-src")
                         .map { element.attr(it) }
                         .map { it.cleanEscaped() }
@@ -893,7 +894,7 @@ class Alqanime : MainAPI() {
             document.select(
                 "iframe[src], embed[src], video[src], video source[src], source[src], " +
                     "a[href], form[action], [data-url], [data-href], [data-link], [data-download], [data-src]"
-            ).forEach { element ->
+            ).asIterable().forEach { element ->
                 listOf("src", "href", "action", "data-url", "data-href", "data-link", "data-download", "data-src")
                     .map { element.attr(it) }
                     .map { it.cleanEscaped() }
@@ -912,7 +913,7 @@ class Alqanime : MainAPI() {
     ): List<String> {
         val results = linkedSetOf<String>()
 
-        document.select("video[src], video source[src], source[src], a[href]").forEach { element ->
+        document.select("video[src], video source[src], source[src], a[href]").asIterable().forEach { element ->
             val raw = element.attr("src").ifBlank { element.attr("href") }
             normalizeUrl(raw, baseUrl)?.cleanEscaped()?.takeIf { it.isPlayableMediaUrl() && !it.isArchiveDownloadUrl() }?.let(results::add)
         }
@@ -1012,7 +1013,7 @@ class Alqanime : MainAPI() {
             if (form != null) {
                 val action = normalizeUrl(form.attr("action"), currentUrl)?.cleanEscaped()
                 if (action != null) {
-                    val formData = form.select("input[name]").associate { input ->
+                    val formData = form.select("input[name]").asIterable().associate { input ->
                         input.attr("name") to input.attr("value")
                     }.filterKeys { it.isNotBlank() }
 
@@ -1084,7 +1085,7 @@ class Alqanime : MainAPI() {
         document.select(
             "a[href], form[action], iframe[src], script[src], " +
                 "[data-url], [data-href], [data-link], [data-download]"
-        ).forEach { element ->
+        ).asIterable().forEach { element ->
             listOf("href", "action", "src", "data-url", "data-href", "data-link", "data-download")
                 .map { element.attr(it) }
                 .mapNotNull { normalizeUrl(it, baseUrl) }

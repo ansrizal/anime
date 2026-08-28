@@ -51,7 +51,7 @@ class DutamovieProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data.format(page)}").document
-        val items = document.select("article.item").mapNotNull { it.toSearchResult() }
+        val items = document.select("article.item").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, items)
     }
 
@@ -83,7 +83,7 @@ class DutamovieProvider : MainAPI() {
 	
 	override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl?s=$query&post_type[]=post&post_type[]=tv").document
-        return document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+        return document.select("article.item-infinite").asIterable().mapNotNull { it.toSearchResult() }
     }
 	
 	private fun Element.toRecommendResult(): SearchResponse? {
@@ -121,7 +121,7 @@ class DutamovieProvider : MainAPI() {
 
         val poster = fixUrlNull(document.selectFirst("figure.pull-left > img")?.getImageAttr())
             ?.fixImageQuality()
-        val tags = document.select("div.gmr-moviedata a").map { it.text() }
+        val tags = document.select("div.gmr-moviedata a").asIterable().map { it.text() }
         val year = document.select("div.gmr-moviedata strong:contains(Year:) > a")
             .text().trim().toIntOrNull()
         val tvType = if (url.contains("/tv/")) TvType.TvSeries else TvType.Movie
@@ -129,11 +129,11 @@ class DutamovieProvider : MainAPI() {
         val trailer = document.selectFirst("ul.gmr-player-nav li a.gmr-trailer-popup")?.attr("href")
         val rating = document.selectFirst("div.gmr-meta-rating span[itemprop=ratingValue]")
             ?.text()?.trim()
-        val actors = document.select("div.gmr-moviedata").last()
-            ?.select("span[itemprop=actors] a")?.map { it.text() }
+        val actors = document.select("div.gmr-moviedata").asIterable().last()
+            ?.select("span[itemprop=actors] a")?.asIterable()?.map { it.text() }
         val duration = document.selectFirst("div.gmr-moviedata span[property=duration]")
             ?.text()?.replace(Regex("\\D"), "")?.toIntOrNull()
-        val recommendations = document.select("article.item.col-md-20").mapNotNull { it.toRecommendResult() }
+        val recommendations = document.select("article.item.col-md-20").asIterable().mapNotNull { it.toRecommendResult() }
         return if (tvType == TvType.TvSeries) {				
 			val episodes = document.select("div.vid-episodes a, div.gmr-listseries a")
 				.mapNotNull { eps ->
@@ -209,7 +209,7 @@ class DutamovieProvider : MainAPI() {
             }
         }
 
-        document.select("ul.gmr-download-list li a").forEach { link ->
+        document.select("ul.gmr-download-list li a").asIterable().forEach { link ->
             val downloadUrl = link.attr("href")
             if (downloadUrl.isNotBlank()) {
                 loadExtractor(downloadUrl, data, subtitleCallback, callback)

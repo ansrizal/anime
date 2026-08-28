@@ -75,7 +75,7 @@ class KuronimeProvider : MainAPI() {
         val req = app.get(url)
         mainUrl = getBaseUrl(req.url)
         val document = req.document
-        val home = document.select(".listupd article").map {
+        val home = document.select(".listupd article").asIterable().map {
             it.toSearchResult(mainUrl)
         }
         
@@ -156,7 +156,7 @@ class KuronimeProvider : MainAPI() {
 
         val title = document.selectFirst(".entry-title")?.text().toString().trim()
         val poster = document.selectFirst("div.l[itemprop=image] > img, .l > img")?.getImageAttr()
-        val tags = document.select(".infodetail > ul > li:nth-child(2) > a").map { it.text() }
+        val tags = document.select(".infodetail > ul > li:nth-child(2) > a").asIterable().map { it.text() }
         val typeString = document.selectFirst(".infodetail > ul > li:nth-child(7)")?.ownText()?.removePrefix(":")?.trim() ?: "tv"
         val type = getType(typeString.lowercase())
 
@@ -268,7 +268,7 @@ class KuronimeProvider : MainAPI() {
         val document = req.document
         val currentBaseUrl = getBaseUrl(req.url)
         
-        val scriptData = document.select("script").map { it.data() }
+        val scriptData = document.select("script").asIterable().map { it.data() }
             .firstOrNull { it.contains("_0xa100d42aa") }
             ?: throw ErrorLoadingException("No id found in script tags")
             

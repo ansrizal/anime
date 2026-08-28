@@ -68,7 +68,7 @@ class Ngefilm21Provider : MainAPI() {
 
                     try {
                         val document = app.get(finalUrl).document
-                        val items = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+                        val items = document.select("article.item-infinite").asIterable().mapNotNull { it.toSearchResult() }
                         if (items.isNotEmpty()) HomePageList(title, items) else null
                     } catch (e: Exception) { null }
                 }
@@ -89,7 +89,7 @@ class Ngefilm21Provider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query&post_type[]=post&post_type[]=tv").document
-            .select("article.item-infinite").mapNotNull { it.toSearchResult() }
+            .select("article.item-infinite").asIterable().mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -101,11 +101,11 @@ class Ngefilm21Provider : MainAPI() {
             ?: document.selectFirst("meta[property='og:description']")?.attr("content")
         val yearText = document.selectFirst(".gmr-moviedata a[href*='year']")?.text()?.toIntOrNull()
         val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.trim()
-        val tagsList = document.select(".gmr-moviedata a[href*='genre']").map { it.text() }
-        val actorsList = document.select("[itemprop='actors'] a").map { it.text() }
+        val tagsList = document.select(".gmr-moviedata a[href*='genre']").asIterable().map { it.text() }
+        val actorsList = document.select("[itemprop='actors'] a").asIterable().map { it.text() }
         val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
 
-        val epElements = document.select(".gmr-listseries a").filter { it.attr("href").contains("/eps/") }
+        val epElements = document.select(".gmr-listseries a").asIterable().filter { it.attr("href").contains("/eps/") }
         val isSeries = epElements.isNotEmpty()
         val type = if (isSeries) TvType.TvSeries else TvType.Movie
 
@@ -139,7 +139,7 @@ class Ngefilm21Provider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
+        val playerLinks = document.select(".muvipro-player-tabs a").asIterable().mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
         coroutineScope {

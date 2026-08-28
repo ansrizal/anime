@@ -24,18 +24,29 @@ class ShokujaProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "${request.data}$page"
+        val url = if (request.data.contains("page")) {
+            "${request.data}$page"
+        } else {
+            "${request.data}/page/$page"
+        }.replace("//page", "/page")
+
         val document = app.get(url).document
-        val homeItems = document.select("article, div.bsx, div.animepost").asIterable().mapNotNull {
+        val homeItems = document.select("div.bs, div.bsx, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, homeItems)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2 a, .title a, a[title]")?.text() ?: this.selectFirst("a[title]")?.attr("title") ?: return null
+        val title = this.selectFirst(".tt, h2, h3, .title, a[title]")?.text()?.trim() 
+            ?: this.selectFirst("a[title]")?.attr("title") 
+            ?: return null
         val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
-        val posterUrl = fixUrlNull(this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-src"))
+        val posterUrl = fixUrlNull(
+            this.selectFirst("img")?.attr("src") 
+            ?: this.selectFirst("img")?.attr("data-src")
+            ?: this.selectFirst("img")?.attr("data-lazy-src")
+        )
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
@@ -43,10 +54,10 @@ class ShokujaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
+        val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
 
-        return document.select("article, div.bsx, div.animepost, div.box-item").asIterable().mapNotNull {
+        return document.select("div.bs, div.bsx, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -58,10 +69,12 @@ class ShokujaProvider : MainAPI() {
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
 
-        val episodes = document.select("li[data-index], div.eplister li").asIterable().mapNotNull { elem ->
-            val epUrl = fixUrl(elem.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
-            val epName = elem.selectFirst("a")?.text() ?: "Episode"
-            val epNum = elem.selectFirst("span.epstitle")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li").mapNotNull { elem ->
+            val a = elem.selectFirst("a") ?: return@mapNotNull null
+            val epUrl = fixUrl(a.attr("href"))
+            val epName = a.text().trim()
+            val epNum = elem.selectFirst("span.epstitle, .epl-num")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                ?: Regex("Episode\\s?(\\d+)").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
             newEpisode(epUrl) {
                 this.name = epName

@@ -6,14 +6,10 @@ plugins {
 
 val cloudstreamApiVersion = "-SNAPSHOT"
 
-version = 3
-
 cloudstream {
-    language = "en"
+    setRepo("https://github.com/ansrizal/anime")
     authors = listOf("ansrizal")
-    status = 1
-    tvTypes = listOf("NSFW")
-    iconUrl = "https://www.google.com/s2/favicons?domain=https://hanime.tv&sz=%size%"
+    description = "CloudStream 3 streaming provider extension module for Hanime"
 }
 
 android {
@@ -64,10 +60,10 @@ dependencies {
     val cloudstreamApiVersion = "-SNAPSHOT"
     compileOnly("com.github.recloudstream.cloudstream:library:$cloudstreamApiVersion")
     implementation("com.github.Blatzar:NiceHttp:0.4.11")
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
-    implementation("org.jsoup:jsoup:1.23.2")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2")
-    implementation("com.google.code.gson:gson:2.14.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-    implementation("org.mozilla:rhino:1.9.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.1")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
+    implementation("com.google.code.gson:gson:2.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.mozilla:rhino:1.7.15")
 }

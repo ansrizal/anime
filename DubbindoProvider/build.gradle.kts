@@ -69,18 +69,18 @@ dependencies {
 
     // HTTP / Network & Scraping (NiceHttp & OkHttp)
     implementation("com.github.Blatzar:NiceHttp:0.4.11")
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // HTML / DOM Parsing
-    implementation("org.jsoup:jsoup:1.23.2")
+    implementation("org.jsoup:jsoup:1.18.1")
 
     // JSON Serialization & Utils
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2")
-    implementation("com.google.code.gson:gson:2.14.0")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
+    implementation("com.google.code.gson:gson:2.11.0")
 
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     // JavaScript Engine (Mozilla Rhino for JS extractors)
-    implementation("org.mozilla:rhino:1.9.1")
+    implementation("org.mozilla:rhino:1.7.15")
 }

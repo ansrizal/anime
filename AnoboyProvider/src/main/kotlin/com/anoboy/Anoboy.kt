@@ -433,10 +433,10 @@ class Anoboy : MainAPI() {
 
                 val rawTitle = anchor.text().trim()
                 val episodeNumber = when {
-                    shouldCollapseToSingleEpisode -> episodeNumberFromUrl
+                    shouldCollapseToSingleEpisode -> episodeNumberFromUrl!!
                     else -> parseEpisodeNumber(rawTitle, dataVideo)
                         ?: if (isQualityOnlyLabel(rawTitle) && episodeNumberFromUrl != null && fallbackAnchors.size <= 6) {
-                            episodeNumberFromUrl
+                            episodeNumberFromUrl!!
                         } else {
                             index + 1
                         }

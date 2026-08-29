@@ -1,15 +1,6 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("com.lagradost.cloudstream3.gradle")
-}
-
-val cloudstreamApiVersion = "-SNAPSHOT"
-
-cloudstream {
-    setRepo("https://github.com/ansrizal/anime")
-    authors = listOf("Ans Rizal")
-    description = "Streaming anime provider and extensions for CloudStream 3 and StreamCloud (Shokuja: https://x6.sokuja.uk)"
 }
 
 android {

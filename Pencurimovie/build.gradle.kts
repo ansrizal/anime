@@ -10,6 +10,7 @@ cloudstream {
     setRepo("https://github.com/ansrizal/anime")
     authors = listOf("ansrizal")
     description = "CloudStream 3 streaming provider extension module for Pencurimovie"
+    version = 1
 }
 
 android {

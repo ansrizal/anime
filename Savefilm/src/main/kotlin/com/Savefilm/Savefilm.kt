@@ -11,7 +11,7 @@ import java.net.URI
 
 class Savefilm : MainAPI() {
     override var mainUrl = "https://new13.savefilm21info.com"
-	private val mainUrlJson = "https://raw.githubusercontent.com/ansrizal/CloudX/builds/Website.json"
+	private val mainUrlJson = "https://raw.githubusercontent.com/ansrizal/anime/builds/Website.json"
     private var directUrl: String? = null
     override var name = "Savefilm"
     override val hasMainPage = true
@@ -40,15 +40,18 @@ class Savefilm : MainAPI() {
 	
 	private suspend fun loadMainUrlIfNeeded() {
 		if (directUrl != null) return
-		val response = app.get(mainUrlJson).text
-		val json = JSONObject(response)
-		val array = json.optJSONArray("savefilm")
-		val newUrl = array?.optString(0)?.removeSuffix("/")
+		try {
+			val response = app.get(mainUrlJson).text
+			val json = JSONObject(response)
+			val array = json.optJSONArray("savefilm")
+			val newUrl = array?.optString(0)?.removeSuffix("/")
 
-		if (!newUrl.isNullOrBlank()) {
-			mainUrl = newUrl
-			directUrl = newUrl
-		}
+			if (!newUrl.isNullOrBlank()) {
+				mainUrl = newUrl
+				directUrl = newUrl
+			}
+		} catch (_: Exception) {}
+		if (directUrl == null) directUrl = mainUrl
 	}
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

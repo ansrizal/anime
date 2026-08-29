@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 
 class Rebahin : MainAPI() {
-    override var mainUrl = "https://139.59.197.199"
+    override var mainUrl = "https://rebahin.io"
     override var name = "Rebahin"
     override val hasMainPage = true
     override var lang = "id"
@@ -21,11 +21,23 @@ class Rebahin : MainAPI() {
         val sections = mutableListOf<HomePageList>()
         getApiSection("Movies", page, "api/movies")?.let { sections.add(it) }
         getApiSection("TV Series", page, "api/tv")?.let { sections.add(it) }
+
+        if (sections.isEmpty()) {
+            val doc = app.get("$mainUrl/page/$page").document
+            val items = doc.select("div.listupd article, div.bsx, div.ml-item").asIterable().mapNotNull { el ->
+                val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
+                val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
+                val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }
+                newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
+            }
+            if (items.isNotEmpty()) sections.add(HomePageList("Latest Uploads", items))
+        }
+
         return newHomePageResponse(sections)
     }
 
     private suspend fun getApiSection(name: String, page: Int, apiPath: String): HomePageList? {
-        val resp = app.get("$mainUrl/$apiPath?page=$page&limit=24")
+        val resp = try { app.get("$mainUrl/$apiPath?page=$page&limit=24") } catch(_: Exception) { return null }
         val text = resp.text ?: return null
         val data = try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { return null }
         if (data == null) return null
@@ -70,25 +82,36 @@ class Rebahin : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val resp = app.get("$mainUrl/api/search?q=$query")
-        val text = resp.text ?: return emptyList()
-        val data = try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { return emptyList() }
-        if (data == null) return emptyList()
-        return (0 until data.length()).mapNotNull { i ->
-            val item = data.optJSONObject(i) ?: return@mapNotNull null
-            val id = item.optString("id", "")
-            val title = item.optString("title", "")
-            if (id.isBlank() || title.isBlank()) return@mapNotNull null
-            val posterPath = item.optString("posterPath", "")
-            val poster = if (posterPath.isNotBlank()) "https://image.tmdb.org/t/p/w500$posterPath" else null
-            val type = item.optString("type", "movie")
-            val voteAvg = if (item.has("voteAverage")) item.optDouble("voteAverage", -1.0).let { if (it < 0) null else it } else null
-            val href = if (type == "tv") "/tv/$id" else "/movies/$id"
-            if (type == "tv") {
-                newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
-            } else {
-                newMovieSearchResponse(title, fixUrl(href), TvType.Movie) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
+        val resp = try { app.get("$mainUrl/api/search?q=$query") } catch(_: Exception) { null }
+        val text = resp?.text
+        val data = if (text != null) try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { null } else null
+        
+        if (data != null) {
+            return (0 until data.length()).mapNotNull { i ->
+                val item = data.optJSONObject(i) ?: return@mapNotNull null
+                val id = item.optString("id", "")
+                val title = item.optString("title", "")
+                if (id.isBlank() || title.isBlank()) return@mapNotNull null
+                val posterPath = item.optString("posterPath", "")
+                val poster = if (posterPath.isNotBlank()) "https://image.tmdb.org/t/p/w500$posterPath" else null
+                val type = item.optString("type", "movie")
+                val voteAvg = if (item.has("voteAverage")) item.optDouble("voteAverage", -1.0).let { if (it < 0) null else it } else null
+                val href = if (type == "tv") "/tv/$id" else "/movies/$id"
+                if (type == "tv") {
+                    newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
+                } else {
+                    newMovieSearchResponse(title, fixUrl(href), TvType.Movie) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
+                }
             }
+        }
+
+        // Scraper fallback
+        val doc = app.get("$mainUrl/?s=$query").document
+        return doc.select("div.listupd article, div.bsx, div.ml-item").asIterable().mapNotNull { el ->
+            val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
+            val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
+            val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }
+            newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
         }
     }
 

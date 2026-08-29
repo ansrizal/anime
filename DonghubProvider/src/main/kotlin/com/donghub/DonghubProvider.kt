@@ -30,17 +30,19 @@ class DonghubProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val items = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
+        val items = document.select("div.listupd article, div.bsx, div.uta").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
             hasNext = true
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse {
-        val title = select("div.bsx > a").attr("title").trim()
-        val href = fixUrl(select("div.bsx > a").attr("href"))
-        val poster = fixUrlNull(selectFirst("div.bsx > a img")?.getsrcAttribute())
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = selectFirst("a[title]")?.attr("title")?.trim() 
+            ?: selectFirst(".tt, h2, h3")?.text()?.trim() 
+            ?: return null
+        val href = fixUrl(selectFirst("a")?.attr("href") ?: return null)
+        val poster = fixUrlNull(selectFirst("img")?.getsrcAttribute())
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = poster
         }
@@ -50,7 +52,7 @@ class DonghubProvider : MainAPI() {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..3) {
             val document = app.get("$mainUrl/page/$i/?s=$query").document
-            val result = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
+            val result = document.select("div.listupd article, div.bsx, div.uta").asIterable().mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
         }

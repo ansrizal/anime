@@ -15,25 +15,25 @@ class Hanime : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.NSFW)
 
-    private val apiBase = "https://guest.freeanimehentai.net/api/v11"
+    private val apiBase = "https://hanime.tv/api/v8"
 
     private var searchCatalog: List<Map<String, Any?>>? = null
     private var searchCatalogTime = 0L
 
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "$mainUrl/",
         "Origin" to "$mainUrl/"
     )
 
     private val playerHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "https://player.hanime.tv/",
         "Origin" to "https://player.hanime.tv/"
     )
 
     override val mainPage = mainPageOf(
-        "$apiBase/landing" to "Recent Uploads"
+        "$apiBase/static/landing" to "Recent Uploads"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -41,7 +41,10 @@ class Hanime : MainAPI() {
 
         val json = try {
             app.get(request.data, headers = headers).text
-        } catch (_: Exception) { null }
+        } catch (_: Exception) { 
+            // Fallback to proxy if official is blocked
+            try { app.get("https://guest.freeanimehentai.net/api/v11/landing", headers = headers).text } catch(_: Exception) { null }
+        }
 
         val root = tryParseJson<Map<String, Any?>>(json ?: return newHomePageResponse(emptyList()))
         if (root != null) {

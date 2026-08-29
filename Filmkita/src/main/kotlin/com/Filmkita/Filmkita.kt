@@ -11,7 +11,7 @@ import java.net.URI
 
 class Filmkita : MainAPI() {
     override var mainUrl = "https://2x.jalanmaxwin.site"
-	private val mainUrlJson = "https://raw.githubusercontent.com/ansrizal/CloudX/builds/Website.json"
+	private val mainUrlJson = "https://raw.githubusercontent.com/ansrizal/anime/builds/Website.json"
 	private var directUrl: String? = null
     override var name = "Filmkita"
     override val hasMainPage = true
@@ -44,15 +44,18 @@ class Filmkita : MainAPI() {
 	
 	private suspend fun loadMainUrlIfNeeded() {
 		if (directUrl != null) return
-		val response = app.get(mainUrlJson).text
-		val json = JSONObject(response)
-		val array = json.optJSONArray("filmkita")
-		val newUrl = array?.optString(0)?.removeSuffix("/")
+		try {
+			val response = app.get(mainUrlJson).text
+			val json = JSONObject(response)
+			val array = json.optJSONArray("filmkita")
+			val newUrl = array?.optString(0)?.removeSuffix("/")
 
-		if (!newUrl.isNullOrBlank()) {
-			mainUrl = newUrl
-			directUrl = newUrl
-		}
+			if (!newUrl.isNullOrBlank()) {
+				mainUrl = newUrl
+				directUrl = newUrl
+			}
+		} catch (_: Exception) {}
+		if (directUrl == null) directUrl = mainUrl
 	}
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

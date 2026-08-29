@@ -24,7 +24,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class OppadramaProvider : MainAPI() {
-    override var mainUrl = "http://45.11.57.125"
+    override var mainUrl = "http://45.11.57.188/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -66,7 +66,7 @@ class OppadramaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = "$mainUrl/${request.data}".plus("&page=$page")
         val document = app.get(url).document
-        val items = document.select("div.listupd article.bs")
+        val items = document.select("div.listupd article, div.bs, div.bsx")
                             .asIterable()
                             .mapNotNull { it.toSearchResult() }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
@@ -76,26 +76,27 @@ class OppadramaProvider : MainAPI() {
     val linkElement = this.selectFirst("a") ?: return null
     val href = fixUrl(linkElement.attr("href"))
     val title = linkElement.attr("title").ifBlank {
-        this.selectFirst("div.tt")?.text()
+        this.selectFirst("div.tt, h2, h3")?.text()
     } ?: return null
-    val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+    val img = this.selectFirst("img")
+    val poster = img?.attr("abs:data-src") ?: img?.attr("abs:src") ?: img?.getImageAttr()
 
     val isSeries = href.contains("/series/", true) || href.contains("drama", true)
 
     return if (isSeries) {
         newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            this.posterUrl = poster
+            this.posterUrl = fixUrlNull(poster)
         }
     } else {
         newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = poster
+            this.posterUrl = fixUrlNull(poster)
         }
     }
 }
 
     override suspend fun search(query: String): List<SearchResponse> {
-    val document = app.get("$mainUrl/?s=$query", timeout = 50L).document
-    val results = document.select("div.listupd article.bs")
+    val document = app.get("$mainUrl/?s=$query", timeout = 50000L).document
+    val results = document.select("div.listupd article, div.bs, div.bsx")
         .asIterable()
         .mapNotNull { it.toSearchResult() }
     return results

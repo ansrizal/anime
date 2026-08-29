@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://x6.sokuja.uk/"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
@@ -31,7 +31,7 @@ class ShokujaProvider : MainAPI() {
         }.replace("//page", "/page")
 
         val document = app.get(url).document
-        val homeItems = document.select("div.bs, div.bsx, article, div.uta").mapNotNull {
+        val homeItems = document.select("div.listupd article, div.bs, div.bsx, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, homeItems)
@@ -42,10 +42,11 @@ class ShokujaProvider : MainAPI() {
             ?: this.selectFirst("a[title]")?.attr("title") 
             ?: return null
         val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
+        val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
-            this.selectFirst("img")?.attr("src") 
-            ?: this.selectFirst("img")?.attr("data-src")
-            ?: this.selectFirst("img")?.attr("data-lazy-src")
+            img?.attr("abs:data-src")
+            ?: img?.attr("abs:data-lazy-src")
+            ?: img?.attr("abs:src")
         )
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
@@ -57,7 +58,7 @@ class ShokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
 
-        return document.select("div.bs, div.bsx, article, div.uta").mapNotNull {
+        return document.select("div.listupd article, div.bs, div.bsx, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
     }

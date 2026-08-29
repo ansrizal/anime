@@ -25,7 +25,7 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.*
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://v1.animesail.xyz"
+    override var mainUrl = "https://v1.animesail.xyz/"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
@@ -78,7 +78,7 @@ class AnimeSailProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = request(request.data + page).document
-        val home = document.select("article").asIterable().map {
+        val home = document.select("div.listupd article, div.bs, div.bsx, article").asIterable().map {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -102,7 +102,7 @@ class AnimeSailProvider : MainAPI() {
         val rawHref = fixUrlNull(this.selectFirst("a")?.attr("href")).toString()
         val href = getProperAnimeLink(rawHref)
 
-        val rawTitle = this.selectFirst(".tt > h2")?.text() ?: ""
+        val rawTitle = this.selectFirst(".tt > h2, h2, h3, .title")?.text() ?: ""
 
         val title = rawTitle.replace(Regex("(?i)Episode\\s?\\d+"), "")
             .replace(Regex("(?i)Subtitle Indonesia"), "")
@@ -111,11 +111,16 @@ class AnimeSailProvider : MainAPI() {
             .removeSuffix("-")
             .trim()
 
-        val posterUrl = fixUrlNull(this.selectFirst("div.limit img")?.attr("src"))
+        val img = this.selectFirst("img")
+        val posterUrl = fixUrlNull(
+            img?.attr("abs:data-src")
+            ?: img?.attr("abs:data-lazy-src")
+            ?: img?.attr("abs:src")
+        )
 
         val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-        val typeText = this.selectFirst(".tt > span")?.text() ?: ""
+        val typeText = this.selectFirst(".tt > span, .typez, span.type")?.text() ?: ""
         val type = if (typeText.contains("Movie", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
 
         return newAnimeSearchResponse(title, href, type) {
@@ -128,7 +133,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = request(link).document
 
-        return document.select("div.listupd article").asIterable().map {
+        return document.select("div.listupd article, div.bs, div.bsx, article").asIterable().map {
             it.toSearchResult()
         }
     }

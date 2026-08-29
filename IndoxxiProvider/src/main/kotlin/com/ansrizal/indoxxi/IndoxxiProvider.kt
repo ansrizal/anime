@@ -21,8 +21,7 @@ class IndoxxiProvider : MainAPI() {
     )
 
     private suspend fun request(url: String): NiceResponse {
-        // Try with interceptor first
-        val res = try {
+        return try {
             app.get(
                 url,
                 headers = headers,
@@ -30,14 +29,12 @@ class IndoxxiProvider : MainAPI() {
                 timeout = 30
             )
         } catch (e: Exception) {
-            // Fallback to normal request if interceptor fails
             app.get(
                 url,
                 headers = headers,
                 timeout = 20
             )
         }
-        return res
     }
 
     override val mainPage = mainPageOf(
@@ -50,41 +47,50 @@ class IndoxxiProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val path = request.data
+        val formattedPath = if (path.isEmpty()) "" else if (path.endsWith("/")) path else "$path/"
+        
         val url = if (page <= 1) {
-            if (request.data.isEmpty()) mainUrl else "$mainUrl/${request.data}"
+            "$mainUrl/$formattedPath"
         } else {
-            val data = request.data.removeSuffix("/")
-            if (data.isEmpty()) {
-                "$mainUrl/page/$page/"
-            } else {
-                "$mainUrl/$data/page/$page/"
-            }
-        }.replace("(?<!:)/{2,}".toRegex(), "/")
+            "$mainUrl/${formattedPath}page/$page/"
+        }
 
         val document = request(url).document
-        // Very broad selection for movie items
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item")
+        
+        // CSS Selector universal untuk layout web mirip IndoXXI/Idlix/Lk21
+        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article")
+        
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }
         
-        // Secondary fallback if main selectors fail
+        // Fallback jika selector utama tidak menemukan item
         if (homeItems.isEmpty()) {
-            val fallbackItems = document.select("a[href*='/movies/'], a[href*='/tv-series/']").asIterable().mapNotNull { a ->
+            val fallbackItems = document.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/movie/'], a[href*='/series/']").mapNotNull { a ->
                 val title = a.attr("title").ifBlank { a.text() }
                 val href = a.attr("href")
                 if (title.length < 3 || href.contains("/genre/") || href.contains("/category/")) return@mapNotNull null
                 
-                newMovieSearchResponse(title, fixUrl(href), TvType.Movie)
+                val img = a.selectFirst("img")
+                val poster = fixUrlNull(img?.attr("data-src") ?: img?.attr("src"))
+                
+                newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+                    this.posterUrl = poster
+                }
             }.distinctBy { it.url }.take(20)
-            if (fallbackItems.isNotEmpty()) return newHomePageResponse(request.name, fallbackItems)
+
+            if (fallbackItems.isNotEmpty()) {
+                // Perbaikan: Gunakan newHomePageList untuk struktur HomePageResponse Cloudstream
+                return newHomePageList(request.name, fallbackItems)
+            }
         }
 
-        return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
+        // Perbaikan: Memakai newHomePageList agar dirender dengan benar per section
+        return newHomePageList(request.name, homeItems)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Find link with title
         val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")
         val title = titleElement?.text()?.trim() 
             ?: this.selectFirst("a")?.attr("title")?.trim()
@@ -95,8 +101,14 @@ class IndoxxiProvider : MainAPI() {
         val linkElement = this.selectFirst("a") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
-        // Filter out non-content links
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+        // Filter URL non-konten secara aman
+        val cleanMainUrl = mainUrl.removeSuffix("/")
+        val cleanHref = href.removeSuffix("/")
+        
+        if (cleanHref == cleanMainUrl || 
+            href.contains("/genre/") || 
+            href.contains("/category/") || 
+            href.contains("/tag/")) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -110,6 +122,83 @@ class IndoxxiProvider : MainAPI() {
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
+        }
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchUrl = "$mainUrl/?s=$query"
+        val document = request(searchUrl).document
+
+        return document.select("div.listupd article, div.bs, div.bsx, div.ml-item, article.item, .archive-container article").mapNotNull {
+            it.toSearchResult()
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val document = request(url).document
+
+        val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "INDOXXI"
+        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
+        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description")?.text()?.trim()
+
+        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
+
+        return if (isSeries) {
+            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item").mapNotNull { elem ->
+                val a = elem.selectFirst("a") ?: return@mapNotNull null
+                val epUrl = fixUrl(a.attr("href"))
+                val epName = a.text().trim()
+                val epNum = elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                
+                newEpisode(epUrl) {
+                    this.name = epName
+                    this.episode = epNum
+                }
+            }
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        } else {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val document = request(data).document
+
+        document.select("iframe").asIterable().forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.isNotBlank() && !src.contains("facebook.com")) {
+                loadExtractor(src, subtitleCallback, callback)
+            }
+        }
+        
+        document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item").asIterable().forEach { li ->
+            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: li.attr("data-href") ?: ""
+            if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
+                loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
+            }
+        }
+
+        return true
+    }
+}            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
             }
         } else {

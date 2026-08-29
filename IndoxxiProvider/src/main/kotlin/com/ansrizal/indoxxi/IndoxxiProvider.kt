@@ -47,44 +47,32 @@ class IndoxxiProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val path = request.data
-        val formattedPath = if (path.isEmpty()) "" else if (path.endsWith("/")) path else "$path/"
-        
-        val url = if (page <= 1) {
-            "$mainUrl/$formattedPath"
-        } else {
-            "$mainUrl/${formattedPath}page/$page/"
-        }
-
-        val document = request(url).document
-        
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article")
-        
-        val homeItems = items.mapNotNull {
-            it.toSearchResult()
-        }
-        
-        if (homeItems.isEmpty()) {
-            val fallbackItems = document.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/movie/'], a[href*='/series/']").mapNotNull { a ->
-                val title = a.attr("title").ifBlank { a.text() }
-                val href = a.attr("href")
-                if (title.length < 3 || href.contains("/genre/") || href.contains("/category/")) return@mapNotNull null
-                
-                val img = a.selectFirst("img")
-                val poster = fixUrlNull(img?.attr("data-src") ?: img?.attr("src"))
-                
-                newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
-                    this.posterUrl = poster
-                }
-            }.distinctBy { it.url }.take(20)
-
-            if (fallbackItems.isNotEmpty()) {
-                return newHomePageResponse(request.name, fallbackItems)
-            }
-        }
-
-        return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
+    val path = request.data
+    val formattedPath = if (path.isEmpty()) "" else if (path.endsWith("/")) path else "$path/"
+    
+    val url = if (page <= 1) {
+        "$mainUrl/$formattedPath"
+    } else {
+        "$mainUrl/${formattedPath}page/$page/"
     }
+
+    val document = request(url).document
+    
+    val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article")
+    
+    val homeItems = items.mapNotNull {
+        it.toSearchResult()
+    }
+
+    // Mengembalikan HomePageResponse standar untuk satu baris kategori/section
+    return newHomePageResponse(
+        HomePageList(
+            name = request.name,
+            list = homeItems
+        ),
+        hasNext = homeItems.isNotEmpty()
+    )
+}
 
     private fun Element.toSearchResult(): SearchResponse? {
         val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")

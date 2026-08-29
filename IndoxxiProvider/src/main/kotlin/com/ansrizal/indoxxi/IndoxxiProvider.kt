@@ -21,12 +21,23 @@ class IndoxxiProvider : MainAPI() {
     )
 
     private suspend fun request(url: String): NiceResponse {
-        return app.get(
-            url,
-            headers = headers,
-            interceptor = turnstileInterceptor,
-            timeout = 60
-        )
+        // Try with interceptor first
+        val res = try {
+            app.get(
+                url,
+                headers = headers,
+                interceptor = turnstileInterceptor,
+                timeout = 30
+            )
+        } catch (e: Exception) {
+            // Fallback to normal request if interceptor fails
+            app.get(
+                url,
+                headers = headers,
+                timeout = 20
+            )
+        }
+        return res
     }
 
     override val mainPage = mainPageOf(
@@ -51,20 +62,41 @@ class IndoxxiProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = request(url).document
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item").mapNotNull {
+        // Very broad selection for movie items
+        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item")
+        val homeItems = items.mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+        
+        // Secondary fallback if main selectors fail
+        if (homeItems.isEmpty()) {
+            val fallbackItems = document.select("a[href*='/movies/'], a[href*='/tv-series/']").asIterable().mapNotNull { a ->
+                val title = a.attr("title").ifBlank { a.text() }
+                val href = a.attr("href")
+                if (title.length < 3 || href.contains("/genre/") || href.contains("/category/")) return@mapNotNull null
+                
+                newMovieSearchResponse(title, fixUrl(href), TvType.Movie)
+            }.distinctBy { it.url }.take(20)
+            if (fallbackItems.isNotEmpty()) return newHomePageResponse(request.name, fallbackItems)
+        }
+
+        return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")?.text()?.trim() 
+        // Find link with title
+        val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")
+        val title = titleElement?.text()?.trim() 
             ?: this.selectFirst("a")?.attr("title")?.trim()
             ?: return null
             
+        if (title.isEmpty()) return null
+            
         val linkElement = this.selectFirst("a") ?: return null
         val href = fixUrl(linkElement.attr("href"))
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/")) return null
+        
+        // Filter out non-content links
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -91,7 +123,7 @@ class IndoxxiProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, div.ml-item").mapNotNull {
+        return document.select("div.listupd article, div.bs, div.bsx, div.ml-item, article.item").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -106,7 +138,7 @@ class IndoxxiProvider : MainAPI() {
         val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
 
         return if (isSeries) {
-            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li").mapNotNull { elem ->
+            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item").mapNotNull { elem ->
                 val a = elem.selectFirst("a") ?: return@mapNotNull null
                 val epUrl = fixUrl(a.attr("href"))
                 val epName = a.text().trim()
@@ -140,13 +172,13 @@ class IndoxxiProvider : MainAPI() {
         document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank()) {
+            if (src.isNotBlank() && !src.contains("facebook.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
         
-        document.select("ul.muvi-player-list li, div.source-box li, .player-source").asIterable().forEach { li ->
-            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: ""
+        document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item").asIterable().forEach { li ->
+            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: li.attr("data-href") ?: ""
             if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
                 loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
             }

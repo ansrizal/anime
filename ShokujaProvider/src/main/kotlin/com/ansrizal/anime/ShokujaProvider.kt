@@ -11,14 +11,14 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://sokuja.net"
+    override var mainUrl = "https://x6.sokuja.uk"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     override val mainPage = mainPageOf(
-        "page/" to "Latest Update",
+        "rilisan-anime-terbaru/" to "Latest Update",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime"
     )
@@ -33,7 +33,7 @@ class ShokujaProvider : MainAPI() {
             } else {
                 "$mainUrl/$data/page/$page/"
             }
-        }.replace("//page", "/page")
+        }.replace("//page", "/page").replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
         val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {

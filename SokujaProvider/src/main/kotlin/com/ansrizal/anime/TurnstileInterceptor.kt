@@ -23,13 +23,14 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
 
         cookieManager.setAcceptCookie(true)
 
+        // Pre-set some common cookies to look more legitimate
         cookieManager.setCookie(domainUrl, "_as_ipin_lc=id-ID; path=/; SameSite=Strict")
         cookieManager.setCookie(domainUrl, "_as_ipin_tz=Asia/Jakarta; path=/; SameSite=Strict")
         cookieManager.setCookie(domainUrl, "_as_ipin_ct=ID; path=/; SameSite=Strict")
         cookieManager.flush()
 
         val existingCookies = cookieManager.getCookie(domainUrl) ?: ""
-        if (existingCookies.contains(targetCookie)) {
+        if (existingCookies.contains(targetCookie) || existingCookies.contains("cf_clearance")) {
             val response = chain.proceed(
                 originalRequest.newBuilder()
                     .header("Cookie", existingCookies)
@@ -38,7 +39,9 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             if ((response.code != 403) && (response.code != 503)) return response
 
             response.close()
+            // If we got here, the cookie might be expired
             cookieManager.setCookie(domainUrl, "$targetCookie=; Max-Age=0; path=/; Secure")
+            cookieManager.setCookie(domainUrl, "cf_clearance=; Max-Age=0; path=/; Secure")
             cookieManager.flush()
         }
 
@@ -52,7 +55,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         }) ?: return chain.proceed(originalRequest)
 
         val handler = Handler(Looper.getMainLooper())
-        val userAgentRef = AtomicReference(originalRequest.header("User-Agent") ?: "")
+        val userAgentRef = AtomicReference(originalRequest.header("User-Agent") ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
         val webViewRef = AtomicReference<WebView?>(null)
 
         handler.post {
@@ -67,14 +70,10 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                 databaseEnabled = true
                 loadWithOverviewMode = true
                 useWideViewPort = true
-                val ua = userAgentRef.get()
-                if (ua.isNotBlank()) userAgentString = ua
+                userAgentString = userAgentRef.get()
             }
 
-            userAgentRef.set(wv.settings.userAgentString)
-
             wv.webViewClient = object : WebViewClient() {
-
                 @SuppressLint("WebViewClientOnReceivedSslError")
                 override fun onReceivedSslError(
                     view: WebView?,
@@ -93,7 +92,9 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             wv.loadUrl(url)
         }
 
-        repeat(16) { // 8 seconds timeout (16 * 500ms)
+        // Wait for the cookie to appear
+        repeat(20) { // 10 seconds total
+            Thread.sleep(500)
             val cookies = cookieManager.getCookie(domainUrl) ?: ""
             if (cookies.contains("cf_clearance") || 
                 cookies.contains("as_turnstile") || 
@@ -102,7 +103,6 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             ) {
                 return@repeat
             }
-            Thread.sleep(500)
         }
 
         handler.post {

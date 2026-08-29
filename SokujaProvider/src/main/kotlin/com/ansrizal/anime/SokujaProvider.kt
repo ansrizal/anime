@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://sokuja.net"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
@@ -19,6 +19,10 @@ class SokujaProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer" to "$mainUrl/",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "same-origin",
+        "Upgrade-Insecure-Requests" to "1"
     )
 
     private suspend fun request(url: String): NiceResponse {
@@ -26,40 +30,55 @@ class SokujaProvider : MainAPI() {
             url,
             headers = headers,
             interceptor = turnstileInterceptor,
-            timeout = 30
+            timeout = 45
         )
     }
 
     override val mainPage = mainPageOf(
-        "rilisan-anime-terbaru/" to "Latest Update",
+        "" to "Update Terbaru",
+        "anime/?status=&type=&order=update" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) {
-            "$mainUrl/${request.data}"
+            if (request.data.isEmpty()) mainUrl else "$mainUrl/${request.data}"
         } else {
             val data = request.data.removeSuffix("/")
             if (data.isEmpty()) {
                 "$mainUrl/page/$page/"
+            } else if (data.contains("?")) {
+                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
             } else {
                 "$mainUrl/$data/page/$page/"
             }
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = request(url).document
-        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
+        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item, div.luf").mapNotNull {
             it.toSearchResult()
         }
+        
+        // Fallback to root if specific data is empty
+        if (homeItems.isEmpty() && request.data.isNotEmpty()) {
+            val rootDoc = request(mainUrl).document
+            val rootItems = rootDoc.select("div.listupd article, article.bs, div.bs, div.bsx, div.utao, div.luf").mapNotNull { it.toSearchResult() }
+            if (rootItems.isNotEmpty()) return newHomePageResponse(request.name, rootItems)
+        }
+
         return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".tt, h2, h3, .title, a[title], .entry-title")?.text()?.trim() 
-            ?: this.selectFirst("a[title]")?.attr("title") 
+        val title = this.selectFirst("h4, h3, h2, .tt, .title, a[title], .entry-title")?.text()?.trim() 
+            ?: this.selectFirst("a")?.attr("title")?.trim()
             ?: return null
-        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
+        
+        val linkElement = this.selectFirst("a") ?: return null
+        val href = fixUrl(linkElement.attr("href"))
+        if (href.contains("/genre/")) return null // Skip genre links if they get caught
+
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
             img?.attr("abs:data-src")
@@ -77,7 +96,7 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item, div.luf").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -86,14 +105,14 @@ class SokujaProvider : MainAPI() {
         val document = request(url).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
-        val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
-        val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
+        val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img, div.thumb img")?.attr("src"))
+        val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li").mapNotNull { elem ->
+        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li").mapNotNull { elem ->
             val a = elem.selectFirst("a") ?: return@mapNotNull null
             val epUrl = fixUrl(a.attr("href"))
             val epName = a.text().trim()
-            val epNum = elem.selectFirst("span.epstitle, .epl-num")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+            val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull()
                 ?: Regex("Episode\\s?(\\d+)").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
             newEpisode(epUrl) {

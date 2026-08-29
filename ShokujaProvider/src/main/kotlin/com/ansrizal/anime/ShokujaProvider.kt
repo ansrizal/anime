@@ -3,8 +3,6 @@ package com.ansrizal.anime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import org.jsoup.Jsoup
-import com.lagradost.nicehttp.*
 
 class ShokujaProvider : MainAPI() {
     override var mainUrl = "https://x6.sokuja.uk/"
@@ -16,7 +14,7 @@ class ShokujaProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "rilisan-anime-terbaru/" to "Latest Update",
         "genre/action/" to "Action Anime",
-        "genre/isekai/" to "Isekai Anime"
+        "genre/isekai/" to "Isekai Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -87,9 +85,12 @@ class ShokujaProvider : MainAPI() {
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(DubStatus.Subbed, episodes.ifEmpty {
-                listOf(newEpisode(url) { this.name = "Full Stream"; this.episode = 1 })
-            })
+            addEpisodes(
+                DubStatus.Subbed,
+                episodes.ifEmpty {
+                    listOf(newEpisode(url) { this.name = "Full Stream"; this.episode = 1 })
+                }
+            )
         }
     }
 

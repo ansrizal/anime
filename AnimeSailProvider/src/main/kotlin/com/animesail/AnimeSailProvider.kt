@@ -15,7 +15,6 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
-import org.jsoup.select.Elements
 
 class AnimeSailProvider : MainAPI() {
     override var mainUrl = "https://v1.animesail.xyz/"

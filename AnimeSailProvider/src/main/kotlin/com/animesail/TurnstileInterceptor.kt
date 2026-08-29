@@ -11,7 +11,6 @@ import android.webkit.WebViewClient
 import okhttp3.Interceptor
 import okhttp3.Response
 import java.util.concurrent.atomic.AtomicReference
-import com.lagradost.cloudstream3.app
 
 class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") : Interceptor {
 
@@ -34,17 +33,23 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             val response = chain.proceed(
                 originalRequest.newBuilder()
                     .header("Cookie", existingCookies)
-                    .build()
+                    .build(),
             )
-            if (response.code != 403 && response.code != 503) return response
+            if ((response.code != 403) && (response.code != 503)) return response
 
             response.close()
             cookieManager.setCookie(domainUrl, "$targetCookie=; Max-Age=0; path=/; Secure")
             cookieManager.flush()
         }
 
-        val context = (((try { Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null) as? android.content.Context } catch (e: Throwable) { null })) ?: ((try { Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null) as? android.content.Context } catch (e: Throwable) { null })))
-            ?: return chain.proceed(originalRequest)
+        @Suppress("PrivateApi")
+        val context = (try {
+            Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication")
+                .invoke(null) as? android.content.Context
+        } catch (_: Throwable) {
+            null
+        }) ?: return chain.proceed(originalRequest)
 
         val handler = Handler(Looper.getMainLooper())
         val userAgentRef = AtomicReference(originalRequest.header("User-Agent") ?: "")
@@ -74,7 +79,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                 override fun onReceivedSslError(
                     view: WebView?,
                     handler: SslErrorHandler?,
-                    error: SslError?
+                    error: SslError?,
                 ) {
                     handler?.proceed()
                 }
@@ -88,15 +93,13 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             wv.loadUrl(url)
         }
 
-        var cookieAcquired = false
-        for (i in 0 until 16) { // 8 seconds timeout (16 * 500ms)
+        repeat(16) { // 8 seconds timeout (16 * 500ms)
             val cookies = cookieManager.getCookie(domainUrl) ?: ""
             if (cookies.contains("cf_clearance") || 
                 cookies.contains("as_turnstile") || 
                 cookies.contains("__cf_bm")
             ) {
-                cookieAcquired = true
-                break
+                return@repeat
             }
             Thread.sleep(500)
         }
@@ -115,7 +118,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
             originalRequest.newBuilder()
                 .apply { if (finalUA.isNotBlank()) header("User-Agent", finalUA) }
                 .header("Cookie", finalCookies)
-                .build()
+                .build(),
         )
     }
 }

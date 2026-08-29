@@ -25,14 +25,14 @@ class Hanime : MainAPI() {
         "Referer" to "$mainUrl/",
         "Origin" to "$mainUrl/",
         "Accept" to "application/json, text/plain, */*",
-        "X-Directive" to "api"
+        "X-Directive" to "api",
     )
 
     private val playerHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "https://player.hanime.tv/",
         "Origin" to "https://player.hanime.tv/",
-        "Accept" to "*/*"
+        "Accept" to "*/*",
     )
 
     override val mainPage = mainPageOf(
@@ -46,16 +46,17 @@ class Hanime : MainAPI() {
             val json = app.get(request.data, headers = headers).text
             val root = tryParseJson<Map<String, Any?>>(json)
             if (root != null) {
-                val sections = root["sections"] as? List<*> ?: emptyList<Any?>()
+                val sections = (root["sections"] as? List<*>) ?: emptyList<Any?>()
                 val videosMap = (root["hentai_videos"] as? List<*>)
+                    ?.asSequence()
                     ?.filterIsInstance<Map<String, Any?>>()
                     ?.associateBy { it["id"] } ?: emptyMap()
                 
-                sections.filterIsInstance<Map<String, Any?>>().mapNotNull { section ->
+                sections.asSequence().filterIsInstance<Map<String, Any?>>().mapNotNull { section ->
                     val title = section["title"]?.toString() ?: return@mapNotNull null
-                    val ids = section["hentai_video_ids"] as? List<*> ?: return@mapNotNull null
+                    val ids = (section["hentai_video_ids"] as? List<*>) ?: return@mapNotNull null
                     HomePageList(title, ids.mapNotNull { id -> toSearchResponse(videosMap[id]) })
-                }
+                }.toList()
             } else null
         } catch (_: Exception) {
             null
@@ -115,8 +116,8 @@ class Hanime : MainAPI() {
         val now = System.currentTimeMillis()
         if (searchCatalog != null && now - searchCatalogTime < 3_600_000L) return searchCatalog
         searchCatalog = try {
-            app.get("$apiBase/search_hvs", headers = headers).text
-                ?.let { tryParseJson<List<Map<String, Any?>>>(it) }
+            val text = app.get("$apiBase/search_hvs", headers = headers).text
+            tryParseJson<List<Map<String, Any?>>>(text)
         } catch (_: Exception) {
             null
         }
@@ -129,14 +130,14 @@ class Hanime : MainAPI() {
 
         val detail = try {
             val text = app.get("$apiBase/video?id=$slug", headers = headers).text
-            val root = text?.let { tryParseJson<Map<String, Any?>>(it) }
+            val root = tryParseJson<Map<String, Any?>>(text)
             root?.get("hentai_video") as? Map<*, *>
         } catch (_: Exception) { null }
 
-        if (detail != null) return buildMovieResponse(detail, url)
+        detail?.let { return buildMovieResponse(it, url) }
 
         val fromCatalog = getSearchCatalog()?.firstOrNull { it["slug"]?.toString() == slug }
-        if (fromCatalog != null) return buildMovieResponse(fromCatalog, url)
+        fromCatalog?.let { return buildMovieResponse(it, url) }
 
         throw ErrorLoadingException("Video not found")
     }
@@ -175,7 +176,7 @@ class Hanime : MainAPI() {
 
         val hvId = try {
             val text = app.get("$apiBase/video?id=$slug", headers = headers).text
-            val root = text?.let { tryParseJson<Map<String, Any?>>(it) }
+            val root = tryParseJson<Map<String, Any?>>(text)
             (root?.get("hentai_video") as? Map<*, *>)?.get("id")?.toString()
         } catch (_: Exception) { null }
 
@@ -190,7 +191,7 @@ class Hanime : MainAPI() {
         val manifestHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
             "Referer" to "$mainUrl/",
-            "Origin" to "$mainUrl",
+            "Origin" to mainUrl,
             "Accept" to "application/json",
             "x-signature-version" to "web2",
             "x-signature" to "",
@@ -208,9 +209,13 @@ class Hanime : MainAPI() {
             if (manifestRoot != null) {
                 manifestRoot["url"]?.toString()
                     ?: (manifestRoot["videos_manifest"] as? Map<*, *>)
-                        ?.let { m -> (m["servers"] as? List<Map<*, *>>)?.firstOrNull()
-                            ?.let { s -> (s["streams"] as? List<Map<*, *>>)?.firstOrNull()
-                                ?.let { st -> st["url"]?.toString() } } }
+                        ?.let { m ->
+                            (m["servers"] as? List<*>)?.filterIsInstance<Map<*, *>>()?.firstOrNull()
+                                ?.let { s ->
+                                    (s["streams"] as? List<*>)?.filterIsInstance<Map<*, *>>()?.firstOrNull()
+                                        ?.let { st -> st["url"]?.toString() }
+                                }
+                        }
             } else null
         } else null
 
@@ -223,9 +228,11 @@ class Hanime : MainAPI() {
             headers = playerHeaders
         )
         if (links.isEmpty()) {
-            callback(newExtractorLink(name, "$name - HLS", hlsUrl) {
-                this.referer = "https://player.hanime.tv/"
-            })
+            callback(
+                newExtractorLink(name, "$name - HLS", hlsUrl) {
+                    this.referer = "https://player.hanime.tv/"
+                }
+            )
         } else {
             links.forEach { callback(it) }
         }

@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
-import com.lagradost.nicehttp.*
 
 class OppadramaProvider : MainAPI() {
     override var mainUrl = "http://45.11.57.188/"
@@ -32,7 +31,7 @@ class OppadramaProvider : MainAPI() {
         "country/china/" to "Drama Chinese",
         "country/japan/" to "Drama Jepang",
         "country/thailand/" to "Drama Thailand",
-        "movies/" to "Movies"
+        "movies/" to "Movies",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -49,8 +48,9 @@ class OppadramaProvider : MainAPI() {
 
         val document = app.get(url).document
         val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
-                            .asIterable()
+                            .asSequence()
                             .mapNotNull { it.toSearchResult() }
+                            .toList()
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
 
@@ -63,7 +63,7 @@ class OppadramaProvider : MainAPI() {
     val img = this.selectFirst("img")
     val poster = img?.attr("abs:data-src") ?: img?.attr("abs:src") ?: img?.getImageAttr()
 
-    val isSeries = href.contains("/series/", true) || href.contains("drama", true)
+    val isSeries = href.contains("/series/", ignoreCase = true) || href.contains("drama", ignoreCase = true)
 
     return if (isSeries) {
         newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -115,18 +115,17 @@ class OppadramaProvider : MainAPI() {
     val duration = document.selectFirst("div.spe span:contains(Durasi:)")?.ownText()?.let {
     val h = Regex("(\\d+)\\s*hr").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
     val m = Regex("(\\d+)\\s*min").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-    h * 60 + m
+    (h * 60) + m
     }
-    val country = document.selectFirst("span:matchesOwn(Negara:)")?.ownText()?.trim()
-    val type = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
 
     // Genre / tags
     val tags = document.select("div.genxed a").asIterable().map { it.text() }
 
     // Aktor
     val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
-    .asIterable()
+    .asSequence()
     .map { it.text().trim() }
+    .toList()
 
     val rating = document.selectFirst("div.rating strong")
     ?.text()
@@ -141,7 +140,7 @@ class OppadramaProvider : MainAPI() {
         ?.ownText()
         ?.replace(":", "")
         ?.trim()
-        ?: ""
+        ?: "",
 )
 
 
@@ -173,7 +172,7 @@ val episodes = episodeElements
         showStatus = status
         this.recommendations = recommendations
         this.duration = duration ?: 0
-        if (rating != null) addScore(rating.toString(), 10)
+        rating?.let { addScore(it.toString(), 10) }
         addActors(actors)
         addTrailer(trailer)
     }
@@ -186,7 +185,7 @@ val episodes = episodeElements
         this.tags = tags
         this.recommendations = recommendations
         this.duration = duration ?: 0
-        if (rating != null) addScore(rating.toString(), 10)
+        rating?.let { addScore(it.toString(), 10) }
         addActors(actors)
         addTrailer(trailer)
     }
@@ -253,11 +252,5 @@ val episodes = episodeElements
     private fun Element?.getIframeAttr(): String? {
         return this?.attr("data-litespeed-src").takeIf { it?.isNotEmpty() == true }
                 ?: this?.attr("src")
-    }
-
-    private fun String?.fixImageQuality(): String? {
-        if (this == null) return null
-        val regex = Regex("(-\\d*x\\d*)").find(this)?.groupValues?.get(0) ?: return this
-        return this.replace(regex, "")
     }
 }

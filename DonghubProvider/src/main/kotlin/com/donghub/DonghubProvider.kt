@@ -4,7 +4,6 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
-import com.lagradost.nicehttp.*
 
 class DonghubProvider : MainAPI() {
     override var mainUrl = "https://donghub.vip/"
@@ -18,7 +17,7 @@ class DonghubProvider : MainAPI() {
         "anime/" to "Latest Releases",
         "status/ongoing/" to "Series Ongoing",
         "status/completed/" to "Series Completed",
-        "type/movie/" to "Movie"
+        "type/movie/" to "Movie",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -34,10 +33,10 @@ class DonghubProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asSequence().mapNotNull { it.toSearchResult() }.toList()
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = items.isNotEmpty()
+            hasNext = items.isNotEmpty(),
         )
     }
 
@@ -56,7 +55,7 @@ class DonghubProvider : MainAPI() {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..2) {
             val document = app.get("$mainUrl/page/$i/?s=$query", headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-            val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+            val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asSequence().mapNotNull { it.toSearchResult() }.toList()
             if (result.isEmpty()) break
             list.addAll(result)
         }
@@ -68,7 +67,7 @@ class DonghubProvider : MainAPI() {
         val title = document.selectFirst("h1.entry-title")?.text().orEmpty()
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
         val typeText = document.selectFirst(".spe")?.text().orEmpty()
-        val isMovie = typeText.contains("Movie", true)
+        val isMovie = typeText.contains("Movie", ignoreCase = true)
 
         val poster = document.select("div.ime > img").first()?.getsrcAttribute()
             ?: document.select("meta[property=og:image]").attr("content")

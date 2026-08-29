@@ -17,14 +17,10 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URI
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
-import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
+
 
 class OppadramaProvider : MainAPI() {
-    override var mainUrl = "http://45.11.57.188"
+    override var mainUrl = "http://45.11.57.125"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -32,7 +28,7 @@ class OppadramaProvider : MainAPI() {
 
     companion object {
         var context: android.content.Context? = null
-        
+
         fun getStatus(t: String): ShowStatus {
             return when (t) {
                 "Completed" -> ShowStatus.Completed
@@ -40,178 +36,174 @@ class OppadramaProvider : MainAPI() {
                 else -> ShowStatus.Completed
             }
         }
-        
+
     }
 
     override val mainPage = mainPageOf(
-        "series/" to "Latest Update",
-        "country/south-korea/" to "Drama Korea",
-        "country/china/" to "Drama Chinese",
-        "country/japan/" to "Drama Jepang",
-        "country/thailand/" to "Drama Thailand",
-        "movies/" to "Movies"
+        "series/?status=&type=&order=update" to "Latest Update",
+        "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
+        "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
+        "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
+        "series/?country%5B%5D=philippines&type=Drama&order=update" to "Drama Philippines",
+        "series/?country%5B%5D=taiwan&type=Drama&order=update" to "Drama Taiwan",
+        "series/?country%5B%5D=thailand&type=Drama&order=update" to "Drama Thailand",
+        "series/?country%5B%5D=usa&type=Drama&order=update" to "Drama Western",
+        "series/?country%5B%5D=china&status=&type=Movie&order=update" to "Chinese Movie",
+        "series/?country%5B%5D=hong-kong&status=&type=Movie&order=update" to "Hong Kong Movie",
+        "series/?country%5B%5D=india&status=&type=Movie&order=update" to "India Movie",
+        "series/?country%5B%5D=japan&type=Movie&order=update" to "Japan Movie",
+        "series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
+        "series/?country%5B%5D=philippines&status=&type=Movie&order=update" to "Philippines Movie",
+        "series/?country%5B%5D=taiwan&status=&type=Movie&order=update" to "Taiwan Movie",
+        "series/?country%5B%5D=thailand&status=&type=Movie&order=update" to "Thailand Movie",
+        "series/?country%5B%5D=united-states&status=&type=Movie&order=update" to "Western Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page <= 1) {
-            "$mainUrl/${request.data}"
-        } else {
-            val data = request.data.removeSuffix("/")
-            if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
-            } else {
-                "$mainUrl/$data/page/$page/"
-            }
-        }.replace("//page", "/page")
-        
+        val url = "$mainUrl/${request.data}".plus("&page=$page")
         val document = app.get(url).document
-        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
-                            .asIterable()
-                            .mapNotNull { it.toSearchResult() }
+        val items = document.select("div.listupd article.bs")
+            .mapNotNull { it.toSearchResult() }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-    val linkElement = this.selectFirst("a") ?: return null
-    val href = fixUrl(linkElement.attr("href"))
-    val title = linkElement.attr("title").ifBlank {
-        this.selectFirst("div.tt, h2, h3")?.text()
-    } ?: return null
-    val img = this.selectFirst("img")
-    val poster = img?.attr("abs:data-src") ?: img?.attr("abs:src") ?: img?.getImageAttr()
+        val linkElement = this.selectFirst("a") ?: return null
+        val href = fixUrl(linkElement.attr("href"))
+        val title = linkElement.attr("title").ifBlank {
+            this.selectFirst("div.tt")?.text()
+        } ?: return null
+        val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
 
-    val isSeries = href.contains("/series/", true) || href.contains("drama", true)
+        val isSeries = href.contains("/series/", true) || href.contains("drama", true)
 
-    return if (isSeries) {
-        newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            this.posterUrl = fixUrlNull(poster)
-        }
-    } else {
-        newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = fixUrlNull(poster)
+        return if (isSeries) {
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = poster
+            }
+        } else {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = poster
+            }
         }
     }
-}
 
     override suspend fun search(query: String): List<SearchResponse> {
-    val document = app.get("$mainUrl/?s=$query", timeout = 50000L).document
-    val results = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
-        .asIterable()
-        .mapNotNull { it.toSearchResult() }
-    return results
-}
+        val document = app.get("$mainUrl/?s=$query", timeout = 50L).document
+        val results = document.select("div.listupd article.bs")
+            .mapNotNull { it.toSearchResult() }
+        return results
+    }
 
     private fun Element.toRecommendResult(): SearchResponse? {
-    val title = this.selectFirst("div.tt")?.text()?.trim() ?: return null
-    val href = this.selectFirst("a")?.attr("href") ?: return null
-    val posterUrl = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-    return newMovieSearchResponse(title, href, TvType.Movie) {
-        this.posterUrl = posterUrl
-    }
-}
-    override suspend fun load(url: String): LoadResponse {
-    val document = app.get(url).document
-
-    
-    val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
-
-    
-    val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
-
-    
-    val description = document.select("div.entry-content p")
-        .joinToString("\n") { it.text() }
-        .trim()
-
- 
-    val year = document.selectFirst("span:matchesOwn(Dirilis:)")?.ownText()
-        ?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
-
-    
-    
-    val duration = document.selectFirst("div.spe span:contains(Durasi:)")?.ownText()?.let {
-    val h = Regex("(\\d+)\\s*hr").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-    val m = Regex("(\\d+)\\s*min").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-    h * 60 + m
-    }
-    val country = document.selectFirst("span:matchesOwn(Negara:)")?.ownText()?.trim()
-    val type = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
-
-    // Genre / tags
-    val tags = document.select("div.genxed a").asIterable().map { it.text() }
-
-    // Aktor
-    val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
-    .asIterable()
-    .map { it.text().trim() }
-
-    val rating = document.selectFirst("div.rating strong")
-    ?.text()
-    ?.replace("Rating", "")
-    ?.trim()
-    ?.toDoubleOrNull()
-
-    val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-
-    val status = getStatus(
-    document.selectFirst("div.info-content div.spe span")
-        ?.ownText()
-        ?.replace(":", "")
-        ?.trim()
-        ?: ""
-)
-
-    
-    val recommendations = document.select("div.listupd article.bs")
-        .asIterable()
-        .mapNotNull { it.toRecommendResult() }
-
-    
-val episodeElements = document.select("div.eplister ul li a").asIterable()
-
-val episodes = episodeElements
-    .reversed() // karena biasanya terbaru di atas
-    .mapIndexed { index, aTag ->
-        val href = fixUrl(aTag.attr("href"))
-
-        newEpisode(href) {
-            this.name = "Episode ${index + 1}"
-            this.episode = index + 1
+        val title = this.selectFirst("div.tt")?.text()?.trim() ?: return null
+        val href = this.selectFirst("a")?.attr("href") ?: return null
+        val posterUrl = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
         }
     }
+    override suspend fun load(url: String): LoadResponse {
+        val document = app.get(url).document
 
-    return if (episodes.size > 1) {
-    // TV Series
-    newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-        this.posterUrl = poster
-        this.year = year
-        this.plot = description
-        this.tags = tags
-        showStatus = status
-        this.recommendations = recommendations
-        this.duration = duration ?: 0
-        if (rating != null) addScore(rating.toString(), 10)
-        addActors(actors)
-        addTrailer(trailer)
-    }
-} else {
-    // Movie
-    newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
-        this.posterUrl = poster
-        this.year = year
-        this.plot = description
-        this.tags = tags
-        this.recommendations = recommendations
-        this.duration = duration ?: 0
-        if (rating != null) addScore(rating.toString(), 10)
-        addActors(actors)
-        addTrailer(trailer)
-    }
-}
 
-}
-       
-        override suspend fun loadLinks(
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+
+
+        val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
+
+
+        val description = document.select("div.entry-content p")
+            .joinToString("\n") { it.text() }
+            .trim()
+
+
+        val year = document.selectFirst("span:matchesOwn(Dirilis:)")?.ownText()
+            ?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
+
+
+
+        val duration = document.selectFirst("div.spe span:contains(Durasi:)")?.ownText()?.let {
+            val h = Regex("(\\d+)\\s*hr").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val m = Regex("(\\d+)\\s*min").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            h * 60 + m
+        }
+        val country = document.selectFirst("span:matchesOwn(Negara:)")?.ownText()?.trim()
+        val type = document.selectFirst("span:matchesOwn(Tipe:)")?.ownText()?.trim()
+
+        // Genre / tags
+        val tags = document.select("div.genxed a").map { it.text() }
+
+        // Aktor
+        val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
+            .map { it.text().trim() }
+
+        val rating = document.selectFirst("div.rating strong")
+            ?.text()
+            ?.replace("Rating", "")
+            ?.trim()
+            ?.toDoubleOrNull()
+
+        val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
+
+        val status = getStatus(
+            document.selectFirst("div.info-content div.spe span")
+                ?.ownText()
+                ?.replace(":", "")
+                ?.trim()
+                ?: ""
+        )
+
+
+        val recommendations = document.select("div.listupd article.bs")
+            .mapNotNull { it.toRecommendResult() }
+
+
+        val episodeElements = document.select("div.eplister ul li a")
+
+        val episodes = episodeElements
+            .reversed() // karena biasanya terbaru di atas
+            .mapIndexed { index, aTag ->
+                val href = fixUrl(aTag.attr("href"))
+
+                newEpisode(href) {
+                    this.name = "Episode ${index + 1}"
+                    this.episode = index + 1
+                }
+            }
+
+        return if (episodes.size > 1) {
+            // TV Series
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = poster
+                this.year = year
+                this.plot = description
+                this.tags = tags
+                showStatus = status
+                this.recommendations = recommendations
+                this.duration = duration ?: 0
+                if (rating != null) addScore(rating.toString(), 10)
+                addActors(actors)
+                addTrailer(trailer)
+            }
+        } else {
+            // Movie
+            newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
+                this.posterUrl = poster
+                this.year = year
+                this.plot = description
+                this.tags = tags
+                this.recommendations = recommendations
+                this.duration = duration ?: 0
+                if (rating != null) addScore(rating.toString(), 10)
+                addActors(actors)
+                addTrailer(trailer)
+            }
+        }
+
+    }
+
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -269,7 +261,7 @@ val episodes = episodeElements
 
     private fun Element?.getIframeAttr(): String? {
         return this?.attr("data-litespeed-src").takeIf { it?.isNotEmpty() == true }
-                ?: this?.attr("src")
+            ?: this?.attr("src")
     }
 
     private fun String?.fixImageQuality(): String? {

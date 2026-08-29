@@ -4,11 +4,6 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
-import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class DonghubProvider : MainAPI() {
     companion object {
@@ -22,37 +17,25 @@ class DonghubProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/" to "Latest Releases",
-        "status/ongoing/" to "Series Ongoing",
-        "status/completed/" to "Series Completed",
-        "type/movie/" to "Movie"
+        "anime/?order=update" to "Latest Releases",
+        "anime/?status=ongoing&order=update" to "Series Ongoing",
+        "anime/?status=completed&order=update" to "Series Completed",
+        "anime/?type=movie&order=update" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page <= 1) {
-            "$mainUrl/${request.data}"
-        } else {
-            val data = request.data.removeSuffix("/")
-            if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
-            } else {
-                "$mainUrl/$data/page/$page/"
-            }
-        }.replace("//page", "/page")
-        val document = app.get(url).document
-        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+        val document = app.get("$mainUrl/${request.data}&page=$page").document
+        val items = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = items.isNotEmpty()
+            hasNext = true
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("a[title]")?.attr("title")?.trim() 
-            ?: selectFirst(".tt, h2, h3")?.text()?.trim() 
-            ?: return null
-        val href = fixUrl(selectFirst("a")?.attr("href") ?: return null)
-        val poster = fixUrlNull(selectFirst("img")?.getsrcAttribute())
+    private fun Element.toSearchResult(): SearchResponse {
+        val title = select("div.bsx > a").attr("title").trim()
+        val href = fixUrl(select("div.bsx > a").attr("href"))
+        val poster = fixUrlNull(selectFirst("div.bsx > a img")?.getsrcAttribute())
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = poster
         }
@@ -62,7 +45,7 @@ class DonghubProvider : MainAPI() {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..3) {
             val document = app.get("$mainUrl/page/$i/?s=$query").document
-            val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+            val result = document.select("div.listupd > article").mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
         }
@@ -119,7 +102,7 @@ class DonghubProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        document.select(".mobius option").asIterable().forEach { item ->
+        document.select(".mobius option").forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {
                 val decoded = base64Decode(base64)

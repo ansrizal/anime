@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://sokuja.net"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"

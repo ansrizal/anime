@@ -25,7 +25,7 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.*
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://v1.animesail.xyz"
+    override var mainUrl = "https://154.26.137.28"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"

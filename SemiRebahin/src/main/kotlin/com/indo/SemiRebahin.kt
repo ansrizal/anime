@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class SemiRebahin : MainAPI() {
-    override var mainUrl = "http://167.71.237.49"
+    override var mainUrl = "https://154.203.167.8/"
     override var name = "SemiRebahin"
     override val hasMainPage = true
     override var lang = "id"

@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://sokuja.net"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"

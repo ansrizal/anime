@@ -1,4 +1,4 @@
-package com.ansrizal.anime
+package com.ansrizal.filmapik
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -91,7 +91,7 @@ class FilmApikProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val document = request(searchUrl).document
+        val document = app.get(searchUrl).document
 
         return document.select("div.ml-item, div.item, article, div.bs, div.bsx, div.uta").mapNotNull {
             it.toSearchResult()
@@ -99,7 +99,7 @@ class FilmApikProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = request(url).document
+        val document = app.get(url).document
 
         val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "FilmApik"
         val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))

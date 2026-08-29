@@ -14,7 +14,7 @@ cloudstream {
 }
 
 android {
-    namespace = "com.ansrizal.anime.filmapikprovider"
+    namespace = "com.ansrizal.filmapik"
     compileSdk = 34
 
     defaultConfig {

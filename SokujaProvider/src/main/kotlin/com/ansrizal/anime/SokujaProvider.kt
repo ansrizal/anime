@@ -30,13 +30,13 @@ class SokujaProvider : MainAPI() {
             url,
             headers = headers,
             interceptor = turnstileInterceptor,
-            timeout = 45
+            timeout = 60
         )
     }
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "anime/?status=&type=&order=update" to "Daftar Anime",
+        "anime/" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime",
     )
@@ -48,36 +48,45 @@ class SokujaProvider : MainAPI() {
             val data = request.data.removeSuffix("/")
             if (data.isEmpty()) {
                 "$mainUrl/page/$page/"
-            } else if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
             } else {
                 "$mainUrl/$data/page/$page/"
             }
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = request(url).document
-        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item, div.luf").mapNotNull {
+        
+        // Very broad selection to avoid empty lists
+        val items = document.select("div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, div.item, div.utao, .post-show, .relat")
+        val homeItems = items.mapNotNull {
             it.toSearchResult()
         }
-        
-        // Fallback to root if specific data is empty
-        if (homeItems.isEmpty() && request.data.isNotEmpty()) {
-            val rootDoc = request(mainUrl).document
-            val rootItems = rootDoc.select("div.listupd article, article.bs, div.bs, div.bsx, div.utao, div.luf").mapNotNull { it.toSearchResult() }
-            if (rootItems.isNotEmpty()) return newHomePageResponse(request.name, rootItems)
+
+        // Emergency fallback to root anime list if main page is still empty
+        if (homeItems.isEmpty() && request.data.isEmpty()) {
+            val fallbackUrl = "$mainUrl/anime/?order=update"
+            val fallbackDoc = request(fallbackUrl).document
+            val fallbackItems = fallbackDoc.select("div.listupd article, div.bs, div.bsx").mapNotNull { it.toSearchResult() }
+            if (fallbackItems.isNotEmpty()) return newHomePageResponse(request.name, fallbackItems)
         }
 
         return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h4, h3, h2, .tt, .title, a[title], .entry-title")?.text()?.trim() 
-            ?: this.selectFirst("a")?.attr("title")?.trim()
+        // Find the link to the anime/manga details
+        val linkElement = this.selectFirst("a[href*='/anime/']") 
+            ?: this.selectFirst("a[href*='/manga/']") 
+            ?: this.selectFirst("a") 
             ?: return null
-        
-        val linkElement = this.selectFirst("a") ?: return null
+            
         val href = fixUrl(linkElement.attr("href"))
-        if (href.contains("/genre/")) return null // Skip genre links if they get caught
+        // Basic filtering to avoid non-content links
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+
+        val title = this.selectFirst("h2, h3, h4, .tt, .title, .entry-title")?.text()?.trim()
+            ?: linkElement.attr("title").trim().ifEmpty { null }
+            ?: linkElement.text().trim().ifEmpty { null }
+            ?: return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -96,7 +105,7 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item, div.luf").mapNotNull {
+        return document.select("div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -105,7 +114,7 @@ class SokujaProvider : MainAPI() {
         val document = request(url).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
-        val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img, div.thumb img")?.attr("src"))
+        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
         val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li").mapNotNull { elem ->
@@ -119,7 +128,7 @@ class SokujaProvider : MainAPI() {
                 this.name = epName
                 this.episode = epNum
             }
-        }.reversed()
+        }.distinctBy { it.data }.reversed()
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
@@ -146,11 +155,7 @@ class SokujaProvider : MainAPI() {
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
 
-            if (src.contains("streamtape")) {
-                loadExtractor(src, subtitleCallback, callback)
-            } else if (src.contains("filemoon")) {
-                loadExtractor(src, subtitleCallback, callback)
-            } else if (src.contains("dood") || src.contains("ds2play")) {
+            if (src.contains("streamtape") || src.contains("filemoon") || src.contains("dood") || src.contains("ds2play")) {
                 loadExtractor(src, subtitleCallback, callback)
             } else if (src.endsWith(".m3u8") || src.contains(".m3u8?")) {
                 callback(

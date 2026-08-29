@@ -23,12 +23,6 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
 
         cookieManager.setAcceptCookie(true)
 
-        // Pre-set some common cookies to look more legitimate
-        cookieManager.setCookie(domainUrl, "_as_ipin_lc=id-ID; path=/; SameSite=Strict")
-        cookieManager.setCookie(domainUrl, "_as_ipin_tz=Asia/Jakarta; path=/; SameSite=Strict")
-        cookieManager.setCookie(domainUrl, "_as_ipin_ct=ID; path=/; SameSite=Strict")
-        cookieManager.flush()
-
         val existingCookies = cookieManager.getCookie(domainUrl) ?: ""
         if (existingCookies.contains(targetCookie) || existingCookies.contains("cf_clearance")) {
             val response = chain.proceed(
@@ -37,12 +31,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                     .build(),
             )
             if ((response.code != 403) && (response.code != 503)) return response
-
             response.close()
-            // If we got here, the cookie might be expired
-            cookieManager.setCookie(domainUrl, "$targetCookie=; Max-Age=0; path=/; Secure")
-            cookieManager.setCookie(domainUrl, "cf_clearance=; Max-Age=0; path=/; Secure")
-            cookieManager.flush()
         }
 
         @Suppress("PrivateApi")
@@ -61,7 +50,6 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         handler.post {
             val wv = WebView(context)
             webViewRef.set(wv)
-
             cookieManager.setAcceptThirdPartyCookies(wv, true)
 
             wv.settings.apply {
@@ -75,11 +63,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
 
             wv.webViewClient = object : WebViewClient() {
                 @SuppressLint("WebViewClientOnReceivedSslError")
-                override fun onReceivedSslError(
-                    view: WebView?,
-                    handler: SslErrorHandler?,
-                    error: SslError?,
-                ) {
+                override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                     handler?.proceed()
                 }
 
@@ -88,12 +72,16 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                     cookieManager.flush()
                 }
             }
-
-            wv.loadUrl(url)
+            // Load root first to establish session if needed
+            wv.loadUrl(domainUrl)
+            // Then load actual URL after a short delay
+            Handler(Looper.getMainLooper()).postDelayed({
+                wv.loadUrl(url)
+            }, 2000)
         }
 
-        // Wait for the cookie to appear
-        repeat(20) { // 10 seconds total
+        // Wait up to 12 seconds
+        repeat(24) { 
             Thread.sleep(500)
             val cookies = cookieManager.getCookie(domainUrl) ?: ""
             if (cookies.contains("cf_clearance") || 
@@ -113,12 +101,10 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         }
 
         val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
-        val finalUA = userAgentRef.get()
-
         return chain.proceed(
             originalRequest.newBuilder()
-                .apply { if (finalUA.isNotBlank()) header("User-Agent", finalUA) }
                 .header("Cookie", finalCookies)
+                .header("User-Agent", userAgentRef.get())
                 .build(),
         )
     }

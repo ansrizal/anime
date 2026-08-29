@@ -11,30 +11,35 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk/"
+    override var mainUrl = "https://x6.sokuja.uk"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Latest Update",
-        "$mainUrl/genre/action/page/" to "Action Anime",
-        "$mainUrl/genre/isekai/page/" to "Isekai Anime"
+        "page/" to "Latest Update",
+        "genre/action/" to "Action Anime",
+        "genre/isekai/" to "Isekai Anime"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data.contains("page")) {
-            "${request.data}$page"
+        val url = if (page <= 1) {
+            "$mainUrl/${request.data}"
         } else {
-            "${request.data}/page/$page"
+            val data = request.data.removeSuffix("/")
+            if (data.contains("?")) {
+                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
+            } else {
+                "$mainUrl/$data/page/$page/"
+            }
         }.replace("//page", "/page")
 
         val document = app.get(url).document
-        val homeItems = document.select("div.listupd article, div.bs, div.bsx, article, div.uta").mapNotNull {
+        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(request.name, homeItems)
+        return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -58,7 +63,7 @@ class ShokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, article, div.uta").mapNotNull {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
             it.toSearchResult()
         }
     }

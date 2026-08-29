@@ -22,18 +22,28 @@ class DonghubProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Latest Releases",
-        "anime/?status=ongoing&order=update" to "Series Ongoing",
-        "anime/?status=completed&order=update" to "Series Completed",
-        "anime/?type=movie&order=update" to "Movie"
+        "anime/" to "Latest Releases",
+        "status/ongoing/" to "Series Ongoing",
+        "status/completed/" to "Series Completed",
+        "type/movie/" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("$mainUrl/${request.data}&page=$page").document
-        val items = document.select("div.listupd article, div.bsx, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+        val url = if (page <= 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            val data = request.data.removeSuffix("/")
+            if (data.contains("?")) {
+                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
+            } else {
+                "$mainUrl/$data/page/$page/"
+            }
+        }.replace("//page", "/page")
+        val document = app.get(url).document
+        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = true
+            hasNext = items.isNotEmpty()
         )
     }
 
@@ -52,7 +62,7 @@ class DonghubProvider : MainAPI() {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..3) {
             val document = app.get("$mainUrl/page/$i/?s=$query").document
-            val result = document.select("div.listupd article, div.bsx, div.uta").asIterable().mapNotNull { it.toSearchResult() }
+            val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
         }

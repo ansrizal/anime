@@ -25,7 +25,7 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.*
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://v1.animesail.xyz/"
+    override var mainUrl = "https://v1.animesail.xyz"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
@@ -78,7 +78,7 @@ class AnimeSailProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = request(request.data + page).document
-        val home = document.select("div.listupd article, div.bs, div.bsx, article").asIterable().map {
+        val home = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -98,11 +98,13 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
-    private fun Element.toSearchResult(): AnimeSearchResponse {
-        val rawHref = fixUrlNull(this.selectFirst("a")?.attr("href")).toString()
+    private fun Element.toSearchResult(): AnimeSearchResponse? {
+        val rawHref = fixUrlNull(this.selectFirst("a")?.attr("href")) ?: return null
         val href = getProperAnimeLink(rawHref)
 
-        val rawTitle = this.selectFirst(".tt > h2, h2, h3, .title")?.text() ?: ""
+        val rawTitle = this.selectFirst(".tt > h2, h2, h3, .title, a[title]")?.text()
+            ?: this.selectFirst("a[title]")?.attr("title")
+            ?: return null
 
         val title = rawTitle.replace(Regex("(?i)Episode\\s?\\d+"), "")
             .replace(Regex("(?i)Subtitle Indonesia"), "")
@@ -133,7 +135,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = request(link).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, article").asIterable().map {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull {
             it.toSearchResult()
         }
     }

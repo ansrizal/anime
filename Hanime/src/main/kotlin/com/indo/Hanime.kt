@@ -23,13 +23,16 @@ class Hanime : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "$mainUrl/",
-        "Origin" to "$mainUrl/"
+        "Origin" to "$mainUrl/",
+        "Accept" to "application/json, text/plain, */*",
+        "X-Directive" to "api"
     )
 
     private val playerHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "https://player.hanime.tv/",
-        "Origin" to "https://player.hanime.tv/"
+        "Origin" to "https://player.hanime.tv/",
+        "Accept" to "*/*"
     )
 
     override val mainPage = mainPageOf(
@@ -218,10 +221,16 @@ class Hanime : MainAPI() {
 
     private fun toSearchResponse(video: Map<String, Any?>?): SearchResponse? {
         val v = video ?: return null
-        val name = v["name"]?.toString()?.ifBlank { null } ?: return null
-        val slug = v["slug"]?.toString()?.ifBlank { null } ?: return null
+        val name = v["name"]?.toString()?.ifBlank { null } 
+            ?: v["title"]?.toString()?.ifBlank { null }
+            ?: return null
+        val slug = v["slug"]?.toString()?.ifBlank { null } 
+            ?: v["id"]?.toString()?.ifBlank { null }
+            ?: return null
         val poster = v["poster_url"]?.toString()?.ifBlank { null }
+            ?: v["cover_url"]?.toString()?.ifBlank { null }
             ?: "https://hanime-cdn.com/images/posters/$slug-pv1.webp"
+            
         return newMovieSearchResponse(name, "$mainUrl/videos/hentai/$slug", TvType.NSFW) {
             this.posterUrl = poster
             this.posterHeaders = mapOf("Referer" to "$mainUrl/")

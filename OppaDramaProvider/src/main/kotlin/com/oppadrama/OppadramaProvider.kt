@@ -24,7 +24,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class OppadramaProvider : MainAPI() {
-    override var mainUrl = "http://45.11.57.188/"
+    override var mainUrl = "http://45.11.57.188"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -44,29 +44,28 @@ class OppadramaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "series/?status=&type=&order=update" to "Latest Update",
-        "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
-        "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
-        "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
-        "series/?country%5B%5D=philippines&type=Drama&order=update" to "Drama Philippines",
-        "series/?country%5B%5D=taiwan&type=Drama&order=update" to "Drama Taiwan",
-        "series/?country%5B%5D=thailand&type=Drama&order=update" to "Drama Thailand",
-        "series/?country%5B%5D=usa&type=Drama&order=update" to "Drama Western",
-        "series/?country%5B%5D=china&status=&type=Movie&order=update" to "Chinese Movie",
-        "series/?country%5B%5D=hong-kong&status=&type=Movie&order=update" to "Hong Kong Movie",
-        "series/?country%5B%5D=india&status=&type=Movie&order=update" to "India Movie",
-        "series/?country%5B%5D=japan&type=Movie&order=update" to "Japan Movie",
-        "series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
-        "series/?country%5B%5D=philippines&status=&type=Movie&order=update" to "Philippines Movie",
-        "series/?country%5B%5D=taiwan&status=&type=Movie&order=update" to "Taiwan Movie",
-        "series/?country%5B%5D=thailand&status=&type=Movie&order=update" to "Thailand Movie",
-        "series/?country%5B%5D=united-states&status=&type=Movie&order=update" to "Western Movie"
+        "series/" to "Latest Update",
+        "country/south-korea/" to "Drama Korea",
+        "country/china/" to "Drama Chinese",
+        "country/japan/" to "Drama Jepang",
+        "country/thailand/" to "Drama Thailand",
+        "movies/" to "Movies"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = "$mainUrl/${request.data}".plus("&page=$page")
+        val url = if (page <= 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            val data = request.data.removeSuffix("/")
+            if (data.contains("?")) {
+                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
+            } else {
+                "$mainUrl/$data/page/$page/"
+            }
+        }.replace("//page", "/page")
+        
         val document = app.get(url).document
-        val items = document.select("div.listupd article, div.bs, div.bsx")
+        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
                             .asIterable()
                             .mapNotNull { it.toSearchResult() }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
@@ -96,7 +95,7 @@ class OppadramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
     val document = app.get("$mainUrl/?s=$query", timeout = 50000L).document
-    val results = document.select("div.listupd article, div.bs, div.bsx")
+    val results = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
         .asIterable()
         .mapNotNull { it.toSearchResult() }
     return results

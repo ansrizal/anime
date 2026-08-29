@@ -14,26 +14,38 @@ class Rebahin : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Home"
+        "movies/" to "Movies",
+        "tv/" to "TV Series",
+        "genre/action/" to "Action",
+        "genre/horror/" to "Horror"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val sections = mutableListOf<HomePageList>()
-        getApiSection("Movies", page, "api/movies")?.let { sections.add(it) }
-        getApiSection("TV Series", page, "api/tv")?.let { sections.add(it) }
+        
+        val apiPath = when (request.data) {
+            "movies/" -> "api/movies"
+            "tv/" -> "api/tv"
+            else -> null
+        }
+
+        if (apiPath != null) {
+            getApiSection(request.name, page, apiPath)?.let { sections.add(it) }
+        }
 
         if (sections.isEmpty()) {
-            val doc = app.get("$mainUrl/page/$page").document
-            val items = doc.select("div.listupd article, div.bsx, div.ml-item").asIterable().mapNotNull { el ->
+            val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}page/$page/"
+            val doc = app.get(url.replace("//page", "/page")).document
+            val items = doc.select("div.listupd article, div.bsx, div.ml-item, article").asIterable().mapNotNull { el ->
                 val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
                 val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
                 val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }
                 newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
             }
-            if (items.isNotEmpty()) sections.add(HomePageList("Latest Uploads", items))
+            if (items.isNotEmpty()) sections.add(HomePageList(request.name, items))
         }
 
-        return newHomePageResponse(sections)
+        return newHomePageResponse(sections, hasNext = true)
     }
 
     private suspend fun getApiSection(name: String, page: Int, apiPath: String): HomePageList? {

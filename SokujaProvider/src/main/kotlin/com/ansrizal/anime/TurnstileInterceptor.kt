@@ -12,7 +12,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import java.util.concurrent.atomic.AtomicReference
 
-class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") : Interceptor {
+class TurnstileInterceptor(private val targetCookie: String = "cf_clearance") : Interceptor {
 
     @SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -24,7 +24,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         cookieManager.setAcceptCookie(true)
 
         val existingCookies = cookieManager.getCookie(domainUrl) ?: ""
-        if (existingCookies.contains(targetCookie) || existingCookies.contains("cf_clearance")) {
+        if (existingCookies.contains(targetCookie) || existingCookies.contains("cf_clearance") || existingCookies.contains("__cf_bm")) {
             val response = chain.proceed(
                 originalRequest.newBuilder()
                     .header("Cookie", existingCookies)
@@ -72,21 +72,17 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                     cookieManager.flush()
                 }
             }
-            // Load root first to establish session if needed
-            wv.loadUrl(domainUrl)
-            // Then load actual URL after a short delay
-            Handler(Looper.getMainLooper()).postDelayed({
-                wv.loadUrl(url)
-            }, 2000)
+            wv.loadUrl(url)
         }
 
-        // Wait up to 12 seconds
-        repeat(24) { 
+        // Wait up to 10 seconds for Cloudflare clearance
+        repeat(20) { 
             Thread.sleep(500)
             val cookies = cookieManager.getCookie(domainUrl) ?: ""
             if (cookies.contains("cf_clearance") || 
                 cookies.contains("as_turnstile") || 
                 cookies.contains("__cf_bm") ||
+                cookies.contains("_as_turnstile") ||
                 cookies.contains(targetCookie)
             ) {
                 return@repeat

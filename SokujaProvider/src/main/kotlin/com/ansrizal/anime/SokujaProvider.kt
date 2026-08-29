@@ -6,13 +6,13 @@ import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://sokuja.net"
+    override var mainUrl = "https://x6.sokuja.uk"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
+    private val turnstileInterceptor = TurnstileInterceptor("cf_clearance")
 
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -36,7 +36,7 @@ class SokujaProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "anime/" to "Daftar Anime",
+        "anime/?order=update" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime",
     )
@@ -48,6 +48,8 @@ class SokujaProvider : MainAPI() {
             val data = request.data.removeSuffix("/")
             if (data.isEmpty()) {
                 "$mainUrl/page/$page/"
+            } else if (data.contains("?")) {
+                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
             } else {
                 "$mainUrl/$data/page/$page/"
             }
@@ -55,16 +57,15 @@ class SokujaProvider : MainAPI() {
 
         val document = request(url).document
         
-        // Very broad selection to avoid empty lists
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, div.item, div.utao, .post-show, .relat")
+        // Target listupd for all items
+        val items = document.select("div.listupd article, div.utao, div.bs, div.bsx, div.uta, div.luf")
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }
 
-        // Emergency fallback to root anime list if main page is still empty
+        // Emergency fallback if list is still empty
         if (homeItems.isEmpty() && request.data.isEmpty()) {
-            val fallbackUrl = "$mainUrl/anime/?order=update"
-            val fallbackDoc = request(fallbackUrl).document
+            val fallbackDoc = request("$mainUrl/anime/?order=update").document
             val fallbackItems = fallbackDoc.select("div.listupd article, div.bs, div.bsx").mapNotNull { it.toSearchResult() }
             if (fallbackItems.isNotEmpty()) return newHomePageResponse(request.name, fallbackItems)
         }
@@ -73,20 +74,22 @@ class SokujaProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Find the link to the anime/manga details
+        // Handle both grid style (.bs) and list style (.uta)
         val linkElement = this.selectFirst("a[href*='/anime/']") 
-            ?: this.selectFirst("a[href*='/manga/']") 
+            ?: this.selectFirst("a[href*='-episode-']") // Links often point to episodes first
             ?: this.selectFirst("a") 
             ?: return null
             
         val href = fixUrl(linkElement.attr("href"))
-        // Basic filtering to avoid non-content links
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/")) return null
 
-        val title = this.selectFirst("h2, h3, h4, .tt, .title, .entry-title")?.text()?.trim()
+        // Try to get title from h4 (list style) or .tt (grid style) or title attribute
+        val title = this.selectFirst("h4, .tt, h2, h3, .title")?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
             ?: linkElement.text().trim().ifEmpty { null }
             ?: return null
+            
+        if (title.isEmpty()) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -96,8 +99,17 @@ class SokujaProvider : MainAPI() {
             ?: img?.attr("src")
         )
 
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
-            this.posterUrl = posterUrl
+        // Determine if it's a series or an episode link
+        // Sokuja usually has series links containing '/anime/'
+        return if (href.contains("/anime/")) {
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
+            }
+        } else {
+            // It's likely an episode link, CloudStream will handle the redirection/loading if we can extract the proper anime slug
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
+            }
         }
     }
 
@@ -113,8 +125,15 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
+        // If we are on an episode page, try to find the "All Episodes" or series link
+        val seriesLink = document.selectFirst("div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], .series-link a")?.attr("href")
+        
+        if (seriesLink != null && !url.contains("/anime/")) {
+            return load(fixUrl(seriesLink))
+        }
+
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
-        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img, div.thumb img")?.attr("src"))
+        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
         val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li").mapNotNull { elem ->
@@ -155,7 +174,7 @@ class SokujaProvider : MainAPI() {
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
 
-            if (src.contains("streamtape") || src.contains("filemoon") || src.contains("dood") || src.contains("ds2play")) {
+            if (src.contains("streamtape") || src.contains("filemoon") || src.contains("dood") || src.contains("ds2play") || src.contains("vidhide")) {
                 loadExtractor(src, subtitleCallback, callback)
             } else if (src.endsWith(".m3u8") || src.contains(".m3u8?")) {
                 callback(

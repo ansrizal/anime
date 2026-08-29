@@ -9,23 +9,16 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addKitsuId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.mvvm.safeApiCall
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.*
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
-import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.*
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://v1.animesail.xyz"
+    override var mainUrl = "https://v1.animesail.xyz/"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
@@ -71,13 +64,20 @@ class AnimeSailProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/rilisan-anime-terbaru/page/" to "Ongoing Anime",
-        "$mainUrl/rilisan-donghua-terbaru/page/" to "Ongoing Donghua",
-        "$mainUrl/movie-terbaru/page/" to "Movie"
+        "rilisan-anime-terbaru/" to "Ongoing Anime",
+        "rilisan-donghua-terbaru/" to "Ongoing Donghua",
+        "movie-terbaru/" to "Movie"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = request(request.data + page).document
+        val url = if (page <= 1) {
+            "$mainUrl/${request.data}"
+        } else {
+            val data = request.data.removeSuffix("/")
+            "$mainUrl/$data/page/$page/"
+        }.replace("(?<!:)/{2,}".toRegex(), "/")
+
+        val document = request(url).document
         val home = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull {
             it.toSearchResult()
         }
@@ -166,7 +166,7 @@ class AnimeSailProvider : MainAPI() {
                 animeMetaData = parseAnimeData(syncMetaData)
                 tmdbid = animeMetaData?.mappings?.themoviedbId
                 kitsuid = animeMetaData?.mappings?.kitsuId
-            } catch (e: Exception) {
+            } catch (_: Exception) {
             }
         }
 
@@ -297,7 +297,7 @@ class AnimeSailProvider : MainAPI() {
                         if (!bsrc.isNullOrBlank()) {
                             try {
                                 innerLink = base64Decode(bsrc)
-                            } catch (e: Exception) {
+                            } catch (_: Exception) {
                             }
                         }
                         

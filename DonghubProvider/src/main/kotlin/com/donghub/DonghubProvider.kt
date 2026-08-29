@@ -4,17 +4,10 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
 import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class DonghubProvider : MainAPI() {
-    companion object {
-        var context: android.content.Context? = null
-    }
-    override var mainUrl = "https://donghub.vip"
+    override var mainUrl = "https://donghub.vip/"
     override var name = "Donghub"
     override val hasMainPage = true
     override var lang = "id"
@@ -38,8 +31,9 @@ class DonghubProvider : MainAPI() {
             } else {
                 "$mainUrl/$data/page/$page/"
             }
-        }.replace("//page", "/page").replace("//", "/")
-        val document = app.get(url).document
+        }.replace("(?<!:)/{2,}".toRegex(), "/")
+
+        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
         val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
@@ -61,7 +55,7 @@ class DonghubProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..2) {
-            val document = app.get("$mainUrl/page/$i/?s=$query").document
+            val document = app.get("$mainUrl/page/$i/?s=$query", headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
             val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asIterable().mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
@@ -70,13 +64,13 @@ class DonghubProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
         val title = document.selectFirst("h1.entry-title")?.text().orEmpty()
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
         val typeText = document.selectFirst(".spe")?.text().orEmpty()
         val isMovie = typeText.contains("Movie", true)
 
-        var poster = document.select("div.ime > img").first()?.getsrcAttribute()
+        val poster = document.select("div.ime > img").first()?.getsrcAttribute()
             ?: document.select("meta[property=og:image]").attr("content")
 
         val epBlocks =
@@ -118,7 +112,7 @@ class DonghubProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
         document.select(".mobius option").asIterable().forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {

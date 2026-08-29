@@ -23,47 +23,64 @@ class Hanime : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "$mainUrl/",
+        "Origin" to "$mainUrl/",
+        "Accept" to "application/json, text/plain, */*",
         "X-Directive" to "api"
     )
 
     private val playerHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer" to "https://player.hanime.tv/",
+        "Origin" to "https://player.hanime.tv/",
         "Accept" to "*/*"
     )
 
     override val mainPage = mainPageOf(
-        "$apiBase/static/landing" to "Recent Uploads"
+        "https://hanime.tv/api/v8/static/landing" to "Recent Uploads"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page > 1) return newHomePageResponse(emptyList())
 
-        val json = try {
-            app.get(request.data, headers = headers).text
+        val response = try {
+            val json = app.get(request.data, headers = headers).text
+            val root = tryParseJson<Map<String, Any?>>(json)
+            if (root != null) {
+                val sections = root["sections"] as? List<*> ?: emptyList<Any?>()
+                val videosMap = (root["hentai_videos"] as? List<*>)
+                    ?.filterIsInstance<Map<String, Any?>>()
+                    ?.associateBy { it["id"] } ?: emptyMap()
+                
+                sections.filterIsInstance<Map<String, Any?>>().mapNotNull { section ->
+                    val title = section["title"]?.toString() ?: return@mapNotNull null
+                    val ids = section["hentai_video_ids"] as? List<*> ?: return@mapNotNull null
+                    HomePageList(title, ids.mapNotNull { id -> toSearchResponse(videosMap[id]) })
+                }
+            } else null
         } catch (_: Exception) {
-            // Fallback to proxy if official is blocked
-            try { app.get("https://guest.freeanimehentai.net/api/v11/landing", headers = headers).text } catch(_: Exception) { null }
+            null
         }
 
-        val root = tryParseJson<Map<String, Any?>>(json ?: return newHomePageResponse(emptyList()))
-        if (root != null) {
-            val sections = root["sections"] as? List<Map<String, Any?>> ?: emptyList()
-            val videosMap = (root["hentai_videos"] as? List<Map<String, Any?>>)
-                ?.associateBy { it["id"] } ?: emptyMap()
-            val response = sections.mapNotNull { section ->
-                val title = section["title"]?.toString() ?: return@mapNotNull null
-                val ids = section["hentai_video_ids"] as? List<*> ?: return@mapNotNull null
-                HomePageList(title, ids.mapNotNull { id -> toSearchResponse(videosMap[id]) })
+        if (!response.isNullOrEmpty()) return newHomePageResponse(response)
+
+        // Scrape HTML fallback
+        val doc = try { app.get(mainUrl, headers = headers).document } catch(_: Exception) { null }
+        val items = doc?.select("div.hvc.item.card a[href^=/videos/hentai/]")?.mapNotNull { a ->
+            val slug = a.attr("href").removePrefix("/videos/hentai/").ifBlank { null } ?: return@mapNotNull null
+            val title = a.attr("alt").ifBlank { null } ?: a.selectFirst(".title")?.text() ?: return@mapNotNull null
+            newMovieSearchResponse(title, "$mainUrl/videos/hentai/$slug", TvType.NSFW) {
+                this.posterUrl = "https://hanime-cdn.com/images/posters/$slug-pv1.webp"
+                this.posterHeaders = mapOf("Referer" to "$mainUrl/")
             }
-            if (response.isNotEmpty()) return newHomePageResponse(response)
-        }
+        }?.distinctBy { it.url }
+
+        if (!items.isNullOrEmpty()) return newHomePageResponse(listOf(HomePageList("Recent Uploads", items)))
 
         val catalog = getSearchCatalog()
         if (catalog.isNullOrEmpty()) return newHomePageResponse(emptyList())
 
-        val items = catalog.asReversed().take(25).mapNotNull { toSearchResponse(it) }
-        return newHomePageResponse(listOf(HomePageList("Recent Uploads", items)))
+        val catalogItems = catalog.asReversed().take(25).mapNotNull { toSearchResponse(it) }
+        return newHomePageResponse(listOf(HomePageList("Recent Uploads", catalogItems)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -130,10 +147,10 @@ class Hanime : MainAPI() {
         val poster = video["poster_url"]?.toString()
             ?: video["cover_url"]?.toString()?.replace("covers", "posters")?.replace("cv1", "pv1")
         val tags = when (val t = video["hentai_tags"] ?: video["tags"]) {
-            is List<*> -> if (t.firstOrNull() is String) {
-                t.mapNotNull { it?.toString() }
-            } else {
-                t.mapNotNull { (it as? Map<*, *>)?.get("text")?.toString() }
+            is List<*> -> {
+                t.filterIsInstance<Map<*, *>>().mapNotNull { it["text"]?.toString() }.ifEmpty {
+                    t.filterIsInstance<String>()
+                }
             }
             else -> emptyList()
         }

@@ -4,35 +4,19 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.base64Decode
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URI
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
 import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class OppadramaProvider : MainAPI() {
-    override var mainUrl = "http://45.11.57.188"
+    override var mainUrl = "http://45.11.57.188/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     companion object {
-        var context: android.content.Context? = null
-
         fun getStatus(t: String): ShowStatus {
             return when (t) {
                 "Completed" -> ShowStatus.Completed
@@ -40,7 +24,6 @@ class OppadramaProvider : MainAPI() {
                 else -> ShowStatus.Completed
             }
         }
-
     }
 
     override val mainPage = mainPageOf(
@@ -54,7 +37,7 @@ class OppadramaProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) {
-            "$mainUrl/${request.data}".replace("(?<!:)/{2,}".toRegex(), "/")
+            "$mainUrl/${request.data}"
         } else {
             val data = request.data.removeSuffix("/")
             if (data.contains("?")) {

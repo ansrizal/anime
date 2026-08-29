@@ -4,14 +4,10 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
 import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class ShokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://x6.sokuja.uk/"
     override var name = "Shokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
@@ -33,7 +29,7 @@ class ShokujaProvider : MainAPI() {
             } else {
                 "$mainUrl/$data/page/$page/"
             }
-        }.replace("//page", "/page").replace("(?<!:)/{2,}".toRegex(), "/")
+        }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
         val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
@@ -118,14 +114,15 @@ class ShokujaProvider : MainAPI() {
                 loadExtractor(src, subtitleCallback, callback)
             } else if (src.endsWith(".m3u8") || src.contains(".m3u8?")) {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = name,
                         name = "Shokuja HLS Stream",
                         url = src,
-                        referer = mainUrl,
-                        quality = Qualities.P1080.value,
                         type = ExtractorLinkType.M3U8
-                    )
+                    ) {
+                        referer = mainUrl
+                        quality = Qualities.P1080.value
+                    }
                 )
             }
         }

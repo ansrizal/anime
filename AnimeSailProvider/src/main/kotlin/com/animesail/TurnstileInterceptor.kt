@@ -89,15 +89,12 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         }
 
         var cookieAcquired = false
-        for (i in 0 until 20) { // 10 seconds timeout (20 * 500ms)
+        for (i in 0 until 16) { // 8 seconds timeout (16 * 500ms)
             val cookies = cookieManager.getCookie(domainUrl) ?: ""
-            if (cookies.contains(targetCookie) || 
-                cookies.contains("cf_clearance") || 
+            if (cookies.contains("cf_clearance") || 
                 cookies.contains("as_turnstile") || 
-                cookies.contains("__cf_bm") ||
-                cookies.contains("_as_turnstile")
+                cookies.contains("__cf_bm")
             ) {
-                cookieManager.flush()
                 cookieAcquired = true
                 break
             }

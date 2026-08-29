@@ -66,7 +66,7 @@ class FilmApikProvider : MainAPI() {
         
         val linkElement = this.selectFirst("a") ?: return null
         val href = fixUrl(linkElement.attr("href"))
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/")) return null
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/")) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -91,7 +91,7 @@ class FilmApikProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val document = app.get(searchUrl).document
+        val document = request(searchUrl).document
 
         return document.select("div.ml-item, div.item, article, div.bs, div.bsx, div.uta").mapNotNull {
             it.toSearchResult()
@@ -99,7 +99,7 @@ class FilmApikProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = request(url).document
 
         val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "FilmApik"
         val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
@@ -137,7 +137,7 @@ class FilmApikProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = request(data).document
 
         document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")

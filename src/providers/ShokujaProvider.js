@@ -1,5 +1,5 @@
 /**
- * Shokuja Anime Provider for StreamCloud / CloudStream
+ * sokuja Anime Provider for StreamCloud / CloudStream
  * Target Website: https://x6.sokuja.uk
  * Author: Ans Rizal (@ansrizal)
  */
@@ -14,8 +14,8 @@ import {
 const BASE_URL = "https://x6.sokuja.uk";
 
 export default {
-  id: "com.ansrizal.anime.shokuja",
-  name: "Shokuja Anime",
+  id: "com.ansrizal.anime.sokuja",
+  name: "sokuja Anime",
   version: "1.0.0",
   type: "anime",
   language: "id",
@@ -23,7 +23,7 @@ export default {
   iconUrl: "https://x6.sokuja.uk/favicon.ico",
 
   /**
-   * Search anime catalog on Shokuja
+   * Search anime catalog on sokuja
    * @param {string} query - search query
    */
   async search(query) {
@@ -90,7 +90,7 @@ export default {
 
       return items;
     } catch (error) {
-      console.error("[Shokuja] Search error:", error);
+      console.error("[sokuja] Search error:", error);
       return [];
     }
   },
@@ -118,7 +118,7 @@ export default {
         html.match(/<h1[^>]*class="entry-title"[^>]*>([^<]+)<\/h1>/i) ||
         html.match(/<h1[^>]*>([^<]+)<\/h1>/i) ||
         html.match(/<title>([^<]+)<\/title>/i);
-      const rawTitle = titleMatch ? titleMatch[1].replace(/\s*[-|–].*$/, "").trim() : "Shokuja Anime";
+      const rawTitle = titleMatch ? titleMatch[1].replace(/\s*[-|–].*$/, "").trim() : "sokuja Anime";
       const title = rawTitle.replace(/&#038;/g, "&").replace(/Nonton Anime /i, "");
 
       // Extract Poster Image
@@ -133,7 +133,7 @@ export default {
         html.match(/<div class="(?:sinopc|entry-content|synopsis|sinopsis)"[^>]*>(.*?)<\/div>/is) ||
         html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i);
       const rawSynopsis = synMatch ? synMatch[1].replace(/<[^>]*>/g, "").trim() : "";
-      const synopsis = rawSynopsis || "Tonton streaming anime subtitle Indonesia di Shokuja.";
+      const synopsis = rawSynopsis || "Tonton streaming anime subtitle Indonesia di sokuja.";
 
       // Extract Episodes list
       const episodes = [];
@@ -185,11 +185,11 @@ export default {
         episodes: episodes.reverse(), // standard order oldest to newest
       };
     } catch (error) {
-      console.error("[Shokuja] GetDetails error:", error);
+      console.error("[sokuja] GetDetails error:", error);
       return {
-        title: "Shokuja Anime",
+        title: "sokuja Anime",
         poster: "https://x6.sokuja.uk/favicon.ico",
-        synopsis: "Gagal memuat detail anime dari server Shokuja.",
+        synopsis: "Gagal memuat detail anime dari server sokuja.",
         episodes: [{ number: 1, title: "Stream", url: animeUrl }],
       };
     }
@@ -236,7 +236,7 @@ export default {
             quality: "Auto (HLS)",
             url: embedUrl,
             isM3u8: true,
-            serverName: "Shokuja HLS Stream",
+            serverName: "sokuja HLS Stream",
           });
         }
       }
@@ -268,7 +268,7 @@ export default {
         ],
       };
     } catch (error) {
-      console.error("[Shokuja] GetStreamLinks error:", error);
+      console.error("[sokuja] GetStreamLinks error:", error);
       return {
         sources: [
           {

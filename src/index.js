@@ -4,17 +4,17 @@
  * Author: Ans Rizal (@ansrizal)
  */
 
-import ShokujaProvider from "./providers/ShokujaProvider.js";
+import sokujaProvider from "./providers/sokujaProvider.js";
 
 
 // List of all active streaming providers in this repository
 export const providers = [
-  ShokujaProvider,
+  sokujaProvider,
   
 ];
 
 // Named exports for modular access
-export { ShokujaProvider };
+export { sokujaProvider };
 
 
 // Default export of provider catalog

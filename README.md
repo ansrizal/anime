@@ -4,7 +4,7 @@ Repositori resmi ekstensi streaming anime untuk **StreamCloud** dan **CloudStrea
 
 ## ✨ Daftar Provider yang Tersedia:
 ### Anime & Streaming
-- **Shokuja Anime** : Streaming anime Subtitle Indonesia terlengkap.
+- **sokuja Anime** : Streaming anime Subtitle Indonesia terlengkap.
 - **Animasu**, **AnimeIndo**, **Anichin**, **Alqanime**, **AnimeSail**, **Animexin**, **Anoboy**, **Donghub**, **Hanime**, **Kuramanime**, **Kuronime**, **Nekopoi**, **Nimegami**, **NontonAnimeID**, **Otakudesu**, **Samehadaku**.
 
 ### Movies & TV Series
@@ -33,7 +33,7 @@ https://raw.githubusercontent.com/ansrizal/anime/builds/plugins.json
 ```
 
 5. Klik **Simpan & Sinkronisasikan**.
-6. Provider **Shokuja Anime** akan otomatis muncul dan siap digunakan untuk menonton anime!
+6. Provider **sokuja Anime** akan otomatis muncul dan siap digunakan untuk menonton anime!
 
 ---
 

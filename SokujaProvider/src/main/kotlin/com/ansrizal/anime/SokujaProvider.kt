@@ -4,9 +4,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-class ShokujaProvider : MainAPI() {
+class sokujaProvider : MainAPI() {
     override var mainUrl = "https://x6.sokuja.uk/"
-    override var name = "Shokuja Anime"
+    override var name = "sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
@@ -65,7 +65,7 @@ class ShokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Shokuja Anime"
+        val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "sokuja Anime"
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
 
@@ -117,7 +117,7 @@ class ShokujaProvider : MainAPI() {
                 callback(
                     newExtractorLink(
                         source = name,
-                        name = "Shokuja HLS Stream",
+                        name = "sokuja HLS Stream",
                         url = src,
                         type = ExtractorLinkType.M3U8
                     ) {

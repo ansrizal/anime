@@ -9,12 +9,12 @@ val cloudstreamApiVersion = "-SNAPSHOT"
 cloudstream {
     setRepo("https://github.com/ansrizal/anime")
     authors = listOf("Ans Rizal")
-    description = "CloudStream 3 streaming provider extension module for ShokujaProvider"
+    description = "CloudStream 3 streaming provider extension module for sokujaProvider"
     version = 1
 }
 
 android {
-    namespace = "com.ansrizal.anime.shokujaprovider"
+    namespace = "com.ansrizal.anime.sokujaprovider"
     compileSdk = 34
 
     defaultConfig {

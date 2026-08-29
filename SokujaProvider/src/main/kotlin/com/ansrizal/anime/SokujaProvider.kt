@@ -4,25 +4,27 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-class sokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk/"
-    override var name = "sokuja Anime"
+class SokujaProvider : MainAPI() {
+    override var mainUrl = "https://sokuja.net"
+    override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     override val mainPage = mainPageOf(
-        "rilisan-anime-terbaru/" to "Latest Update",
+        "" to "Latest Update",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) {
-            "$mainUrl/${request.data}"
+            if (request.data.isEmpty()) mainUrl else "$mainUrl/${request.data}"
         } else {
             val data = request.data.removeSuffix("/")
-            if (data.contains("?")) {
+            if (data.isEmpty()) {
+                "$mainUrl/page/$page/"
+            } else if (data.contains("?")) {
                 "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
             } else {
                 "$mainUrl/$data/page/$page/"
@@ -30,14 +32,14 @@ class sokujaProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
-        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
+        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst(".tt, h2, h3, .title, a[title]")?.text()?.trim() 
+        val title = this.selectFirst(".tt, h2, h3, .title, a[title], .entry-title")?.text()?.trim() 
             ?: this.selectFirst("a[title]")?.attr("title") 
             ?: return null
         val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
@@ -46,6 +48,7 @@ class sokujaProvider : MainAPI() {
             img?.attr("abs:data-src")
             ?: img?.attr("abs:data-lazy-src")
             ?: img?.attr("abs:src")
+            ?: img?.attr("src")
         )
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
@@ -57,7 +60,7 @@ class sokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
 
-        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box").mapNotNull {
             it.toSearchResult()
         }
     }
@@ -65,7 +68,7 @@ class sokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "sokuja Anime"
+        val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
 
@@ -117,7 +120,7 @@ class sokujaProvider : MainAPI() {
                 callback(
                     newExtractorLink(
                         source = name,
-                        name = "sokuja HLS Stream",
+                        name = "Sokuja HLS Stream",
                         url = src,
                         type = ExtractorLinkType.M3U8
                     ) {

@@ -23,9 +23,9 @@ import com.lagradost.cloudstream3.extractors.VidHidePro5
 import com.lagradost.cloudstream3.extractors.VidHidePro6
 
 @CloudstreamPlugin
-class sokujaPlugin : Plugin() {
+class SokujaPlugin : Plugin() {
     override fun load(context: Context) {
-        // Register sokuja Provider into CloudStream 3 provider registry
-        registerMainAPI(sokujaProvider())
+        // Register Sokuja Provider into CloudStream 3 provider registry
+        registerMainAPI(SokujaProvider())
     }
 }

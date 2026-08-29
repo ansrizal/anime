@@ -3,35 +3,52 @@ package com.ansrizal.anime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import com.lagradost.nicehttp.NiceResponse
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://sokuja.net"
+    override var mainUrl = "https://x6.sokuja.uk"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
+    private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
+
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer" to "$mainUrl/",
+    )
+
+    private suspend fun request(url: String): NiceResponse {
+        return app.get(
+            url,
+            headers = headers,
+            interceptor = turnstileInterceptor,
+            timeout = 30
+        )
+    }
+
     override val mainPage = mainPageOf(
-        "" to "Latest Update",
+        "rilisan-anime-terbaru/" to "Latest Update",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) {
-            if (request.data.isEmpty()) mainUrl else "$mainUrl/${request.data}"
+            "$mainUrl/${request.data}"
         } else {
             val data = request.data.removeSuffix("/")
             if (data.isEmpty()) {
                 "$mainUrl/page/$page/"
-            } else if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
             } else {
                 "$mainUrl/$data/page/$page/"
             }
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
-        val document = app.get(url).document
+        val document = request(url).document
         val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
             it.toSearchResult()
         }
@@ -58,7 +75,7 @@ class SokujaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val document = app.get(searchUrl).document
+        val document = request(searchUrl).document
 
         return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
             it.toSearchResult()
@@ -66,13 +83,13 @@ class SokujaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = request(url).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
         val poster = fixUrlNull(document.selectFirst("meta[property=og:image]")?.attr("content") ?: document.selectFirst("div.fotoanime img, div.thumb img")?.attr("src"))
         val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis")?.text()?.trim()
 
-        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li").mapNotNull { elem ->
+        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li").mapNotNull { elem ->
             val a = elem.selectFirst("a") ?: return@mapNotNull null
             val epUrl = fixUrl(a.attr("href"))
             val epName = a.text().trim()
@@ -103,7 +120,7 @@ class SokujaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = request(data).document
 
         // Check iframe embeds
         document.select("iframe").asIterable().forEach { iframe ->

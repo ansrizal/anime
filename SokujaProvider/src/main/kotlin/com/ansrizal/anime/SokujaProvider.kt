@@ -32,7 +32,7 @@ class SokujaProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
-        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box").mapNotNull {
+        val homeItems = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
@@ -60,7 +60,7 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
 
-        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box").mapNotNull {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta, div.utao, div.box, div.item-anime, div.anime-list-item").mapNotNull {
             it.toSearchResult()
         }
     }

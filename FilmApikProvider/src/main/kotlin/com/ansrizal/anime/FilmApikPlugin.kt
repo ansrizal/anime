@@ -1,4 +1,4 @@
-package com.filmapik
+package com.ansrizal.anime
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin

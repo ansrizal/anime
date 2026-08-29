@@ -1,4 +1,4 @@
-package com.filmapik
+package com.ansrizal.anime.filmapikprovider
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -66,7 +66,7 @@ class FilmApikProvider : MainAPI() {
         
         val linkElement = this.selectFirst("a") ?: return null
         val href = fixUrl(linkElement.attr("href"))
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/")) return null
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/")) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(

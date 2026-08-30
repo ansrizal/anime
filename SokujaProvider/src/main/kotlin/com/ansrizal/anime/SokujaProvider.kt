@@ -26,13 +26,21 @@ class SokujaProvider : MainAPI() {
     }
 
     private fun fixImageUrl(url: String?): String? {
-        if (url == null) return null
-        if (url.contains("/_next/image") || url.contains("url=")) {
+        if (url == null || url.startsWith("data:")) return null
+        
+        val decoded = if (url.contains("/_next/image") || url.contains("url=")) {
             Regex("""url=([^&]+)""").find(url)?.groupValues?.get(1)?.let {
-                return URLDecoder.decode(it, "UTF-8")
-            }
+                URLDecoder.decode(it, "UTF-8")
+            } ?: url
+        } else {
+            url
         }
-        return fixUrlNull(url)
+        
+        return when {
+            decoded.startsWith("//") -> "https:$decoded"
+            decoded.startsWith("/") -> "${mainUrl.removeSuffix("/")}$decoded"
+            else -> decoded
+        }
     }
 
     // [DATA MODELS]
@@ -159,7 +167,7 @@ class SokujaProvider : MainAPI() {
         val document = res.document
 
         val selectors = listOf(
-            "a.group.block", "div.bsx", "div.listupd article", "div.utao", "div.uta"
+            "a.group.block", "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.animposx", "div.bs"
         )
 
         val potentialItems = mutableListOf<Element>()
@@ -167,7 +175,12 @@ class SokujaProvider : MainAPI() {
             potentialItems.addAll(document.select(sel))
         }
 
-        val homeItems = potentialItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        // Prefer items that have a poster to avoid gray placeholders from Next.js streaming
+        val homeItems = potentialItems.mapNotNull { it.toSearchResult() }
+            .groupBy { it.url }
+            .map { (_, results) ->
+                results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
+            }
 
         return newHomePageResponse(
             HomePageList(name = request.name, list = homeItems),
@@ -196,11 +209,11 @@ class SokujaProvider : MainAPI() {
             return null
         }
 
-        // [PERBAIKAN GAMBAR] - Mencari di img tag, atau script data jika diperlukan
         val img = selectFirst("img")
-        val rawImg = img?.attr("src") 
-            ?: img?.attr("data-src")
+        val rawImg = img?.attr("src").takeIf { !it.isNullOrBlank() && !it.startsWith("data:") }
             ?: img?.attr("data-lazy-src")
+            ?: img?.attr("data-src")
+            ?: img?.attr("srcset")?.split(",")?.firstOrNull()?.trim()?.split(" ")?.firstOrNull()
 
         val posterUrl = fixImageUrl(rawImg)
 
@@ -235,10 +248,14 @@ class SokujaProvider : MainAPI() {
                         parent = parent?.parent()
                     }
                     null
-                }.distinctBy { it.outerHtml() }
+                }
         } else items
 
-        return finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        return finalItems.mapNotNull { it.toSearchResult() }
+            .groupBy { it.url }
+            .map { (_, results) ->
+                results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
+            }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -256,24 +273,39 @@ class SokujaProvider : MainAPI() {
 
         // [PERBAIKAN EPISODE] - Parsing dari JSON di script tags
         val episodes = mutableListOf<Episode>()
-        val scriptData = document.select("script").joinToString { it.data() }
+        val rawData = document.select("script").joinToString { it.data() }
+        val scriptData = rawData.replace("\\\"", "\"").replace("\\\\", "\\")
         
-        // Regex untuk mencari pola episode dalam JSON Next.js
-        val epRegex = Regex("""\{"id":(\d+),"slug":"([^"]+)","title":"([^"]+)","episodeNumber":(\d+)""")
+        // Regex yang lebih fleksibel untuk mencari pola episode dalam JSON Next.js
+        val epRegex = Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
         epRegex.findAll(scriptData).forEach { match ->
             val id = match.groupValues[1]
             val slug = match.groupValues[2]
             val epTitle = match.groupValues[3]
             val epNum = match.groupValues[4].toIntOrNull() ?: 0
             
-            // Format URL: mainUrl + slug
             val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
             
-            episodes.add(newEpisode(epUrl) { // URL as data for legacy if needed, but ID is better for mirrors
+            episodes.add(newEpisode(epUrl) {
                 this.name = epTitle
                 this.episode = epNum
-                this.data = id // Store ID in data field
+                this.data = id 
             })
+        }
+
+        // Fallback jika parsing JSON gagal (mungkin di render server-side)
+        if (episodes.isEmpty()) {
+            document.select("a[href*='-episode-']").forEach { a ->
+                val href = a.attr("href")
+                val epTitle = a.text().trim()
+                val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
+                if (epNum != null) {
+                    episodes.add(newEpisode(fixUrl(href)) {
+                        this.name = epTitle
+                        this.episode = epNum
+                    })
+                }
+            }
         }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
@@ -289,27 +321,43 @@ class SokujaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // [PERBAIKAN LINK] - Menggunakan API mirrors
-        val episodeId = data.toIntOrNull() ?: return false
-        val mirrorRes = app.get("$mainUrl/api/video-mirrors?e=$episodeId", headers = defaultHeaders).parsedSafe<MirrorResponse>()
+        var episodeId = data.toIntOrNull()
         
-        mirrorRes?.mirrors?.forEach { mirror ->
-            val url = mirror.embedUrl ?: return@forEach
-            val quality = mirror.quality?.filter { it.isDigit() }?.toIntOrNull() ?: Qualities.Unknown.value
+        if (episodeId == null && data.startsWith("http")) {
+            val doc = request(data).document
+            val scriptData = doc.select("script").joinToString { it.data() }.replace("\\\"", "\"")
+            episodeId = Regex("""["']id["']:\s*(\d+)""").find(scriptData)?.groupValues?.get(1)?.toIntOrNull()
             
-            if (mirror.embedType == "mp4" || url.endsWith(".mp4")) {
-                callback(
-                    newExtractorLink(
-                        mirror.serverName ?: name,
-                        mirror.serverName ?: name,
-                        url
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.quality = quality
-                    }
-                )
-            } else {
-                loadExtractor(url, subtitleCallback, callback)
+            // Fallback: If mirror API is not reachable or ID not found, try to find iframes directly
+            doc.select("iframe, .video-content iframe").forEach { iframe ->
+                val src = fixUrl(iframe.attr("src") ?: iframe.attr("data-src"))
+                if (src.isNotEmpty() && !src.contains("google")) {
+                    loadExtractor(src, subtitleCallback, callback)
+                }
+            }
+        }
+
+        if (episodeId != null) {
+            val mirrorRes = app.get("$mainUrl/api/video-mirrors?e=$episodeId", headers = defaultHeaders).parsedSafe<MirrorResponse>()
+            
+            mirrorRes?.mirrors?.forEach { mirror ->
+                val url = mirror.embedUrl ?: return@forEach
+                val quality = mirror.quality?.filter { it.isDigit() }?.toIntOrNull() ?: Qualities.Unknown.value
+                
+                if (mirror.embedType == "mp4" || url.endsWith(".mp4")) {
+                    callback(
+                        newExtractorLink(
+                            mirror.serverName ?: name,
+                            mirror.serverName ?: name,
+                            url
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.quality = quality
+                        }
+                    )
+                } else {
+                    loadExtractor(url, subtitleCallback, callback)
+                }
             }
         }
 

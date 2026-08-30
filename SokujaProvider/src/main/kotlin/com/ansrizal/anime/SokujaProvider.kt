@@ -23,7 +23,7 @@ class SokujaProvider : MainAPI() {
         return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
-    // [PERBAIKAN KATEGORI] - Sesuaikan path dengan struktur web (anime-list, genres)
+    // [PERBAIKAN KATEGORI] - Pastikan path ini sesuai dengan web (bisa dicek di browser)
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
         "anime-list/" to "Daftar Anime", 
@@ -31,7 +31,6 @@ class SokujaProvider : MainAPI() {
         "genres/isekai/" to "Isekai Anime"
     )
 
-    // [PERBAIKAN URL] - Menghilangkan double slash dan menangani kategori dengan benar
     private fun buildPageUrl(path: String, page: Int): String {
         val base = mainUrl.removeSuffix("/")
         val cleanPath = path.trim('/')
@@ -53,7 +52,6 @@ class SokujaProvider : MainAPI() {
         // Kumpulkan semua elemen yang potensial sebagai kartu anime
         val potentialItems = mutableListOf<Element>()
 
-        // Daftar selector umum untuk kartu anime
         val selectors = listOf(
             "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
             "article.bs", "div.post-show article", "div.bxb article",
@@ -69,34 +67,30 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Jika masih kosong, coba ambil semua link yang mengarah ke /anime/ (fallback)
+        // Fallback jika kosong
         val finalItems = if (potentialItems.isEmpty()) {
-            // Ambil semua <a> yang href-nya mengandung "/anime/" kecuali yang mengandung "/genre/" dll
-            val animeLinks = document.select("a[href*='/anime/']")
-                .toList()  // <- Konversi ke List agar filter Kotlin digunakan
+            document.select("a[href*='/anime/']")
+                .toList()
                 .filter { a ->
                     val href = a.attr("href")
                     !href.contains("/genre/") && !href.contains("/category/") &&
                     !href.contains("/page/") && !href.contains("/tag/") &&
                     !href.contains("/bookmark/") && !href.contains("/jadwal-rilis/")
                 }
-            // Untuk setiap link, cari elemen pembungkus terdekat (parent) untuk dijadikan item
-            animeLinks.mapNotNull { a ->
-                var parent = a.parent()
-                // Naik sampai 5 level untuk menemukan elemen yang memiliki gambar atau class tertentu
-                var container: Element? = a
-                for (i in 0..5) {
-                    if (parent != null) {
-                        // Jika parent memiliki img atau class yang menandakan kartu, gunakan parent
-                        if (parent.selectFirst("img") != null || parent.hasClass("bsx") || parent.hasClass("item") || parent.hasClass("post")) {
-                            container = parent
-                            break
+                .mapNotNull { a ->
+                    var parent = a.parent()
+                    var container: Element? = a
+                    for (i in 0..5) {
+                        if (parent != null) {
+                            if (parent.selectFirst("img") != null || parent.hasClass("bsx") || parent.hasClass("item") || parent.hasClass("post")) {
+                                container = parent
+                                break
+                            }
+                            parent = parent.parent()
                         }
-                        parent = parent.parent()
                     }
-                }
-                container
-            }.distinctBy { it?.outerHtml() }.filterNotNull()
+                    container
+                }.distinctBy { it?.outerHtml() }.filterNotNull()
         } else {
             potentialItems
         }
@@ -109,18 +103,15 @@ class SokujaProvider : MainAPI() {
         )
     }
 
-    // [PERBAIKAN GAMBAR] - Menambahkan data-original dan filter placeholder
+    // [PERBAIKAN GAMBAR - TANGGUH] - Menambahkan berbagai atribut gambar dan background-image
     private fun Element.toSearchResult(): SearchResponse? {
-        // Cari link utama
         val linkElement = selectFirst("a[href]") ?: return null
         var href = fixUrl(linkElement.attr("href"))
 
-        // Filter URL tidak valid
         val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
         if (invalid.any { href.contains(it) }) return null
         if (href.removeSuffix("/") == mainUrl.removeSuffix("/")) return null
 
-        // Ambil judul dari berbagai sumber
         val title = selectFirst(".tt, h2, h3, h4, .title, .entry-title, .post-title, .ttname, .anime-title, .judul, .name, .item-title")
             ?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
@@ -130,19 +121,26 @@ class SokujaProvider : MainAPI() {
 
         if (title.isEmpty()) return null
 
-        // Ambil gambar dari berbagai atribut (data-original ditambahkan sebagai prioritas utama)
-        val img = selectFirst("img")
+        // [PERBAIKAN GAMBAR] - Coba ambil dari berbagai atribut & CSS
+        val img = selectFirst("img, div.thumb, .thumb, .poster")
         var rawImg = img?.attr("data-original")
-            ?: img?.attr("data-src")
             ?: img?.attr("data-lazy-src")
+            ?: img?.attr("data-src")
+            ?: img?.attr("data-poster")
             ?: img?.attr("src")
             ?: img?.attr("srcset")?.substringBefore(" ")
-            ?: selectFirst("div.thumb img")?.attr("data-original")
-            ?: selectFirst("div.thumb img")?.attr("data-src")
-            ?: selectFirst("div.thumb img")?.attr("src")
+            ?: img?.selectFirst("img")?.attr("data-src")
+            ?: img?.selectFirst("img")?.attr("src")
+            
+        // Ambil background-image dari style
+        if (rawImg.isNullOrBlank()) {
+            rawImg = img?.attr("style")?.let { style ->
+                Regex("""background-image:\s*url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
+            }
+        }
 
-        // Filter URL placeholder yang membuat gambar jadi abu-abu
-        if (rawImg != null && (rawImg.contains("placeholder") || rawImg.contains("default") || rawImg.contains("spacer") || rawImg.contains("blank"))) {
+        // Filter URL placeholder / data URI
+        if (rawImg != null && (rawImg.startsWith("data:") || rawImg.contains("placeholder") || rawImg.contains("default") || rawImg.contains("spacer") || rawImg.contains("blank"))) {
             rawImg = null
         }
 
@@ -162,7 +160,6 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = request(searchUrl).document
 
-        // Gunakan selector yang sama seperti di getMainPage
         val selectors = listOf(
             "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
             "article.bs", "div.animposx", "div.bs", "div.animepost"
@@ -172,10 +169,9 @@ class SokujaProvider : MainAPI() {
             items.addAll(document.select(sel))
         }
 
-        // Fallback jika kosong
         val finalItems = if (items.isEmpty()) {
             document.select("a[href*='/anime/']")
-                .toList() // Konversi ke List
+                .toList()
                 .filter { !it.attr("href").contains("/genre/") && !it.attr("href").contains("/page/") }
                 .mapNotNull { a ->
                     var parent = a.parent()
@@ -192,10 +188,11 @@ class SokujaProvider : MainAPI() {
         return finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
     }
 
+    // [PERBAIKAN EPISODE & PLAYER] 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Cari link ke daftar episode
+        // Cari link ke daftar episode (jika ada tombol "Semua Episode")
         val seriesLink = document.selectFirst(
             "a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], " +
             "div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a"
@@ -214,6 +211,7 @@ class SokujaProvider : MainAPI() {
             ?.trim() ?: "Sokuja Anime"
 
         var rawPoster = targetDoc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-original")
             ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-src")
             ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("src")
         rawPoster = if (rawPoster?.startsWith("//") == true) "https:$rawPoster" else rawPoster
@@ -221,20 +219,28 @@ class SokujaProvider : MainAPI() {
 
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
 
-        // [PERBAIKAN EPISODE] - Mengambil semua link episode berdasarkan pola URL
+        // [PERBAIKAN EPISODE] - Mencari semua tautan yang mengandung 'episode' atau pola URL umum lainnya
         val episodes = mutableListOf<Episode>()
+        
+        // 1. Coba cari semua link <a> yang href-nya mengandung '/episode/'
+        // 2. Coba cari semua link <a> yang href-nya mengandung 'episode-' 
+        // 3. Coba cari semua link <a> yang href-nya mengandung 'watch/' atau 'stream/'
+        // 4. Coba cari daftar episode dari class/list umum
+        val episodeElements = targetDoc.select(
+            "a[href*='/episode/'], a[href*='episode-'], a[href*='/watch/'], a[href*='/stream/'], " +
+            "div.eplister li a, div.listeps li a, ul.list-episode li a, div.episodelist li a, " +
+            "div.eps li a, div.lstep li a, div.anime-episode a"
+        )
 
-        // Cara paling universal untuk web anime: Ambil semua tag <a> yang href-nya mengandung '/episode/'
-        val episodeLinks = targetDoc.select("a[href*='/episode/']")
-
-        if (episodeLinks.isNotEmpty()) {
-            episodeLinks.forEachIndexed { index, a ->
+        if (episodeElements.isNotEmpty()) {
+            episodeElements.forEachIndexed { index, a ->
                 val epUrl = fixUrl(a.attr("href"))
-                val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
                 
-                // Ekstrak nomor episode dari nama atau URL
+                // Ekstrak nomor dari URL atau teks
+                val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
                 val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: Regex("""/episode/(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: (index + 1)
 
                 episodes.add(
@@ -245,7 +251,7 @@ class SokujaProvider : MainAPI() {
                 )
             }
         } else {
-            // Fallback jika tidak ada link episode (biasanya karena JS/AJAX)
+            // Fallback terakhir jika tidak ada link ditemukan
             val watchLink = targetDoc.selectFirst("a[href*='/episode/'], a[href*='/stream/'], a[href*='/watch/']")
             if (watchLink != null) {
                 val epUrl = fixUrl(watchLink.attr("href"))
@@ -256,7 +262,6 @@ class SokujaProvider : MainAPI() {
                     }
                 )
             } else {
-                // Fallback terakhir jika halamannya langsung episode
                 episodes.add(
                     newEpisode(url) {
                         this.name = title
@@ -269,7 +274,6 @@ class SokujaProvider : MainAPI() {
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
-            // Hapus duplikat dan urutkan terbalik (biasanya episode terbaru di atas)
             addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.data }.reversed())
         }
     }
@@ -282,7 +286,7 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // Cari iframe
+        // [PERBAIKAN PLAYER] - Cari IFRAME di mana saja
         document.select("iframe, iframe[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -292,14 +296,42 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Cari server mirror
-        val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a, .server a, .mirror a")
+        // [PERBAIKAN PLAYER] - Cari SERVER/MIRROR dari banyak selector
+        val serverOptions = document.select(
+            // Select umum
+            "select.mirror option, select option", 
+            // List server
+            "ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a", 
+            // Link embed langsung
+            "a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch']",
+            // Atribut data
+            "[data-index], [data-em], [data-src]"
+        )
+
         for (option in serverOptions) {
-            val embedUrl = option.attr("value").ifBlank { option.attr("data-em") }.ifBlank { option.attr("href") }
-            if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {
-                loadExtractor(embedUrl, subtitleCallback, callback)
+            val embedUrl = option.attr("value")
+                .ifBlank { option.attr("data-em") }
+                .ifBlank { option.attr("data-links") }
+                .ifBlank { option.attr("data-index") }
+                .ifBlank { option.attr("href") }
+                .ifBlank { option.attr("src") }
+
+            // Bersihkan URL agar valid
+            val cleanUrl = when {
+                embedUrl.isBlank() -> null
+                embedUrl.startsWith("//") -> "https:$embedUrl"
+                embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
+                embedUrl.startsWith("http") -> embedUrl
+                else -> null
+            }
+
+            if (cleanUrl != null && cleanUrl.startsWith("http") && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
+                loadExtractor(cleanUrl, subtitleCallback, callback)
             }
         }
+
+        // Jika tidak ada yang ketemu, mungkin link ada di dalam <script> atau data JSON, tetapi karena kita pakai scraper statis, 
+        // kemungkinan besar iframe atau link di atas sudah menangani.
 
         return true
     }

@@ -3,8 +3,6 @@ package com.animesail
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.network.CloudflareKillerInterception
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -21,9 +19,6 @@ class AnimeSailProvider : MainAPI() {
         TvType.AnimeMovie,
         TvType.OVA
     )
-
-    // Cloudflare interceptor
-    private val cloudflareKiller = CloudflareKiller()
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
@@ -43,48 +38,8 @@ class AnimeSailProvider : MainAPI() {
                 "Cache-Control" to "no-cache",
                 "Pragma" to "no-cache"
             ),
-            referer = ref ?: mainUrl,
-            interceptor = cloudflareKiller
+            referer = ref ?: mainUrl
         )
-    }
-
-    // Alternative: Use custom interceptor with cookie handling
-    private suspend fun requestWithCloudflare(url: String, ref: String? = null): NiceResponse {
-        try {
-            // First try without interceptor
-            val response = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-                ),
-                referer = ref ?: mainUrl
-            )
-            
-            // Check if we got Cloudflare challenge
-            if (response.text.contains("cf-challenge") || response.text.contains("Checking your browser") || response.code == 403) {
-                println("AnimeSail: Cloudflare detected, trying to bypass...")
-                
-                // Wait for Cloudflare to clear
-                kotlinx.coroutines.delay(5000)
-                
-                // Retry with different approach
-                return app.get(
-                    url,
-                    headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                        "Cookie" to "cf_clearance=test" // Placeholder, actual clearance needed
-                    ),
-                    referer = ref ?: mainUrl
-                )
-            }
-            
-            return response
-        } catch (e: Exception) {
-            println("AnimeSail: Request error: ${e.message}")
-            throw e
-        }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -109,6 +64,9 @@ class AnimeSailProvider : MainAPI() {
             val document = response.document
             println("AnimeSail: Document title: ${document.title()}")
             
+            // Debug: Print first 500 characters of HTML
+            println("AnimeSail: HTML content: ${document.html().take(500)}")
+            
             // Try multiple selectors
             val selectors = listOf(
                 "article.bs",
@@ -127,6 +85,11 @@ class AnimeSailProvider : MainAPI() {
                     println("AnimeSail: Found ${items.size} items using selector: $selector")
                     break
                 }
+            }
+            
+            if (items.isEmpty()) {
+                println("AnimeSail: No items found with any selector")
+                println("AnimeSail: Available elements: ${document.select("article").size} articles")
             }
             
             newHomePageResponse(request.name, items)

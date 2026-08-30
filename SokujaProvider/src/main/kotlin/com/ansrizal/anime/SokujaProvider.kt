@@ -8,7 +8,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import java.net.URLDecoder
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://sokuja.net"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"

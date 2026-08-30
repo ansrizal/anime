@@ -2,33 +2,46 @@ package com.ansrizal.anime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
 class SokujaProvider : MainAPI() {
     override var mainUrl = "https://x6.sokuja.uk"
-    override var name = "Sokuja"
+    override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
+    // Penggunaan CloudflareKiller untuk menembus proteksi Cloudflare/Turnstile
+    private val cfInterceptor = CloudflareKiller()
+
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer" to "$mainUrl/"
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-User" to "?1",
+        "Upgrade-Insecure-Requests" to "1"
     )
 
     private suspend fun request(url: String): NiceResponse {
         return try {
-            app.get(url, headers = headers, timeout = 30)
+            app.get(
+                url,
+                headers = headers,
+                interceptor = cfInterceptor,
+                timeout = 30
+            )
         } catch (e: Exception) {
-            app.get(url, timeout = 30)
+            app.get(url, headers = headers, timeout = 30)
         }
     }
 
     override val mainPage = mainPageOf(
-        "" to "Update Terbaru",
+        "anime/?order=update" to "Update Terbaru",
         "anime/?order=title" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime"
@@ -37,11 +50,9 @@ class SokujaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data
         val url = if (page <= 1) {
-            if (path.isEmpty()) "$mainUrl/" else "$mainUrl/$path"
+            "$mainUrl/$path"
         } else {
-            if (path.isEmpty()) {
-                "$mainUrl/page/$page/"
-            } else if (path.contains("?")) {
+            if (path.contains("?")) {
                 val base = path.substringBefore("?")
                 val query = path.substringAfter("?")
                 "$mainUrl/${base.removeSuffix("/")}/page/$page/?$query"
@@ -53,29 +64,21 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
         
-        // Pemindai serbaguna untuk postingan di Sokuja (Update Terbaru & Listing)
-        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs")
+        // Menangkap semua kemungkinan wrapper item anime di Sokuja
+        val items = document.select("div.listupd article, div.bs, div.bsx, div.post-show article, div.bxb article, div.utao, div.uta, div.luf, article.bs")
         
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
 
-        // Emergency Fallback: Jika halaman utama diblokir/kosong, ambil dari jalur anime/
-        val finalItems = if (homeItems.isEmpty() && path.isEmpty()) {
-            val fallbackDoc = request("$mainUrl/anime/").document
-            fallbackDoc.select("div.listupd article, div.bs, div.bsx, article").mapNotNull { it.toSearchResult() }
-        } else {
-            homeItems
-        }
-
         return newHomePageResponse(
             list = listOf(
                 HomePageList(
                     name = request.name,
-                    list = finalItems
+                    list = homeItems
                 )
             ),
-            hasNext = finalItems.isNotEmpty()
+            hasNext = homeItems.isNotEmpty()
         )
     }
 
@@ -120,7 +123,7 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf").mapNotNull {
+        return document.select("div.listupd article, div.bs, div.bsx, div.post-show article, div.bxb article, div.utao, div.uta, div.luf").mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
     }
@@ -128,7 +131,6 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Jika URL adalah halaman episode tunggal, alihkan ke halaman utama serial
         val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
         
         val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {

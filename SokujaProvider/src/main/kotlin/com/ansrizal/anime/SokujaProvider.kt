@@ -23,7 +23,7 @@ class SokujaProvider : MainAPI() {
         return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
-    // [PERBAIKAN KATEGORI] - Melengkapi semua Genre sesuai daftar di web
+    // [PERBAIKAN KATEGORI] - Daftar Genre Lengkap sesuai web
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
         "anime/" to "Daftar Anime",
@@ -115,13 +115,14 @@ class SokujaProvider : MainAPI() {
         "genre/workplace/" to "Workplace"
     )
 
+    // [PERBAIKAN PAGINATION] - Update Terbaru memakai ?page=N
     private fun buildPageUrl(path: String, page: Int): String {
         val base = mainUrl.removeSuffix("/")
         val cleanPath = path.trim('/')
-        
+
         return when {
-            page <= 1 -> if (cleanPath.isEmpty()) base else "$base/$cleanPath"
-            cleanPath.isEmpty() -> "$base/page/$page/"
+            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page" // Fix untuk Update Terbaru
+            page <= 1 -> "$base/$cleanPath"
             else -> "$base/$cleanPath/page/$page/"
         }
     }
@@ -134,7 +135,6 @@ class SokujaProvider : MainAPI() {
         val document = res.document
 
         val potentialItems = mutableListOf<Element>()
-
         val selectors = listOf(
             "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
             "article.bs", "div.post-show article", "div.bxb article",
@@ -203,9 +203,17 @@ class SokujaProvider : MainAPI() {
 
         if (title.isEmpty()) return null
 
+        // [FILTER JUDUL MENU] - Mencegah "Daftar Anime" atau "Update Terbaru" terdeteksi sebagai judul anime
+        val lowerTitle = title.lowercase()
+        if (lowerTitle == "daftar anime" || lowerTitle == "update terbaru" || lowerTitle == "action" || lowerTitle == "isekai" || lowerTitle.contains("genre")) {
+            return null
+        }
+
+        // [PERBAIKAN GAMBAR ABU-ABU] - Ambil dari data-original, data-lazy, dan background CSS
         val img = selectFirst("img, div.thumb, .thumb, .poster")
         var rawImg = img?.attr("data-original")
             ?: img?.attr("data-lazy-src")
+            ?: img?.attr("data-lazy-srcset")?.substringBefore(" ")
             ?: img?.attr("data-src")
             ?: img?.attr("data-poster")
             ?: img?.attr("src")
@@ -296,6 +304,7 @@ class SokujaProvider : MainAPI() {
 
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
 
+        // [PERBAIKAN EPISODE] - Mencari semua container list episode dan fallback
         val episodes = mutableListOf<Episode>()
         
         val episodeContainer = targetDoc.selectFirst("div.eplister, div.listeps, div.eps, div.list-episode, div.episodelist, div.lstep, div.anime-episode")
@@ -367,6 +376,7 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
+        // Cari IFRAME dan EMBED
         document.select("iframe, iframe[data-src], embed, embed[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -376,9 +386,9 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // [FIX ERROR KOMPILASI] - SEMUA selector dijadikan SATU String
+        // [PERBAIKAN PLAYER TIDAK BISA DIPUTAR] - Gabungkan SEMUA selector menjadi SATU String
         val serverOptions = document.select(
-            "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], [data-index], [data-em], [data-src]"
+            "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], div.player, div.video-player, [data-links], [data-em], [data-index], [data-src], [onclick]"
         )
 
         for (option in serverOptions) {
@@ -388,6 +398,7 @@ class SokujaProvider : MainAPI() {
                 .ifBlank { option.attr("data-index") }
                 .ifBlank { option.attr("href") }
                 .ifBlank { option.attr("src") }
+                .ifBlank { option.attr("onclick")?.let { Regex("""['"](.*?)['"]""").find(it)?.groupValues?.get(1) } }
 
             val cleanUrl = when {
                 embedUrl.isBlank() -> null

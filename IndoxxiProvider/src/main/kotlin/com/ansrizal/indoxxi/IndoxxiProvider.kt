@@ -57,12 +57,9 @@ class IndoxxiProvider : MainAPI() {
         }
 
         val document = request(url).document
-        
         val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article, div.post-item")
         
-        var homeItems = items.mapNotNull {
-            it.toSearchResult()
-        }
+        var homeItems = items.mapNotNull { it.toSearchResult() }
         
         if (homeItems.isEmpty()) {
             homeItems = document.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/movie/'], a[href*='/series/']").mapNotNull { a ->
@@ -180,15 +177,17 @@ class IndoxxiProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        document.select("iframe").forEach { iframe ->
+        val iframes = document.select("iframe")
+        for (iframe in iframes) {
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
             if (src.isNotBlank() && !src.contains("facebook.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
-        
-        document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item").forEach { li ->
+
+        val servers = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item")
+        for (li in servers) {
             val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: li.attr("data-href") ?: ""
             if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
                 loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)

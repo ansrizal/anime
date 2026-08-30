@@ -28,8 +28,8 @@ class SokujaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Update Terbaru",
-        "anime/?order=title" to "Daftar Anime",
+        "" to "Update Terbaru",
+        "anime/" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime"
     )
@@ -37,9 +37,11 @@ class SokujaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data
         val url = if (page <= 1) {
-            "$mainUrl/$path"
+            if (path.isEmpty()) "$mainUrl/" else "$mainUrl/$path"
         } else {
-            if (path.contains("?")) {
+            if (path.isEmpty()) {
+                "$mainUrl/page/$page/"
+            } else if (path.contains("?")) {
                 val base = path.substringBefore("?")
                 val query = path.substringAfter("?")
                 "$mainUrl/${base.removeSuffix("/")}/page/$page/?$query"
@@ -51,19 +53,17 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
         
-        // Komprehensif: Mengambil semua kontainer item anime baik berupa Grid, List, Swiper, maupun Boxed
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.post-show article, div.bxb article, div.utao, div.uta, div.luf, article.bs, div.animposx, div.swiper-slide")
+        // Selektor komprehensif elemen post Sokuja
+        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs, div.animposx, div.swiper-slide")
         
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
 
         return newHomePageResponse(
-            list = listOf(
-                HomePageList(
-                    name = request.name,
-                    list = homeItems
-                )
+            list = HomePageList(
+                name = request.name,
+                list = homeItems
             ),
             hasNext = homeItems.isNotEmpty()
         )
@@ -76,7 +76,6 @@ class SokujaProvider : MainAPI() {
         val cleanMain = mainUrl.removeSuffix("/")
         val cleanHref = href.removeSuffix("/")
         
-        // Filter URL navigasi agar tidak masuk ke daftar item
         if (cleanHref == cleanMain || 
             href.contains("/genre/") || 
             href.contains("/category/") || 
@@ -84,7 +83,6 @@ class SokujaProvider : MainAPI() {
             href.contains("/bookmark/") ||
             href.contains("/jadwal-rilis/")) return null
 
-        // Ekstraksi Judul
         val title = this.selectFirst(".tt, h2, h3, h4, .title, .entry-title, .luf h4, .post-title, .ttname")?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
             ?: this.selectFirst("img")?.attr("alt")?.trim()
@@ -92,7 +90,6 @@ class SokujaProvider : MainAPI() {
 
         if (title.isEmpty()) return null
 
-        // Ekstraksi Gambar (Handling Lazy Load Attr)
         val img = this.selectFirst("img")
         var rawImg = img?.attr("data-src")
             ?.ifEmpty { null }
@@ -122,7 +119,6 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Mengamankan navigasi jika tautan yang diklik langsung merujuk ke episode tunggal
         val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
         
         val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {
@@ -147,7 +143,6 @@ class SokujaProvider : MainAPI() {
         val poster = fixUrlNull(rawPoster)
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        // Pembacaan daftar episode komprehensif
         val episodeElements = targetDoc.select("div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li, ul.clnew li, div.epsother article, div.epslist li")
         
         val episodes = mutableListOf<Episode>()
@@ -170,7 +165,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Fallback jika berupa anime/movie 1 episode
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(url) {
@@ -198,7 +192,6 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Ekstraksi Iframe Video Player
         document.select("iframe, iframe[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -208,7 +201,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // 2. Ekstraksi Opsi Server / Embed Alternatif
         val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a")
         for (option in serverOptions) {
             val embedUrl = option.attr("value").ifBlank { option.attr("data-em") }.ifBlank { option.attr("href") }

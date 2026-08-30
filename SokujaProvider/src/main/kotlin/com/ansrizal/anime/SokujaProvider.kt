@@ -73,6 +73,7 @@ class SokujaProvider : MainAPI() {
         val finalItems = if (potentialItems.isEmpty()) {
             // Ambil semua <a> yang href-nya mengandung "/anime/" kecuali yang mengandung "/genre/" dll
             val animeLinks = document.select("a[href*='/anime/']")
+                .toList()  // <- Konversi ke List agar filter Kotlin digunakan
                 .filter { a ->
                     val href = a.attr("href")
                     !href.contains("/genre/") && !href.contains("/category/") &&
@@ -166,6 +167,7 @@ class SokujaProvider : MainAPI() {
         // Fallback jika kosong
         val finalItems = if (items.isEmpty()) {
             document.select("a[href*='/anime/']")
+                .toList() // Konversi ke List
                 .filter { !it.attr("href").contains("/genre/") && !it.attr("href").contains("/page/") }
                 .mapNotNull { a ->
                     var parent = a.parent()

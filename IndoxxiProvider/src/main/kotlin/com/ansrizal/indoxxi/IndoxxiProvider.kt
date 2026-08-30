@@ -109,7 +109,7 @@ class IndoxxiProvider : MainAPI() {
         }
         val posterUrl = fixUrlNull(rawImgUrl)
 
-        val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/anime/")
+        val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/anime/") || href.contains("/eps/")
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -136,18 +136,11 @@ class IndoxxiProvider : MainAPI() {
 
         val title = document.selectFirst("h1.entry-title, h1.name, h1, .title, header h1")?.text()?.trim() ?: "INDOXXI"
         
-        // Ekstraksi poster lengkap dengan fallback multi-selector
+        // Poster extraction dengan fallback poster default jika "No Image Available"
         var rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content")
             ?: document.selectFirst("meta[name='twitter:image']")?.attr("content")
-            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img, .content-poster img")?.attr("data-src")
-            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img, .content-poster img")?.attr("src")
-
-        if (rawPoster.isNullOrEmpty()) {
-            val styleAttr = document.selectFirst(".poster, .thumb, .cover, .backdrop, #cover, .poster-wrapper")?.attr("style")
-            if (!styleAttr.isNullOrEmpty() && styleAttr.contains("url(")) {
-                rawPoster = styleAttr.substringAfter("url(").substringBefore(")").replace("'", "").replace("\"", "")
-            }
-        }
+            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .content-poster img")?.attr("data-src")
+            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .content-poster img")?.attr("src")
 
         if (rawPoster != null && rawPoster.startsWith("//")) {
             rawPoster = "https:$rawPoster"
@@ -155,59 +148,41 @@ class IndoxxiProvider : MainAPI() {
         val poster = fixUrlNull(rawPoster)
         val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .plot, .entry-content p")?.text()?.trim()
 
-        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/anime/") || document.select("ul.episodios, div.list-episode, .eplister, .listeps, .eps-item, #episode_list, .epsdiv, #episodes, .les-content, .bxcl").isNotEmpty()
+        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/anime/") || url.contains("/eps/") || document.select("a:contains(Lihat Semua Episode), .list-episode, .eplister, .listeps, #episode_list").isNotEmpty()
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
             
-            // Mencari seluruh episode dari list HTML bawaan tema (Dooplay/Muvi/LK21)
-            val episodeElements = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item, #episode_list a, .episodiodiv a, .epsdiv a, div.episodelist a, #episodes a, div.season-list a, .les-content a, .les-list a")
+            // 1. Ambil URL utama serial jika sedang berada di halaman single episode (/eps/...)
+            val seeAllBtn = document.selectFirst("a:contains(Lihat Semua Episode), a.btn-eps, a[href*='/series/'], a[href*='/tv/'], a[href*='/anime/']")
+            val parentUrl = seeAllBtn?.attr("href")?.let { fixUrl(it) } ?: url
+
+            val targetDoc = if (parentUrl != url && parentUrl.isNotBlank()) {
+                request(parentUrl).document
+            } else {
+                document
+            }
+
+            // 2. Parse episode dari halaman utama anime/serial
+            val episodeElements = targetDoc.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item, #episode_list a, .episodiodiv a, .epsdiv a, div.episodelist a, #episodes a, div.season-list a, .les-content a, .les-list a, div.pagination a, ul.page-numbers a")
             
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEachIndexed { index, elem ->
                     val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                     val epUrl = a?.attr("href")?.let { fixUrl(it) } ?: url
-                    val epName = a?.text()?.trim()?.ifEmpty { null } ?: elem.selectFirst(".epl-title, .title, .lex-title")?.text()?.trim() ?: "Episode ${index + 1}"
-                    val epNum = elem.selectFirst(".numerando, .epl-num, .eps, .epnum, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: (index + 1)
                     
-                    episodes.add(
-                        newEpisode(epUrl) {
-                            this.name = epName
-                            this.episode = epNum
-                        }
-                    )
-                }
-            } else {
-                // Ekstraksi AJAX alternatif jika episode disembunyikan dalam tab season
-                val postId = document.selectFirst("input[name=id], input[id=post_id], #post_ID, input[name=post_id]")?.attr("value")
-                    ?: document.selectFirst("[data-id]")?.attr("data-id")
-                    ?: document.selectFirst("[data-post]")?.attr("data-post")
-
-                if (!postId.isNullOrEmpty()) {
-                    val ajaxActions = listOf("get_episodes", "load_episodes", "get_episodes_list", "fetch_episodes", "muvi_episodes")
-                    for (actionName in ajaxActions) {
-                        try {
-                            val ajaxRes = app.post(
-                                "$mainUrl/wp-admin/admin-ajax.php",
-                                headers = headers + mapOf("Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"),
-                                data = mapOf("action" to actionName, "series_id" to postId, "id" to postId, "post_id" to postId)
-                            ).text
-
-                            val parsedEp = Jsoup.parse(ajaxRes).select("a")
-                            if (parsedEp.isNotEmpty()) {
-                                parsedEp.forEachIndexed { index, a ->
-                                    val epUrl = fixUrl(a.attr("href"))
-                                    val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
-                                    episodes.add(
-                                        newEpisode(epUrl) {
-                                            this.name = epName
-                                            this.episode = index + 1
-                                        }
-                                    )
-                                }
-                                break
+                    if (!epUrl.contains("/page/")) {
+                        val epName = a?.text()?.trim()?.ifEmpty { null } ?: elem.selectFirst(".epl-title, .title, .lex-title")?.text()?.trim() ?: "Episode ${index + 1}"
+                        val epNum = elem.selectFirst(".numerando, .epl-num, .eps, .epnum, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull() 
+                            ?: epName.filter { it.isDigit() }.toIntOrNull() 
+                            ?: (index + 1)
+                        
+                        episodes.add(
+                            newEpisode(epUrl) {
+                                this.name = epName
+                                this.episode = epNum
                             }
-                        } catch (_: Exception) {}
+                        )
                     }
                 }
             }
@@ -242,7 +217,23 @@ class IndoxxiProvider : MainAPI() {
         val res = request(data)
         val document = res.document
 
-        // 1. Ekstraksi iframe & atribut alternatifnya (data-src, data-player, src)
+        // 1. Ekstraksi Multi-Server (VIDHIDE, STREAMWISH, MIXDROP, DOODSTREAM, STREAMP2P)
+        val serverElements = document.select(".server-item, .player-servers li, option[value*='http'], [data-link], [data-embed], [data-url], div.server-list a, ul.embed-selector li")
+        for (server in serverElements) {
+            val serverUrl = server.attr("data-link")
+                .ifBlank { server.attr("data-embed") }
+                .ifBlank { server.attr("data-url") }
+                .ifBlank { server.attr("value") }
+                .ifBlank { server.selectFirst("a")?.attr("href") }
+            
+            if (!serverUrl.isNullOrBlank()) {
+                var cleanUrl = fixUrl(serverUrl)
+                if (cleanUrl.startsWith("//")) cleanUrl = "https:$cleanUrl"
+                loadExtractor(cleanUrl, subtitleCallback, callback)
+            }
+        }
+
+        // 2. Ekstraksi iframe baku di halaman
         val iframes = document.select("iframe, iframe[data-src], iframe[data-lazy-src]")
         for (iframe in iframes) {
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }.ifBlank { iframe.attr("data-lazy-src") }
@@ -252,65 +243,12 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 2. Ekstraksi tombol/tab server (embed / stream link)
-        val playerTabs = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http'], .bonnette, [data-link], [data-embed], [data-url], .server-item, .embed-selector a, #player-option-1")
-        for (elem in playerTabs) {
-            val serverSrc = elem.selectFirst("a")?.attr("href") 
-                ?: elem.attr("data-src") 
-                ?: elem.attr("data-href") 
-                ?: elem.attr("data-link")
-                ?: elem.attr("data-embed")
-                ?: elem.attr("data-url")
-                ?: elem.attr("value")
-            
-            if (!serverSrc.isNullOrBlank()) {
-                var cleanSrc = fixUrl(serverSrc)
-                if (cleanSrc.startsWith("//")) cleanSrc = "https:$cleanSrc"
-                if (cleanSrc.startsWith("http")) {
-                    loadExtractor(cleanSrc, subtitleCallback, callback)
-                }
-            }
-        }
-
-        // 3. Scan regex script JS untuk mendeteksi URL iframe/player yang di-render secara dinamis
+        // 3. Regex Scan Script untuk menemukan URL Vidhide / Streamwish / Mixdrop / Doodstream yang di-encode
         val scriptContent = document.select("script").joinToString("\n") { it.data() }
-        val embeddedUrls = Regex("""(?:iframe|src|file|link|embed)\s*[:=]\s*["']([^"']+)["']""").findAll(scriptContent)
-        for (match in embeddedUrls) {
-            var extractedUrl = match.groupValues[1]
-            if (extractedUrl.startsWith("//")) extractedUrl = "https:$extractedUrl"
-            if (extractedUrl.startsWith("http") && !extractedUrl.contains("facebook") && !extractedUrl.contains("google") && !extractedUrl.contains("schema.org")) {
-                loadExtractor(extractedUrl, subtitleCallback, callback)
-            }
-        }
-
-        // 4. Pengecekan AJAX Player khusus untuk CMS streaming WordPress
-        val postId = document.selectFirst("input[name=id], input[id=post_id], #post_ID, input[name=post_id]")?.attr("value")
-            ?: document.selectFirst("[data-id]")?.attr("data-id")
-            ?: document.selectFirst("[data-post]")?.attr("data-post")
-
-        if (!postId.isNullOrEmpty()) {
-            val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-            val actions = listOf("player_ajax", "gdriveplayer_ajax", "get_player", "ajax_player", "select_server", "doo_player_ajax")
-            
-            for (actionName in actions) {
-                try {
-                    val ajaxRes = app.post(
-                        ajaxUrl,
-                        headers = headers + mapOf("Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"),
-                        data = mapOf("action" to actionName, "post" to postId, "id" to postId, "type" to "movie")
-                    ).text
-
-                    val docAjax = Jsoup.parse(ajaxRes)
-                    val parsedIframe = docAjax.selectFirst("iframe")?.attr("src")
-                        ?: docAjax.selectFirst("iframe")?.attr("data-src")
-
-                    if (!parsedIframe.isNullOrEmpty()) {
-                        var cleanUrl = parsedIframe
-                        if (cleanUrl.startsWith("//")) cleanUrl = "https:$cleanUrl"
-                        loadExtractor(cleanUrl, subtitleCallback, callback)
-                    }
-                } catch (_: Exception) {}
-            }
+        val streamUrls = Regex("""https?://[^\s"'<>]+(?:vidhide|streamwish|mixdrop|dood|streamtape|filelions)[^\s"'<>]*""").findAll(scriptContent)
+        for (match in streamUrls) {
+            val extractedUrl = match.value
+            loadExtractor(extractedUrl, subtitleCallback, callback)
         }
 
         return true

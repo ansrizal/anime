@@ -56,7 +56,6 @@ class IndoxxiProvider : MainAPI() {
         }
 
         val document = request(url).document
-        
         val items = document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx, .archive-container article")
         
         val homeItems = items.mapNotNull {
@@ -95,12 +94,14 @@ class IndoxxiProvider : MainAPI() {
             
         if (title.isEmpty() || title.length < 2) return null
 
+        // Perbaikan ekstraksi poster agar menangkap berbagai variasi atribut lazy load
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
-            img?.attr("abs:data-src")
-            ?: img?.attr("abs:data-lazy-src")
-            ?: img?.attr("abs:src")
+            img?.attr("data-src")
+            ?: img?.attr("data-lazy-src")
+            ?: img?.attr("srcset")?.substringBefore(" ")
             ?: img?.attr("src")
+            ?: this.selectFirst(".lazy")?.attr("data-original")
         )
 
         val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/")
@@ -151,7 +152,7 @@ class IndoxxiProvider : MainAPI() {
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.plot = description
+                this.plot = description`
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -169,30 +170,31 @@ class IndoxxiProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Ekstraksi iframe standar
+        // 1. Ekstraksi iframe standar & atribut tersembunyi
         val iframes = document.select("iframe")
         for (iframe in iframes) {
-            var src = iframe.attr("src")
+            var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
             if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
 
-        // 2. Ekstraksi dari opsi server/player embed
-        val playerElements = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http']")
+        // 2. Ekstraksi tombol pilihan server player/mirror
+        val playerElements = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http'], .bonnette, [data-link]")
         for (elem in playerElements) {
             val serverSrc = elem.selectFirst("a")?.attr("href") 
                 ?: elem.attr("data-src") 
                 ?: elem.attr("data-href") 
+                ?: elem.attr("data-link")
                 ?: elem.attr("value")
             
-            if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
+            if (!serverSrc.isNullOrBlank() && (serverSrc.startsWith("http") || serverSrc.startsWith("//"))) {
                 loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
             }
         }
 
-        // 3. Ekstraksi tag <video> atau <source> menggunakan newExtractorLink
+        // 3. Ekstraksi langsung dari tag <video> HTML5
         val videoSources = document.select("video source, video")
         for (video in videoSources) {
             val videoUrl = video.attr("src")

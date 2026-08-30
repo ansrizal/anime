@@ -23,23 +23,23 @@ class SokujaProvider : MainAPI() {
         return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
+    // [PERBAIKAN KATEGORI] - Sesuaikan path dengan struktur web (anime-list, genres)
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "anime/" to "Daftar Anime",
-        "genre/action/" to "Action Anime",
-        "genre/isekai/" to "Isekai Anime"
+        "anime-list/" to "Daftar Anime", 
+        "genres/action/" to "Action Anime",
+        "genres/isekai/" to "Isekai Anime"
     )
 
+    // [PERBAIKAN URL] - Menghilangkan double slash dan menangani kategori dengan benar
     private fun buildPageUrl(path: String, page: Int): String {
         val base = mainUrl.removeSuffix("/")
+        val cleanPath = path.trim('/')
+        
         return when {
-            page <= 1 -> if (path.isEmpty()) base else "$base/$path"
-            path.isEmpty() -> "$base/page/$page/"
-            path.contains("?") -> {
-                val (basePath, query) = path.split("?", limit = 2)
-                "$base/${basePath.removeSuffix("/")}/page/$page/?$query"
-            }
-            else -> "$base/${path.removeSuffix("/")}/page/$page/"
+            page <= 1 -> if (cleanPath.isEmpty()) base else "$base/$cleanPath"
+            cleanPath.isEmpty() -> "$base/page/$page/"
+            else -> "$base/$cleanPath/page/$page/"
         }
     }
 
@@ -109,6 +109,7 @@ class SokujaProvider : MainAPI() {
         )
     }
 
+    // [PERBAIKAN GAMBAR] - Menambahkan data-original dan filter placeholder
     private fun Element.toSearchResult(): SearchResponse? {
         // Cari link utama
         val linkElement = selectFirst("a[href]") ?: return null
@@ -129,14 +130,21 @@ class SokujaProvider : MainAPI() {
 
         if (title.isEmpty()) return null
 
-        // Ambil gambar dari berbagai atribut
+        // Ambil gambar dari berbagai atribut (data-original ditambahkan sebagai prioritas utama)
         val img = selectFirst("img")
-        var rawImg = img?.attr("data-src")
+        var rawImg = img?.attr("data-original")
+            ?: img?.attr("data-src")
             ?: img?.attr("data-lazy-src")
             ?: img?.attr("src")
             ?: img?.attr("srcset")?.substringBefore(" ")
+            ?: selectFirst("div.thumb img")?.attr("data-original")
             ?: selectFirst("div.thumb img")?.attr("data-src")
             ?: selectFirst("div.thumb img")?.attr("src")
+
+        // Filter URL placeholder yang membuat gambar jadi abu-abu
+        if (rawImg != null && (rawImg.contains("placeholder") || rawImg.contains("default") || rawImg.contains("spacer") || rawImg.contains("blank"))) {
+            rawImg = null
+        }
 
         rawImg = when {
             rawImg.isNullOrBlank() -> null
@@ -213,34 +221,20 @@ class SokujaProvider : MainAPI() {
 
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
 
-        // Daftar episode
-        val episodeSelectors = listOf(
-            "div.eplister li", "div.listeps li", ".eplister ul li",
-            "div.list-episode li", "div.lsteps ul li", "ul.clnew li",
-            "div.epsother article", "div.epslist li", ".episodelist li",
-            ".episodes li", ".list-episode a"
-        )
-        var episodeElements = mutableListOf<Element>()
-        for (sel in episodeSelectors) {
-            val elements = targetDoc.select(sel)
-            if (elements.isNotEmpty()) {
-                episodeElements.addAll(elements)
-                break
-            }
-        }
-
+        // [PERBAIKAN EPISODE] - Mengambil semua link episode berdasarkan pola URL
         val episodes = mutableListOf<Episode>()
 
-        if (episodeElements.isNotEmpty()) {
-            episodeElements.forEachIndexed { index, elem ->
-                val a = elem.selectFirst("a") ?: return@forEachIndexed
+        // Cara paling universal untuk web anime: Ambil semua tag <a> yang href-nya mengandung '/episode/'
+        val episodeLinks = targetDoc.select("a[href*='/episode/']")
+
+        if (episodeLinks.isNotEmpty()) {
+            episodeLinks.forEachIndexed { index, a ->
                 val epUrl = fixUrl(a.attr("href"))
-                val epName = a.text().trim().ifEmpty {
-                    elem.selectFirst(".title, .epl-title, .ep-title")?.text()?.trim() ?: "Episode ${index + 1}"
-                }
-                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero, .ep-number")?.text()
-                    ?.filter { it.isDigit() }?.toIntOrNull()
-                    ?: Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
+                
+                // Ekstrak nomor episode dari nama atau URL
+                val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: (index + 1)
 
                 episodes.add(
@@ -250,10 +244,8 @@ class SokujaProvider : MainAPI() {
                     }
                 )
             }
-        }
-
-        if (episodes.isEmpty()) {
-            // Jika tidak ada, coba cari link episode dari tombol "Tonton" atau "Stream"
+        } else {
+            // Fallback jika tidak ada link episode (biasanya karena JS/AJAX)
             val watchLink = targetDoc.selectFirst("a[href*='/episode/'], a[href*='/stream/'], a[href*='/watch/']")
             if (watchLink != null) {
                 val epUrl = fixUrl(watchLink.attr("href"))
@@ -264,6 +256,7 @@ class SokujaProvider : MainAPI() {
                     }
                 )
             } else {
+                // Fallback terakhir jika halamannya langsung episode
                 episodes.add(
                     newEpisode(url) {
                         this.name = title
@@ -276,6 +269,7 @@ class SokujaProvider : MainAPI() {
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
+            // Hapus duplikat dan urutkan terbalik (biasanya episode terbaru di atas)
             addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.data }.reversed())
         }
     }

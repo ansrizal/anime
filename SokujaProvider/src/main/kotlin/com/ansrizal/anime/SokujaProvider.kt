@@ -23,12 +23,96 @@ class SokujaProvider : MainAPI() {
         return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
-    // [PERBAIKAN KATEGORI] - Pastikan path ini sesuai dengan web (bisa dicek di browser)
+    // [PERBAIKAN KATEGORI] - Melengkapi semua Genre sesuai daftar di web
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "anime-list/" to "Daftar Anime", 
-        "genres/action/" to "Action Anime",
-        "genres/isekai/" to "Isekai Anime"
+        "anime/" to "Daftar Anime",
+        "genre/action/" to "Action",
+        "genre/adult-cast/" to "Adult Cast",
+        "genre/adventure/" to "Adventure",
+        "genre/anthropomorphic/" to "Anthropomorphic",
+        "genre/apocalyptic-battle/" to "Apocalyptic Battle",
+        "genre/avant-garde/" to "Avant Garde",
+        "genre/award-winning/" to "Award Winning",
+        "genre/battle/" to "Battle",
+        "genre/cgdct/" to "CGDCT",
+        "genre/childcare/" to "Childcare",
+        "genre/comedy/" to "Comedy",
+        "genre/curse-exorcism/" to "Curse Exorcism",
+        "genre/dark-fantasy/" to "Dark Fantasy",
+        "genre/dark-humor/" to "Dark Humor",
+        "genre/delinquents/" to "Delinquents",
+        "genre/detective/" to "Detective",
+        "genre/drama/" to "Drama",
+        "genre/ecchi/" to "Ecchi",
+        "genre/emotional-journey/" to "Emotional Journey",
+        "genre/erotica/" to "Erotica",
+        "genre/fantasy/" to "Fantasy",
+        "genre/fire-brigade/" to "Fire Brigade",
+        "genre/gag-humor/" to "Gag Humor",
+        "genre/girls-love/" to "Girls Love",
+        "genre/gore/" to "Gore",
+        "genre/gourmet/" to "Gourmet",
+        "genre/harem/" to "Harem",
+        "genre/hentai/" to "Hentai",
+        "genre/hero-unit/" to "Hero Unit",
+        "genre/high-stakes-game/" to "High Stakes Game",
+        "genre/historical/" to "Historical",
+        "genre/horror/" to "Horror",
+        "genre/idol/" to "Idol",
+        "genre/idols-female/" to "Idols (Female)",
+        "genre/isekai/" to "Isekai",
+        "genre/iyashikei/" to "Iyashikei",
+        "genre/josei/" to "Josei",
+        "genre/kids/" to "Kids",
+        "genre/love-polygon/" to "Love Polygon",
+        "genre/love-status-quo/" to "Love Status Quo",
+        "genre/magic/" to "Magic",
+        "genre/magical-sex-shift/" to "Magical Sex Shift",
+        "genre/mahou-shoujo/" to "Mahou Shoujo",
+        "genre/martial-arts/" to "Martial Arts",
+        "genre/mecha/" to "Mecha",
+        "genre/medical/" to "Medical",
+        "genre/military/" to "Military",
+        "genre/music/" to "Music",
+        "genre/mystery/" to "Mystery",
+        "genre/mythology/" to "Mythology",
+        "genre/organized-crime/" to "Organized Crime",
+        "genre/otaku-culture/" to "Otaku Culture",
+        "genre/parody/" to "Parody",
+        "genre/performing-arts/" to "Performing Arts",
+        "genre/pets/" to "Pets",
+        "genre/prison/" to "Prison",
+        "genre/psychological/" to "Psychological",
+        "genre/psychological-thriller/" to "Psychological Thriller",
+        "genre/racing/" to "Racing",
+        "genre/reincarnation/" to "Reincarnation",
+        "genre/romance/" to "Romance",
+        "genre/romantic-subtext/" to "Romantic Subtext",
+        "genre/samurai/" to "Samurai",
+        "genre/school/" to "School",
+        "genre/sci-fi/" to "Sci-Fi",
+        "genre/seinen/" to "Seinen",
+        "genre/shoujo/" to "Shoujo",
+        "genre/shounen/" to "Shounen",
+        "genre/showbiz/" to "Showbiz",
+        "genre/slice-of-life/" to "Slice of Life",
+        "genre/space/" to "Space",
+        "genre/sports/" to "Sports",
+        "genre/strategy-game/" to "Strategy Game",
+        "genre/super-power/" to "Super Power",
+        "genre/supernatural/" to "Supernatural",
+        "genre/survival/" to "Survival",
+        "genre/suspense/" to "Suspense",
+        "genre/team-sports/" to "Team Sports",
+        "genre/thriller-sosial/" to "Thriller Sosial",
+        "genre/time-travel/" to "Time Travel",
+        "genre/urban-fantasy/" to "Urban Fantasy",
+        "genre/vampire/" to "Vampire",
+        "genre/video-game/" to "Video Game",
+        "genre/villainess/" to "Villainess",
+        "genre/visual-arts/" to "Visual Arts",
+        "genre/workplace/" to "Workplace"
     )
 
     private fun buildPageUrl(path: String, page: Int): String {
@@ -49,7 +133,6 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
 
-        // Kumpulkan semua elemen yang potensial sebagai kartu anime
         val potentialItems = mutableListOf<Element>()
 
         val selectors = listOf(
@@ -57,7 +140,8 @@ class SokujaProvider : MainAPI() {
             "article.bs", "div.post-show article", "div.bxb article",
             "div.swiper-slide", "div.animposx", "div.bs", "div.animepost",
             "div.anime-list", "div.anime-item", "div.episodelist article",
-            "div.item", "div.anime-card", "div.card", "div.thumb-item"
+            "div.item", "div.anime-card", "div.card", "div.thumb-item",
+            "div.anime__item", "div.anime-card__inner"
         )
 
         for (sel in selectors) {
@@ -67,7 +151,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Fallback jika kosong
         val finalItems = if (potentialItems.isEmpty()) {
             document.select("a[href*='/anime/']")
                 .toList()
@@ -103,7 +186,6 @@ class SokujaProvider : MainAPI() {
         )
     }
 
-    // [PERBAIKAN GAMBAR - TANGGUH] - Menambahkan berbagai atribut gambar dan background-image
     private fun Element.toSearchResult(): SearchResponse? {
         val linkElement = selectFirst("a[href]") ?: return null
         var href = fixUrl(linkElement.attr("href"))
@@ -121,7 +203,6 @@ class SokujaProvider : MainAPI() {
 
         if (title.isEmpty()) return null
 
-        // [PERBAIKAN GAMBAR] - Coba ambil dari berbagai atribut & CSS
         val img = selectFirst("img, div.thumb, .thumb, .poster")
         var rawImg = img?.attr("data-original")
             ?: img?.attr("data-lazy-src")
@@ -132,14 +213,12 @@ class SokujaProvider : MainAPI() {
             ?: img?.selectFirst("img")?.attr("data-src")
             ?: img?.selectFirst("img")?.attr("src")
             
-        // Ambil background-image dari style
         if (rawImg.isNullOrBlank()) {
             rawImg = img?.attr("style")?.let { style ->
                 Regex("""background-image:\s*url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
             }
         }
 
-        // Filter URL placeholder / data URI
         if (rawImg != null && (rawImg.startsWith("data:") || rawImg.contains("placeholder") || rawImg.contains("default") || rawImg.contains("spacer") || rawImg.contains("blank"))) {
             rawImg = null
         }
@@ -188,11 +267,9 @@ class SokujaProvider : MainAPI() {
         return finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
     }
 
-    // [PERBAIKAN EPISODE & PLAYER] 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Cari link ke daftar episode (jika ada tombol "Semua Episode")
         val seriesLink = document.selectFirst(
             "a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], " +
             "div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a"
@@ -219,44 +296,48 @@ class SokujaProvider : MainAPI() {
 
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
 
-        // [PERBAIKAN EPISODE] - Mencari semua tautan yang mengandung 'episode' atau pola URL umum lainnya
         val episodes = mutableListOf<Episode>()
         
-        // 1. Coba cari semua link <a> yang href-nya mengandung '/episode/'
-        // 2. Coba cari semua link <a> yang href-nya mengandung 'episode-' 
-        // 3. Coba cari semua link <a> yang href-nya mengandung 'watch/' atau 'stream/'
-        // 4. Coba cari daftar episode dari class/list umum
-        val episodeElements = targetDoc.select(
-            "a[href*='/episode/'], a[href*='episode-'], a[href*='/watch/'], a[href*='/stream/'], " +
-            "div.eplister li a, div.listeps li a, ul.list-episode li a, div.episodelist li a, " +
-            "div.eps li a, div.lstep li a, div.anime-episode a"
-        )
-
-        if (episodeElements.isNotEmpty()) {
-            episodeElements.forEachIndexed { index, a ->
+        val episodeContainer = targetDoc.selectFirst("div.eplister, div.listeps, div.eps, div.list-episode, div.episodelist, div.lstep, div.anime-episode")
+        
+        if (episodeContainer != null) {
+            episodeContainer.select("a[href]").forEachIndexed { index, a ->
                 val epUrl = fixUrl(a.attr("href"))
-                
-                // Ekstrak nomor dari URL atau teks
                 val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
+                
                 val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?: Regex("""/episode/(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: (index + 1)
 
-                episodes.add(
-                    newEpisode(epUrl) {
+                episodes.add(newEpisode(epUrl) {
+                    this.name = epName
+                    this.episode = epNum
+                })
+            }
+        }
+
+        if (episodes.isEmpty()) {
+            targetDoc.select("a[href*='/episode/'], a[href*='/watch/'], a[href*='/stream/'], a[href*='episode-']")
+                .forEachIndexed { index, a ->
+                    val epUrl = fixUrl(a.attr("href"))
+                    val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
+                    
+                    val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        ?: (index + 1)
+
+                    episodes.add(newEpisode(epUrl) {
                         this.name = epName
                         this.episode = epNum
-                    }
-                )
-            }
-        } else {
-            // Fallback terakhir jika tidak ada link ditemukan
+                    })
+                }
+        }
+
+        if (episodes.isEmpty()) {
             val watchLink = targetDoc.selectFirst("a[href*='/episode/'], a[href*='/stream/'], a[href*='/watch/']")
             if (watchLink != null) {
-                val epUrl = fixUrl(watchLink.attr("href"))
                 episodes.add(
-                    newEpisode(epUrl) {
+                    newEpisode(fixUrl(watchLink.attr("href"))) {
                         this.name = "Episode 1"
                         this.episode = 1
                     }
@@ -286,8 +367,7 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // [PERBAIKAN PLAYER] - Cari IFRAME di mana saja
-        document.select("iframe, iframe[data-src]").forEach { iframe ->
+        document.select("iframe, iframe[data-src], embed, embed[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
 
@@ -296,16 +376,9 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // [PERBAIKAN PLAYER] - Cari SERVER/MIRROR dari banyak selector
+        // [FIX ERROR KOMPILASI] - SEMUA selector dijadikan SATU String
         val serverOptions = document.select(
-            // Select umum
-            "select.mirror option, select option", 
-            // List server
-            "ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a", 
-            // Link embed langsung
-            "a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch']",
-            // Atribut data
-            "[data-index], [data-em], [data-src]"
+            "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], [data-index], [data-em], [data-src]"
         )
 
         for (option in serverOptions) {
@@ -316,7 +389,6 @@ class SokujaProvider : MainAPI() {
                 .ifBlank { option.attr("href") }
                 .ifBlank { option.attr("src") }
 
-            // Bersihkan URL agar valid
             val cleanUrl = when {
                 embedUrl.isBlank() -> null
                 embedUrl.startsWith("//") -> "https:$embedUrl"
@@ -329,9 +401,6 @@ class SokujaProvider : MainAPI() {
                 loadExtractor(cleanUrl, subtitleCallback, callback)
             }
         }
-
-        // Jika tidak ada yang ketemu, mungkin link ada di dalam <script> atau data JSON, tetapi karena kita pakai scraper statis, 
-        // kemungkinan besar iframe atau link di atas sudah menangani.
 
         return true
     }

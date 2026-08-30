@@ -50,20 +50,31 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        val res = request(url)
-        val document = res.document
-        
-        // Selektor komprehensif elemen post Sokuja
-        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs, div.animposx, div.swiper-slide")
-        
-        val homeItems = items.mapNotNull {
-            it.toSearchResult()
-        }.distinctBy { it.url }
+        val homeItems = mutableListOf<SearchResponse>()
 
+        try {
+            val res = request(url)
+            val document = res.document
+
+            // Selektor serbaguna untuk menangkap elemen poster anime di Sokuja
+            val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs, div.animposx, div.swiper-slide")
+
+            items.forEach { element ->
+                element.toSearchResult()?.let { searchResult ->
+                    homeItems.add(searchResult)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Tipe data list HARUS berupa List<HomePageList> (menggunakan listOf)
         return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = homeItems
+            list = listOf(
+                HomePageList(
+                    name = request.name,
+                    list = homeItems.distinctBy { it.url }
+                )
             ),
             hasNext = homeItems.isNotEmpty()
         )

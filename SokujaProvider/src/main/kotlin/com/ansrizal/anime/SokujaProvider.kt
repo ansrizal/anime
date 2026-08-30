@@ -20,11 +20,7 @@ class SokujaProvider : MainAPI() {
     )
 
     private suspend fun request(url: String): NiceResponse {
-        return app.get(
-            url,
-            headers = defaultHeaders,
-            timeout = 30
-        )
+        return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
     override val mainPage = mainPageOf(
@@ -34,7 +30,6 @@ class SokujaProvider : MainAPI() {
         "genre/isekai/" to "Isekai Anime"
     )
 
-    // Helper untuk membangun URL halaman dengan paginasi yang benar
     private fun buildPageUrl(path: String, page: Int): String {
         val base = mainUrl.removeSuffix("/")
         return when {
@@ -55,16 +50,55 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
 
-        // Selector utama + fallback
-        val items = document.select(
-            "div.bsx, div.listupd article, div.utao, div.uta, div.luf, " +
-            "article.bs, div.post-show article, div.bxb article, div.swiper-slide"
+        // Kumpulkan semua elemen yang potensial sebagai kartu anime
+        val potentialItems = mutableListOf<Element>()
+
+        // Daftar selector umum untuk kartu anime
+        val selectors = listOf(
+            "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
+            "article.bs", "div.post-show article", "div.bxb article",
+            "div.swiper-slide", "div.animposx", "div.bs", "div.animepost",
+            "div.anime-list", "div.anime-item", "div.episodelist article",
+            "div.item", "div.anime-card", "div.card", "div.thumb-item"
         )
 
-        // Jika kosong, coba selector lain (beberapa tema pakai div.animposx)
-        val finalItems = if (items.isEmpty()) {
-            document.select("div.animposx, div.bs, div.bsx")
-        } else items
+        for (sel in selectors) {
+            val elements = document.select(sel)
+            if (elements.isNotEmpty()) {
+                potentialItems.addAll(elements)
+            }
+        }
+
+        // Jika masih kosong, coba ambil semua link yang mengarah ke /anime/ (fallback)
+        val finalItems = if (potentialItems.isEmpty()) {
+            // Ambil semua <a> yang href-nya mengandung "/anime/" kecuali yang mengandung "/genre/" dll
+            val animeLinks = document.select("a[href*='/anime/']")
+                .filter { a ->
+                    val href = a.attr("href")
+                    !href.contains("/genre/") && !href.contains("/category/") &&
+                    !href.contains("/page/") && !href.contains("/tag/") &&
+                    !href.contains("/bookmark/") && !href.contains("/jadwal-rilis/")
+                }
+            // Untuk setiap link, cari elemen pembungkus terdekat (parent) untuk dijadikan item
+            animeLinks.mapNotNull { a ->
+                var parent = a.parent()
+                // Naik sampai 5 level untuk menemukan elemen yang memiliki gambar atau class tertentu
+                var container: Element? = a
+                for (i in 0..5) {
+                    if (parent != null) {
+                        // Jika parent memiliki img atau class yang menandakan kartu, gunakan parent
+                        if (parent.selectFirst("img") != null || parent.hasClass("bsx") || parent.hasClass("item") || parent.hasClass("post")) {
+                            container = parent
+                            break
+                        }
+                        parent = parent.parent()
+                    }
+                }
+                container
+            }.distinctBy { it?.outerHtml() }.filterNotNull()
+        } else {
+            potentialItems
+        }
 
         val homeItems = finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
@@ -75,29 +109,33 @@ class SokujaProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
+        // Cari link utama
         val linkElement = selectFirst("a[href]") ?: return null
         var href = fixUrl(linkElement.attr("href"))
 
-        // Filter halaman yang tidak valid
+        // Filter URL tidak valid
         val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
         if (invalid.any { href.contains(it) }) return null
         if (href.removeSuffix("/") == mainUrl.removeSuffix("/")) return null
 
-        // Ambil judul dari berbagai kemungkinan
-        val title = selectFirst(".tt, h2, h3, h4, .title, .entry-title, .post-title, .ttname, .anime-title")
+        // Ambil judul dari berbagai sumber
+        val title = selectFirst(".tt, h2, h3, h4, .title, .entry-title, .post-title, .ttname, .anime-title, .judul, .name, .item-title")
             ?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
+            ?: linkElement.text().trim().ifEmpty { null }
             ?: selectFirst("img")?.attr("alt")?.trim()
             ?: return null
 
         if (title.isEmpty()) return null
 
-        // Ambil gambar
+        // Ambil gambar dari berbagai atribut
         val img = selectFirst("img")
         var rawImg = img?.attr("data-src")
             ?: img?.attr("data-lazy-src")
             ?: img?.attr("src")
             ?: img?.attr("srcset")?.substringBefore(" ")
+            ?: selectFirst("div.thumb img")?.attr("data-src")
+            ?: selectFirst("div.thumb img")?.attr("src")
 
         rawImg = when {
             rawImg.isNullOrBlank() -> null
@@ -115,15 +153,39 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = request(searchUrl).document
 
-        return document.select("div.bsx, div.listupd article, div.utao, div.uta, div.luf, article.bs, div.animposx")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        // Gunakan selector yang sama seperti di getMainPage
+        val selectors = listOf(
+            "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
+            "article.bs", "div.animposx", "div.bs", "div.animepost"
+        )
+        val items = mutableListOf<Element>()
+        for (sel in selectors) {
+            items.addAll(document.select(sel))
+        }
+
+        // Fallback jika kosong
+        val finalItems = if (items.isEmpty()) {
+            document.select("a[href*='/anime/']")
+                .filter { !it.attr("href").contains("/genre/") && !it.attr("href").contains("/page/") }
+                .mapNotNull { a ->
+                    var parent = a.parent()
+                    for (i in 0..5) {
+                        if (parent != null && parent.selectFirst("img") != null) {
+                            return@mapNotNull parent
+                        }
+                        parent = parent?.parent()
+                    }
+                    null
+                }.distinctBy { it.outerHtml() }
+        } else items
+
+        return finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Coba cari link ke halaman daftar episode (jika di halaman detail tidak ada)
+        // Cari link ke daftar episode
         val seriesLink = document.selectFirst(
             "a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], " +
             "div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a"
@@ -136,7 +198,7 @@ class SokujaProvider : MainAPI() {
             document
         }
 
-        val title = targetDoc.selectFirst("h1.entry-title, h1, .infotable h1")?.text()
+        val title = targetDoc.selectFirst("h1.entry-title, h1, .infotable h1, .post-title, .anime-title")?.text()
             ?.replace("Nonton Anime ", "")
             ?.replace("Subtitle Indonesia", "")
             ?.trim() ?: "Sokuja Anime"
@@ -147,14 +209,23 @@ class SokujaProvider : MainAPI() {
         rawPoster = if (rawPoster?.startsWith("//") == true) "https:$rawPoster" else rawPoster
         val poster = fixUrlNull(rawPoster)
 
-        val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
+        val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
 
-        // Ambil daftar episode
-        val episodeElements = targetDoc.select(
-            "div.eplister li, div.listeps li, .eplister ul li, " +
-            "div.list-episode li, div.lsteps ul li, ul.clnew li, " +
-            "div.epsother article, div.epslist li"
+        // Daftar episode
+        val episodeSelectors = listOf(
+            "div.eplister li", "div.listeps li", ".eplister ul li",
+            "div.list-episode li", "div.lsteps ul li", "ul.clnew li",
+            "div.epsother article", "div.epslist li", ".episodelist li",
+            ".episodes li", ".list-episode a"
         )
+        var episodeElements = mutableListOf<Element>()
+        for (sel in episodeSelectors) {
+            val elements = targetDoc.select(sel)
+            if (elements.isNotEmpty()) {
+                episodeElements.addAll(elements)
+                break
+            }
+        }
 
         val episodes = mutableListOf<Episode>()
 
@@ -163,9 +234,9 @@ class SokujaProvider : MainAPI() {
                 val a = elem.selectFirst("a") ?: return@forEachIndexed
                 val epUrl = fixUrl(a.attr("href"))
                 val epName = a.text().trim().ifEmpty {
-                    elem.selectFirst(".title, .epl-title")?.text()?.trim() ?: "Episode ${index + 1}"
+                    elem.selectFirst(".title, .epl-title, .ep-title")?.text()?.trim() ?: "Episode ${index + 1}"
                 }
-                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero")?.text()
+                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero, .ep-number")?.text()
                     ?.filter { it.isDigit() }?.toIntOrNull()
                     ?: Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: (index + 1)
@@ -179,14 +250,25 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Jika tidak ada episode, tambahkan satu episode dari URL saat ini
         if (episodes.isEmpty()) {
-            episodes.add(
-                newEpisode(url) {
-                    this.name = title
-                    this.episode = 1
-                }
-            )
+            // Jika tidak ada, coba cari link episode dari tombol "Tonton" atau "Stream"
+            val watchLink = targetDoc.selectFirst("a[href*='/episode/'], a[href*='/stream/'], a[href*='/watch/']")
+            if (watchLink != null) {
+                val epUrl = fixUrl(watchLink.attr("href"))
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = "Episode 1"
+                        this.episode = 1
+                    }
+                )
+            } else {
+                episodes.add(
+                    newEpisode(url) {
+                        this.name = title
+                        this.episode = 1
+                    }
+                )
+            }
         }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
@@ -204,6 +286,7 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
+        // Cari iframe
         document.select("iframe, iframe[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -213,7 +296,8 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a")
+        // Cari server mirror
+        val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a, .server a, .mirror a")
         for (option in serverOptions) {
             val embedUrl = option.attr("value").ifBlank { option.attr("data-em") }.ifBlank { option.attr("href") }
             if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {

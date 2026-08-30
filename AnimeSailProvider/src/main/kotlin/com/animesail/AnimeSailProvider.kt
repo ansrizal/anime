@@ -3,6 +3,8 @@ package com.animesail
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.CloudflareKillerInterception
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -12,12 +14,16 @@ class AnimeSailProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
+    override val hasChromecastSupport = true
 
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
         TvType.OVA
     )
+
+    // Cloudflare interceptor
+    private val cloudflareKiller = CloudflareKiller()
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
@@ -33,10 +39,52 @@ class AnimeSailProvider : MainAPI() {
             headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Cache-Control" to "no-cache",
+                "Pragma" to "no-cache"
             ),
-            referer = ref ?: mainUrl
+            referer = ref ?: mainUrl,
+            interceptor = cloudflareKiller
         )
+    }
+
+    // Alternative: Use custom interceptor with cookie handling
+    private suspend fun requestWithCloudflare(url: String, ref: String? = null): NiceResponse {
+        try {
+            // First try without interceptor
+            val response = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                ),
+                referer = ref ?: mainUrl
+            )
+            
+            // Check if we got Cloudflare challenge
+            if (response.text.contains("cf-challenge") || response.text.contains("Checking your browser") || response.code == 403) {
+                println("AnimeSail: Cloudflare detected, trying to bypass...")
+                
+                // Wait for Cloudflare to clear
+                kotlinx.coroutines.delay(5000)
+                
+                // Retry with different approach
+                return app.get(
+                    url,
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Cookie" to "cf_clearance=test" // Placeholder, actual clearance needed
+                    ),
+                    referer = ref ?: mainUrl
+                )
+            }
+            
+            return response
+        } catch (e: Exception) {
+            println("AnimeSail: Request error: ${e.message}")
+            throw e
+        }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -54,14 +102,37 @@ class AnimeSailProvider : MainAPI() {
         }
 
         return try {
-            val document = request(url).document
-            val items = document.select("article.bs, article.bsz").mapNotNull { 
-                it.toSearchResult() 
-            }.distinctBy { it.url }
+            println("AnimeSail: Fetching $url")
+            val response = request(url)
+            println("AnimeSail: Response code: ${response.code}")
+            
+            val document = response.document
+            println("AnimeSail: Document title: ${document.title()}")
+            
+            // Try multiple selectors
+            val selectors = listOf(
+                "article.bs",
+                "article.bsz",
+                ".listupd article",
+                ".postbody article"
+            )
+            
+            var items = emptyList<AnimeSearchResponse>()
+            for (selector in selectors) {
+                items = document.select(selector).mapNotNull { 
+                    it.toSearchResult() 
+                }.distinctBy { it.url }
+                
+                if (items.isNotEmpty()) {
+                    println("AnimeSail: Found ${items.size} items using selector: $selector")
+                    break
+                }
+            }
             
             newHomePageResponse(request.name, items)
         } catch (e: Exception) {
             println("AnimeSail: Error loading main page: ${e.message}")
+            e.printStackTrace()
             newHomePageResponse(request.name, emptyList())
         }
     }
@@ -76,12 +147,11 @@ class AnimeSailProvider : MainAPI() {
             ?: a.attr("title")
             ?: return null
 
-        // Clean title
         val title = rawTitle
             .replace(Regex("(?i)Episode\\s*\\d+"), "")
             .replace(Regex("(?i)Subtitle Indonesia"), "")
             .replace(Regex("(?i)Sub Indo"), "")
-            .replace(Regex("\\(\\d{4}\\)"), "")  // Remove year in parentheses
+            .replace(Regex("\\(\\d{4}\\)"), "")
             .trim()
             .removeSuffix("-")
             .trim()
@@ -89,13 +159,11 @@ class AnimeSailProvider : MainAPI() {
         val img = this.selectFirst("img")
         val posterUrl = fixImageUrl(img?.attr("src"))
 
-        // Detect type from class
         val type = when {
             this.hasClass("bsz") || href.contains("/movie/") -> TvType.AnimeMovie
             else -> TvType.Anime
         }
 
-        // Extract episode number from title
         val epNum = Regex("(?i)Episode\\s*(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         return newAnimeSearchResponse(title, href, type) {
@@ -120,7 +188,6 @@ class AnimeSailProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
         
-        // Get title from h1 or fallback
         val title = document.selectFirst("h1.entry-title")?.text()
             ?: document.selectFirst("h1")?.text()
             ?: document.title()
@@ -131,7 +198,6 @@ class AnimeSailProvider : MainAPI() {
             .replace(Regex("(?i)Sub Indo"), "")
             .trim()
 
-        // Get poster
         val poster = fixImageUrl(
             document.selectFirst(".thumb img")?.attr("src")
                 ?: document.selectFirst(".entry-content img")?.attr("src")
@@ -140,14 +206,12 @@ class AnimeSailProvider : MainAPI() {
                 ?: document.selectFirst("meta[property='og:image']")?.attr("content")
         )
 
-        // Initialize metadata
         var type = TvType.Anime
         var year: Int? = null
         var status = ShowStatus.Completed
         var plot: String? = null
         val tags = mutableListOf<String>()
 
-        // Parse info from table rows
         document.select("tr").forEach { row ->
             val th = row.selectFirst("th")?.text()?.lowercase() ?: return@forEach
             val td = row.selectFirst("td")?.text()?.trim() ?: return@forEach
@@ -160,7 +224,7 @@ class AnimeSailProvider : MainAPI() {
                     year = Regex("\\d{4}").find(td)?.value?.toIntOrNull()
                 }
                 th.contains("status") -> {
-                    status = if (td.lowercase().contains("ongoing") || td.lowercase().contains("airing") || td.lowercase().contains("ongoing")) 
+                    status = if (td.lowercase().contains("ongoing") || td.lowercase().contains("airing")) 
                         ShowStatus.Ongoing 
                     else 
                         ShowStatus.Completed
@@ -171,7 +235,6 @@ class AnimeSailProvider : MainAPI() {
             }
         }
 
-        // Also try to get genres from links
         if (tags.isEmpty()) {
             document.select("a[href*='/genres/']").forEach { genreLink ->
                 val genre = genreLink.text().trim()
@@ -181,18 +244,15 @@ class AnimeSailProvider : MainAPI() {
             }
         }
 
-        // Get plot/synopsis
         plot = document.selectFirst(".entry-content p")?.text()
             ?: document.selectFirst(".sinopsis")?.text()
             ?: document.selectFirst(".desc")?.text()
             ?: document.selectFirst(".entry-content")?.text()
 
-        // Detect if it's a movie based on URL
         if (url.contains("/movie/")) {
             type = TvType.AnimeMovie
         }
 
-        // Get episodes
         val episodes = document.select(".eplister ul li, .eplist ul li, ul.daftar li").mapNotNull { li ->
             val a = li.selectFirst("a[href]") ?: return@mapNotNull null
             val epUrl = fixUrl(a.attr("href"))
@@ -244,7 +304,6 @@ class AnimeSailProvider : MainAPI() {
             val options = document.select(".mobius > .mirror > option, select.mirror option")
             
             if (options.isEmpty()) {
-                // Try to find iframe directly in the page
                 val iframe = document.selectFirst("iframe[src]")?.attr("src")
                 if (!iframe.isNullOrBlank()) {
                     val fixedIframe = fixUrl(iframe)
@@ -292,31 +351,6 @@ class AnimeSailProvider : MainAPI() {
                                 this.quality = quality
                             }
                         )
-                    } else {
-                        // For non-direct links, try to extract from the iframe
-                        try {
-                            val iframeContent = request(iframe, ref = data).document
-                            val directLink = iframeContent.selectFirst("video source")?.attr("src")
-                                ?: iframeContent.selectFirst("video")?.attr("src")
-                                ?: iframeContent.selectFirst("iframe[src*='.mp4'], iframe[src*='.m3u8']")?.attr("src")
-                            
-                            if (!directLink.isNullOrBlank()) {
-                                val fixedLink = fixUrl(directLink)
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = serverName,
-                                        name = serverName,
-                                        url = fixedLink,
-                                        type = if (fixedLink.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.referer = iframe
-                                        this.quality = quality
-                                    }
-                                )
-                            }
-                        } catch (e: Exception) {
-                            println("AnimeSail: Error extracting from iframe: ${e.message}")
-                        }
                     }
                 } catch (e: Exception) {
                     println("AnimeSail: Error processing link: ${e.message}")

@@ -40,8 +40,8 @@ class SokujaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "anime/?order=update" to "Update Terbaru",
-        "anime/?status=&type=&order=title" to "Daftar Anime",
+        "" to "Update Terbaru",
+        "anime/?order=title" to "Daftar Anime",
         "genre/action/" to "Action Anime",
         "genre/isekai/" to "Isekai Anime"
     )
@@ -49,9 +49,11 @@ class SokujaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data
         val url = if (page <= 1) {
-            if (path.isEmpty()) "$mainUrl/anime/?order=update" else "$mainUrl/$path"
+            if (path.isEmpty()) "$mainUrl/" else "$mainUrl/$path"
         } else {
-            if (path.contains("?")) {
+            if (path.isEmpty()) {
+                "$mainUrl/page/$page/"
+            } else if (path.contains("?")) {
                 val base = path.substringBefore("?")
                 val query = path.substringAfter("?")
                 "$mainUrl/${base.removeSuffix("/")}/page/$page/?$query"
@@ -62,8 +64,8 @@ class SokujaProvider : MainAPI() {
 
         val document = request(url).document
         
-        // Dynamic selector untuk menangkap layout Grid (.bs), List (.uta/.utao), dan Card (.listupd)
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, div.animposx")
+        // Selektor presisi berdasarkan struktur HTML Sokuja (Update Terbaru & Grid Anime)
+        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf")
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
@@ -92,7 +94,7 @@ class SokujaProvider : MainAPI() {
             href.contains("/page/") ||
             href.contains("/bookmark/")) return null
 
-        val title = this.selectFirst(".tt, h2, h3, h4, .title, .entry-title, .luf h4")?.text()?.trim()
+        val title = this.selectFirst(".tt, h2, h3, h4, .title, .entry-title, .luf h4, .post-title")?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
             ?: this.selectFirst("img")?.attr("alt")?.trim()
             ?: return null
@@ -120,7 +122,7 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, div.animposx").mapNotNull {
+        return document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf").mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
     }
@@ -128,45 +130,67 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // Jika user membuka tautan episode langsung, alihkan ke halaman utama anime
-        val seriesLink = document.selectFirst("div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
-        if (seriesLink != null && !url.contains("/anime/")) {
-            return load(fixUrl(seriesLink))
+        // 1. Jika URL yang dibuka adalah halaman episode (seperti di screenshot), cari link "Semua Episode" atau halaman Anime Utama
+        val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
+        
+        val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {
+            val parentUrl = fixUrl(seriesLink)
+            if (parentUrl != url) request(parentUrl).document else document
+        } else {
+            document
         }
 
-        val title = document.selectFirst("h1.entry-title, h1, .infotable h1")?.text()?.replace("Nonton Anime ", "")?.trim() ?: "Sokuja Anime"
+        val title = targetDoc.selectFirst("h1.entry-title, h1, .infotable h1")?.text()?.replace("Nonton Anime ", "")?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         
-        var rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: document.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-src")
-            ?: document.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("src")
+        var rawPoster = targetDoc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-src")
+            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("src")
 
         if (rawPoster != null && rawPoster.startsWith("//")) {
             rawPoster = "https:$rawPoster"
         }
         val poster = fixUrlNull(rawPoster)
-        val description = document.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
+        val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        val episodes = document.select("li[data-index], div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li, ul.clnew li").mapNotNull { elem ->
-            val a = elem.selectFirst("a") ?: return@mapNotNull null
-            val epUrl = fixUrl(a.attr("href"))
-            val epName = a.text().trim()
-            val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull()
-                ?: Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        // 2. Mengambil seluruh episode dari section "Episode Lainnya" / "List Episode"
+        val episodeElements = targetDoc.select("div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li, ul.clnew li, div.epsother article, div.epslist li")
+        
+        val episodes = mutableListOf<Episode>()
+        
+        if (episodeElements.isNotEmpty()) {
+            episodeElements.forEachIndexed { index, elem ->
+                val a = elem.selectFirst("a") ?: return@forEachIndexed
+                val epUrl = fixUrl(a.attr("href"))
+                val epName = a.text().trim().ifEmpty { elem.selectFirst(".title, .epl-title")?.text()?.trim() ?: "Episode ${index + 1}" }
+                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                    ?: Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: (index + 1)
 
-            newEpisode(epUrl) {
-                this.name = epName
-                this.episode = epNum
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = epNum
+                    }
+                )
             }
-        }.distinctBy { it.data }.reversed()
+        }
+
+        // Fallback jika hanya 1 episode yang terdeteksi di halaman tersebut
+        if (episodes.isEmpty()) {
+            episodes.add(
+                newEpisode(url) {
+                    this.name = title
+                    this.episode = 1
+                }
+            )
+        }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
             addEpisodes(
                 DubStatus.Subbed,
-                episodes.ifEmpty {
-                    listOf(newEpisode(url) { this.name = "Full Stream"; this.episode = 1 })
-                }
+                episodes.distinctBy { it.data }.reversed()
             )
         }
     }
@@ -179,7 +203,7 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Scan semua iframe pemutar video
+        // 1. Pindai seluruh iframe pemutar video (seperti player 480p, 720p, 1080p pada screenshot)
         document.select("iframe, iframe[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -189,8 +213,8 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // 2. Scan opsi Server Select (dropdown / mirror list)
-        val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index]")
+        // 2. Pindai opsi server / kualitas video yang ada di dalam player
+        val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a")
         for (option in serverOptions) {
             val embedUrl = option.attr("value").ifBlank { option.attr("data-em") }.ifBlank { option.attr("href") }
             if (embedUrl.isNotBlank() && embedUrl.startsWith("http")) {

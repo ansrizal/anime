@@ -11,7 +11,7 @@ class IndoxxiProvider : MainAPI() {
     override var name = "INDOXXI"
     override val hasMainPage = true
     override var lang = "id"
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     private val turnstileInterceptor = TurnstileInterceptor("cf_clearance")
 
@@ -41,6 +41,7 @@ class IndoxxiProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
+        "popular/" to "Film Populer",
         "category/movie/" to "Film Terbaru",
         "category/tv-series/" to "TV Series",
         "genre/action/" to "Action",
@@ -58,7 +59,7 @@ class IndoxxiProvider : MainAPI() {
         }
 
         val document = request(url).document
-        val items = document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx, .archive-container article, .poster-container")
+        val items = document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx, .archive-container article")
         
         val homeItems = items.mapNotNull {
             it.toSearchResult()
@@ -96,7 +97,6 @@ class IndoxxiProvider : MainAPI() {
             
         if (title.isEmpty() || title.length < 2) return null
 
-        // Perbaikan komprehensif penarikan gambar poster
         val img = this.selectFirst("img")
         var rawImgUrl = img?.attr("data-src")
             ?.ifEmpty { null }
@@ -113,7 +113,7 @@ class IndoxxiProvider : MainAPI() {
         }
         val posterUrl = fixUrlNull(rawImgUrl)
 
-        val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/")
+        val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/anime/")
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -139,8 +139,11 @@ class IndoxxiProvider : MainAPI() {
         val document = request(url).document
 
         val title = document.selectFirst("h1.entry-title, h1.name, h1, .title")?.text()?.trim() ?: "INDOXXI"
-        var rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") 
-            ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src")
+        
+        // Memprioritaskan poster asli film ketimbang logo header website
+        var rawPoster = document.selectFirst("div.poster img, div.thumb img, img.wp-post-image, article img, .poster-container img")?.attr("data-src")
+            ?: document.selectFirst("div.poster img, div.thumb img, img.wp-post-image, article img, .poster-container img")?.attr("src")
+            ?: document.selectFirst("meta[property='og:image']")?.attr("content")
         
         if (rawPoster != null && rawPoster.startsWith("//")) {
             rawPoster = "https:$rawPoster"
@@ -148,20 +151,36 @@ class IndoxxiProvider : MainAPI() {
         val poster = fixUrlNull(rawPoster)
         val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description")?.text()?.trim()
 
-        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
+        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/anime/") || document.select("ul.episodios, div.list-episode, .eplister, .listeps, .eps-item, #episode_list").isNotEmpty()
 
         return if (isSeries) {
-            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item").mapNotNull { elem ->
-                val a = elem.selectFirst("a") ?: return@mapNotNull null
-                val epUrl = fixUrl(a.attr("href"))
-                val epName = a.text().trim()
-                val epNum = elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull()
-                
-                newEpisode(epUrl) {
-                    this.name = epName
-                    this.episode = epNum
+            val episodes = mutableListOf<Episode>()
+            val episodeElements = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item, #episode_list a, .episodiodiv a")
+            
+            if (episodeElements.isNotEmpty()) {
+                episodeElements.forEachIndexed { index, elem ->
+                    val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
+                    val epUrl = a?.attr("href")?.let { fixUrl(it) } ?: url
+                    val epName = a?.text()?.trim() ?: "Episode ${index + 1}"
+                    val epNum = elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: (index + 1)
+                    
+                    episodes.add(
+                        newEpisode(epUrl) {
+                            this.name = epName
+                            this.episode = epNum
+                        }
+                    )
                 }
+            } else {
+                // Fallback jika tidak ada daftar episode terpisah
+                episodes.add(
+                    newEpisode(url) {
+                        this.name = "Episode 1"
+                        this.episode = 1
+                    }
+                )
             }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
@@ -204,7 +223,7 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 3. Ekstraksi AJAX Player (WordPress/Gdriveplayer server player switcher)
+        // 3. Ekstraksi AJAX Player / Embed Alternatif
         val postData = document.selectFirst("input[name=id], input[id=post_id], #player-option-1")?.attr("value")
             ?: document.selectFirst("[data-post]")?.attr("data-post")
 

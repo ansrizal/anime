@@ -160,6 +160,7 @@ class SokujaProvider : MainAPI() {
                 if (cleanPath.contains("?")) "$base/$cleanPath&page=$page"
                 else "$base/$cleanPath/page/$page/"
             }
+        }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -192,9 +193,10 @@ class SokujaProvider : MainAPI() {
         )
     }
 
-        private fun Element.toSearchResult(isMovieHint: Boolean = false): SearchResponse? {
+    private fun Element.toSearchResult(isMovieHint: Boolean = false): SearchResponse? {
         val linkElement = if (tagName() == "a" && hasAttr("href")) this else selectFirst("a[href]")
         if (linkElement == null) return null
+        
         val href = fixUrl(linkElement.attr("href"))
 
         val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
@@ -212,6 +214,9 @@ class SokujaProvider : MainAPI() {
             return null
         }
 
+        // Detect if it's a single episode update from the homepage
+        // val isEpisode = href.contains("-episode-")
+        
         // Check for episode info to make it clear it's an update
         val epText = selectFirst(".epx, .ep, .episode, .text-gray-400")?.text()?.trim()
         if (!epText.isNullOrBlank() && (epText.contains("Episode", true) || epText.contains("EP ", true))) {
@@ -230,7 +235,7 @@ class SokujaProvider : MainAPI() {
         val posterUrl = fixImageUrl(rawImg)
         val type = if (isMovieHint || lowerTitle.contains("movie") || href.contains("movie")) TvType.AnimeMovie else TvType.Anime
 
-            return newAnimeSearchResponse(title, href, type) {
+        return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -243,28 +248,9 @@ class SokujaProvider : MainAPI() {
             "a.group.block", "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
             "article.bs", "div.animposx", "div.bs", "div.animepost"
         )
-        val items = mutableListOf<Element>()
-        for (sel in selectors) {
-            items.addAll(document.select(sel))
-        }
+        val items = document.select(selectors.joinToString(", "))
 
-        val finalItems = if (items.isEmpty()) {
-            document.select("a[href*='/anime/']")
-                .toList()
-                .filter { !it.attr("href").contains("/genre/") && !it.attr("href").contains("/page/") }
-                .mapNotNull { a ->
-                    var parent = a.parent()
-                    for (i in 0..5) {
-                        if (parent != null && parent.selectFirst("img") != null) {
-                            return@mapNotNull parent
-                        }
-                        parent = parent?.parent()
-                    }
-                    null
-                }
-        } else items
-
-        return finalItems.mapNotNull { it.toSearchResult() }
+        return items.mapNotNull { it.toSearchResult() }
             .groupBy { it.url }
             .map { (_, results) ->
                 results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
@@ -272,8 +258,8 @@ class SokujaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        var res = request(url)
-        var document = res.document
+        val res = request(url)
+        val document = res.document
         val isEpisodePage = !url.contains("/anime/")
 
         // Ambil ID dari script data untuk mirror API (Penting untuk Direct Play)
@@ -292,12 +278,16 @@ class SokujaProvider : MainAPI() {
         val description = document.selectFirst("p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
         if (isEpisodePage && pageId != null) {
-            // Jika ini halaman episode, kita buat LoadResponse yang isinya HANYA episode ini agar langsung bisa diputar
+            // [DIRECT PLAY FIX] Jika ini halaman episode, buat response series dengan 1 episode
+            // agar Cloudstream langsung menampilkan tombol play atau list berisi episode tersebut.
             val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+            
+            // Cari link ke halaman anime utamanya (Breadcrumb atau Info) sebagai cadangan
+            val mainAnimeLink = document.selectFirst("main a[href*='/anime/']:not([href*='type='])")?.attr("href")
 
             return newAnimeLoadResponse(title, url, TvType.Anime) {
                 this.posterUrl = poster
-                this.plot = description
+                this.plot = if (mainAnimeLink != null) "Info: Halaman ini adalah episode tunggal. Cari di Sokuja untuk daftar lengkap.\n\n$description" else description
                 addEpisodes(DubStatus.Subbed, listOf(newEpisode(url) {
                     this.name = title
                     this.episode = epNum
@@ -337,7 +327,8 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        val type = if (url.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
+        return newAnimeLoadResponse(title, url, type) {
             this.posterUrl = poster
             this.plot = description
             addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedByDescending { it.episode })
@@ -368,11 +359,11 @@ class SokujaProvider : MainAPI() {
 
         if (episodeId != null) {
             val mirrorRes = app.get("$mainUrl/api/video-mirrors?e=$episodeId", headers = defaultHeaders).parsedSafe<MirrorResponse>()
-
+            
             mirrorRes?.mirrors?.forEach { mirror ->
                 val url = mirror.embedUrl ?: return@forEach
                 val quality = mirror.quality?.filter { it.isDigit() }?.toIntOrNull() ?: Qualities.Unknown.value
-
+                
                 if (mirror.embedType == "mp4" || url.endsWith(".mp4")) {
                     callback(
                         newExtractorLink(

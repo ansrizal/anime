@@ -8,7 +8,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import java.net.URLDecoder
 
 class SokujaProvider : MainAPI() {
-    override var mainUrl = "https://x6.sokuja.uk"
+    override var mainUrl = "https://sokuja.net"
     override var name = "Sokuja Anime"
     override val hasMainPage = true
     override var lang = "id"
@@ -214,8 +214,9 @@ class SokujaProvider : MainAPI() {
             ?: img?.attr("data-lazy-src") ?: img?.attr("data-src")
             ?: img?.attr("srcset")?.split(",")?.firstOrNull()?.trim()?.split(" ")?.firstOrNull()
 
-        // Gunakan TvType.AnimeMovie untuk Update Terbaru (episode) dan Movie agar muncul tombol Play langsung
-        val type = if (isMovieHint || href.contains("-episode-") || title.lowercase().contains("movie") || href.contains("movie")) TvType.AnimeMovie else TvType.Anime
+        // PENTING: Gunakan TvType.Anime untuk Update Terbaru agar Cloudstream memicu fungsi load() 
+        // dan kita bisa melakukan redirect ke halaman series utama.
+        val type = if (isMovieHint || title.lowercase().contains("movie") || href.contains("movie")) TvType.AnimeMovie else TvType.Anime
 
         return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = fixImageUrl(rawImg)
@@ -235,37 +236,28 @@ class SokujaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = request(url).document
-        val isEpisodePage = url.contains("-episode-")
-        val isMovie = url.contains("movie")
+        var currentUrl = url
+        var res = request(currentUrl)
+        var document = res.document
+        
+        // [REDIRECT LOGIC] Jika ini halaman episode (Update Terbaru), cari link ke halaman series utama
+        if (currentUrl.contains("-episode-") && !currentUrl.contains("/anime/")) {
+            val seriesLink = document.selectFirst("main a[href*='/anime/']:not([href*='list-mode'])")?.attr("href")
+                ?: document.selectFirst(".breadcrumb a[href*='/anime/']")?.attr("href")
+            
+            if (seriesLink != null) {
+                currentUrl = fixUrl(seriesLink)
+                res = request(currentUrl)
+                document = res.document
+            }
+        }
 
         val rawData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
-        val pageId = Regex("""["']id["']:\s*(\d+)""").find(rawData)?.groupValues?.get(1)
-
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
         val description = document.selectFirst("p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // [DIRECT PLAY LOGIC] 
-        // Jika ini halaman episode (Update Terbaru) atau Movie, gunakan MovieLoadResponse agar muncul tombol Play langsung.
-        if (isMovie || (isEpisodePage && pageId != null)) {
-            val seriesLink = document.selectFirst("main a[href*='/anime/']:not([href*='list-mode'])")?.attr("href")
-            val seriesTitle = document.selectFirst(".breadcrumb a[href*='/anime/']")?.text() ?: "Halaman Series"
-
-            return newMovieLoadResponse(title, url, TvType.AnimeMovie, pageId ?: url) {
-                this.posterUrl = poster
-                this.plot = description
-                // Masukkan link Series ke rekomendasi agar tombol "kembali" ke series tersedia di bawah video
-                if (seriesLink != null) {
-                    this.recommendations = listOf(newAnimeSearchResponse(seriesTitle, fixUrl(seriesLink), TvType.Anime) {
-                        this.posterUrl = poster
-                    })
-                }
-            }
-        }
-
-        // Standard Anime Series Load (Halaman /anime/...)
         val episodes = mutableListOf<Episode>()
         Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
             .findAll(rawData).forEach { match ->
@@ -285,7 +277,9 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
+        
+        return newAnimeLoadResponse(title, currentUrl, type) {
             this.posterUrl = poster
             this.plot = description
             addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedByDescending { it.episode })

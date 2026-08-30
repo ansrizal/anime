@@ -23,7 +23,7 @@ class SokujaProvider : MainAPI() {
         return app.get(url, headers = defaultHeaders, timeout = 30)
     }
 
-    // [PERBAIKAN KATEGORI] - Daftar Genre Lengkap sesuai web
+    // Daftar Genre Lengkap Sesuai Web
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
         "anime/" to "Daftar Anime",
@@ -115,13 +115,12 @@ class SokujaProvider : MainAPI() {
         "genre/workplace/" to "Workplace"
     )
 
-    // [PERBAIKAN PAGINATION] - Update Terbaru memakai ?page=N
     private fun buildPageUrl(path: String, page: Int): String {
         val base = mainUrl.removeSuffix("/")
         val cleanPath = path.trim('/')
 
         return when {
-            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page" // Fix untuk Update Terbaru
+            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page"
             page <= 1 -> "$base/$cleanPath"
             else -> "$base/$cleanPath/page/$page/"
         }
@@ -134,16 +133,13 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
 
-        val potentialItems = mutableListOf<Element>()
         val selectors = listOf(
             "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
             "article.bs", "div.post-show article", "div.bxb article",
-            "div.swiper-slide", "div.animposx", "div.bs", "div.animepost",
-            "div.anime-list", "div.anime-item", "div.episodelist article",
-            "div.item", "div.anime-card", "div.card", "div.thumb-item",
-            "div.anime__item", "div.anime-card__inner"
+            "div.animposx", "div.bs", "div.animepost"
         )
 
+        val potentialItems = mutableListOf<Element>()
         for (sel in selectors) {
             val elements = document.select(sel)
             if (elements.isNotEmpty()) {
@@ -151,34 +147,7 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        val finalItems = if (potentialItems.isEmpty()) {
-            document.select("a[href*='/anime/']")
-                .toList()
-                .filter { a ->
-                    val href = a.attr("href")
-                    !href.contains("/genre/") && !href.contains("/category/") &&
-                    !href.contains("/page/") && !href.contains("/tag/") &&
-                    !href.contains("/bookmark/") && !href.contains("/jadwal-rilis/")
-                }
-                .mapNotNull { a ->
-                    var parent = a.parent()
-                    var container: Element? = a
-                    for (i in 0..5) {
-                        if (parent != null) {
-                            if (parent.selectFirst("img") != null || parent.hasClass("bsx") || parent.hasClass("item") || parent.hasClass("post")) {
-                                container = parent
-                                break
-                            }
-                            parent = parent.parent()
-                        }
-                    }
-                    container
-                }.distinctBy { it?.outerHtml() }.filterNotNull()
-        } else {
-            potentialItems
-        }
-
-        val homeItems = finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val homeItems = potentialItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
         return newHomePageResponse(
             HomePageList(name = request.name, list = homeItems),
@@ -188,7 +157,7 @@ class SokujaProvider : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         val linkElement = selectFirst("a[href]") ?: return null
-        var href = fixUrl(linkElement.attr("href"))
+        val href = fixUrl(linkElement.attr("href"))
 
         val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
         if (invalid.any { href.contains(it) }) return null
@@ -197,45 +166,28 @@ class SokujaProvider : MainAPI() {
         val title = selectFirst(".tt, h2, h3, h4, .title, .entry-title, .post-title, .ttname, .anime-title, .judul, .name, .item-title")
             ?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
-            ?: linkElement.text().trim().ifEmpty { null }
             ?: selectFirst("img")?.attr("alt")?.trim()
             ?: return null
 
         if (title.isEmpty()) return null
 
-        // [FILTER JUDUL MENU] - Mencegah "Daftar Anime" atau "Update Terbaru" terdeteksi sebagai judul anime
         val lowerTitle = title.lowercase()
-        if (lowerTitle == "daftar anime" || lowerTitle == "update terbaru" || lowerTitle == "action" || lowerTitle == "isekai" || lowerTitle.contains("genre")) {
+        if (lowerTitle == "daftar anime" || lowerTitle == "update terbaru" || lowerTitle.contains("genre")) {
             return null
         }
 
-        // [PERBAIKAN GAMBAR ABU-ABU] - Ambil dari data-original, data-lazy, dan background CSS
-        val img = selectFirst("img, div.thumb, .thumb, .poster")
-        var rawImg = img?.attr("data-original")
-            ?: img?.attr("data-lazy-src")
-            ?: img?.attr("data-lazy-srcset")?.substringBefore(" ")
-            ?: img?.attr("data-src")
-            ?: img?.attr("data-poster")
-            ?: img?.attr("src")
-            ?: img?.attr("srcset")?.substringBefore(" ")
-            ?: img?.selectFirst("img")?.attr("data-src")
-            ?: img?.selectFirst("img")?.attr("src")
+        // Fix Gambar Abu-abu: Pengecekan atribut gambar & CSS background secara mendalam
+        val imgEl = selectFirst("img")
+        var rawImg = imgEl?.attr("data-lazy-src")
+            ?.ifEmpty { imgEl.attr("data-src") }
+            ?.ifEmpty { imgEl.attr("data-original") }
+            ?.ifEmpty { imgEl.attr("src") }
             
-        if (rawImg.isNullOrBlank()) {
-            rawImg = img?.attr("style")?.let { style ->
-                Regex("""background-image:\s*url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
-            }
+        if (rawImg.isNullOrBlank() || rawImg.contains("data:image") || rawImg.contains("blank.gif")) {
+            val styleAttr = selectFirst(".thumb, .poster, .img, div[style*='background']")?.attr("style") ?: ""
+            rawImg = Regex("""url\(['"]?(.*?)['"]?\)""").find(styleAttr)?.groupValues?.get(1)
         }
 
-        if (rawImg != null && (rawImg.startsWith("data:") || rawImg.contains("placeholder") || rawImg.contains("default") || rawImg.contains("spacer") || rawImg.contains("blank"))) {
-            rawImg = null
-        }
-
-        rawImg = when {
-            rawImg.isNullOrBlank() -> null
-            rawImg.startsWith("//") -> "https:$rawImg"
-            else -> rawImg
-        }
         val posterUrl = fixUrlNull(rawImg)
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
@@ -247,124 +199,82 @@ class SokujaProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = request(searchUrl).document
 
-        val selectors = listOf(
-            "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.luf",
-            "article.bs", "div.animposx", "div.bs", "div.animepost"
-        )
+        val selectors = listOf("div.bsx", "div.listupd article", "article.bs", "div.animposx")
         val items = mutableListOf<Element>()
         for (sel in selectors) {
             items.addAll(document.select(sel))
         }
 
-        val finalItems = if (items.isEmpty()) {
-            document.select("a[href*='/anime/']")
-                .toList()
-                .filter { !it.attr("href").contains("/genre/") && !it.attr("href").contains("/page/") }
-                .mapNotNull { a ->
-                    var parent = a.parent()
-                    for (i in 0..5) {
-                        if (parent != null && parent.selectFirst("img") != null) {
-                            return@mapNotNull parent
-                        }
-                        parent = parent?.parent()
-                    }
-                    null
-                }.distinctBy { it.outerHtml() }
-        } else items
-
-        return finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        return items.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        val seriesLink = document.selectFirst(
-            "a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], " +
-            "div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a"
-        )?.attr("href")
-
+        val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/']")?.attr("href")
         val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {
-            val parentUrl = fixUrl(seriesLink)
-            if (parentUrl != url) request(parentUrl).document else document
+            request(fixUrl(seriesLink)).document
         } else {
             document
         }
 
-        val title = targetDoc.selectFirst("h1.entry-title, h1, .infotable h1, .post-title, .anime-title")?.text()
+        val title = targetDoc.selectFirst("h1.entry-title, h1, .post-title")?.text()
             ?.replace("Nonton Anime ", "")
             ?.replace("Subtitle Indonesia", "")
             ?.trim() ?: "Sokuja Anime"
 
-        var rawPoster = targetDoc.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-original")
-            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-src")
-            ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("src")
-        rawPoster = if (rawPoster?.startsWith("//") == true) "https:$rawPoster" else rawPoster
+        val imgEl = targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")
+        val rawPoster = targetDoc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: imgEl?.attr("data-lazy-src")
+            ?: imgEl?.attr("data-src")
+            ?: imgEl?.attr("src")
         val poster = fixUrlNull(rawPoster)
 
-        val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description], .deskripsi")?.text()?.trim()
+        val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        // [PERBAIKAN EPISODE] - Mencari semua container list episode dan fallback
         val episodes = mutableListOf<Episode>()
-        
-        val episodeContainer = targetDoc.selectFirst("div.eplister, div.listeps, div.eps, div.list-episode, div.episodelist, div.lstep, div.anime-episode")
-        
-        if (episodeContainer != null) {
-            episodeContainer.select("a[href]").forEachIndexed { index, a ->
+        val episodeElements = targetDoc.select("div.eplister ul li, div.listeps ul li, ul.clist li")
+
+        if (episodeElements.isNotEmpty()) {
+            episodeElements.forEach { li ->
+                val a = li.selectFirst("a") ?: return@forEach
                 val epUrl = fixUrl(a.attr("href"))
-                val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
                 
-                val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?: (index + 1)
+                val epNumText = li.selectFirst(".epl-num, .epl-sub")?.text() ?: a.text()
+                
+                // Fix Episode Ngawur: Mengabaikan kata waktu (hari/minggu lalu) dan hanya mengekstrak nomor episode
+                val epNum = Regex("""(?i)(?:episode|ep)\s*(\d+)""").find(epNumText)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""/episode-(\d+)""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: 1
+
+                val cleanName = "Episode $epNum"
 
                 episodes.add(newEpisode(epUrl) {
-                    this.name = epName
+                    this.name = cleanName
+                    this.episode = epNum
+                })
+            }
+        } else {
+            targetDoc.select("a[href*='/episode/'], a[href*='episode-']").forEach { a ->
+                val epUrl = fixUrl(a.attr("href"))
+                val epNum = Regex("""(?i)(?:episode|ep)\s*(\d+)""").find(a.text())?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""/episode-(\d+)""").find(epUrl)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: 1
+
+                episodes.add(newEpisode(epUrl) {
+                    this.name = "Episode $epNum"
                     this.episode = epNum
                 })
             }
         }
 
-        if (episodes.isEmpty()) {
-            targetDoc.select("a[href*='/episode/'], a[href*='/watch/'], a[href*='/stream/'], a[href*='episode-']")
-                .forEachIndexed { index, a ->
-                    val epUrl = fixUrl(a.attr("href"))
-                    val epName = a.text().trim().ifEmpty { "Episode ${index + 1}" }
-                    
-                    val epNum = Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        ?: Regex("""episode-(\d+)""").find(epUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        ?: (index + 1)
-
-                    episodes.add(newEpisode(epUrl) {
-                        this.name = epName
-                        this.episode = epNum
-                    })
-                }
-        }
-
-        if (episodes.isEmpty()) {
-            val watchLink = targetDoc.selectFirst("a[href*='/episode/'], a[href*='/stream/'], a[href*='/watch/']")
-            if (watchLink != null) {
-                episodes.add(
-                    newEpisode(fixUrl(watchLink.attr("href"))) {
-                        this.name = "Episode 1"
-                        this.episode = 1
-                    }
-                )
-            } else {
-                episodes.add(
-                    newEpisode(url) {
-                        this.name = title
-                        this.episode = 1
-                    }
-                )
-            }
-        }
+        // Urutkan episode dari Episode 1 ke paling atas
+        val sortedEpisodes = episodes.distinctBy { it.data }.sortedBy { it.episode }
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.data }.reversed())
+            addEpisodes(DubStatus.Subbed, sortedEpisodes)
         }
     }
 
@@ -376,44 +286,43 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // Cari IFRAME dan EMBED
-        document.select("iframe, iframe[data-src], embed, embed[data-src]").forEach { iframe ->
-            var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
-            if (src.startsWith("//")) src = "https:$src"
+        val sources = mutableListOf<String>()
 
-            if (src.isNotBlank() && !src.contains("facebook") && !src.contains("disqus")) {
-                loadExtractor(src, subtitleCallback, callback)
-            }
+        // 1. Keruk Iframe dan Embed
+        document.select("iframe[src], iframe[data-src], embed[src]").forEach { element ->
+            val src = element.attr("src").ifBlank { element.attr("data-src") }
+            if (src.isNotBlank()) sources.add(src)
         }
 
-        // [PERBAIKAN PLAYER] - Memperbaiki penanganan String? (nullable)
-        val serverOptions = document.select(
-            "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], div.player, div.video-player, [data-links], [data-em], [data-index], [data-src], [onclick]"
-        )
+        // 2. Keruk elemen option pemutar/mirror
+        document.select("select.mirror option, div.mirror-stream option, ul.mserver li a, div.server a").forEach { element ->
+            val value = element.attr("value")
+                .ifBlank { element.attr("data-em") }
+                .ifBlank { element.attr("data-src") }
+                .ifBlank { element.attr("href") }
 
-        for (option in serverOptions) {
-            val onclickAttr = option.attr("onclick")
-            val extractedOnclick = if (onclickAttr.isNotBlank()) {
-                Regex("""['"](.*?)['"]""").find(onclickAttr)?.groupValues?.getOrNull(1)
-            } else null
+            if (value.isNotBlank()) sources.add(value)
+        }
 
-            val embedUrl: String? = option.attr("value").ifBlank { null }
-                ?: option.attr("data-em").ifBlank { null }
-                ?: option.attr("data-links").ifBlank { null }
-                ?: option.attr("data-index").ifBlank { null }
-                ?: option.attr("href").ifBlank { null }
-                ?: option.attr("src").ifBlank { null }
-                ?: extractedOnclick
-
-            val cleanUrl = when {
-                embedUrl.isNullOrBlank() -> null
-                embedUrl.startsWith("//") -> "https:$embedUrl"
-                embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
-                embedUrl.startsWith("http") -> embedUrl
-                else -> null
+        // 3. Ekstrak link pemutar video asli
+        sources.distinct().forEach { rawUrl ->
+            var cleanUrl = when {
+                rawUrl.startsWith("//") -> "https:$rawUrl"
+                rawUrl.startsWith("/") -> "$mainUrl$rawUrl"
+                else -> rawUrl
             }
 
-            if (cleanUrl != null && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
+            if (cleanUrl.contains(mainUrl) && (cleanUrl.contains("/embed") || cleanUrl.contains("/player") || cleanUrl.contains("option="))) {
+                try {
+                    val embedDoc = request(cleanUrl).document
+                    val innerIframe = embedDoc.selectFirst("iframe[src]")?.attr("src")
+                    if (!innerIframe.isNullOrBlank()) {
+                        cleanUrl = if (innerIframe.startsWith("//")) "https:$innerIframe" else innerIframe
+                    }
+                } catch (_: Exception) {}
+            }
+
+            if (cleanUrl.startsWith("http") && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
                 loadExtractor(cleanUrl, subtitleCallback, callback)
             }
         }

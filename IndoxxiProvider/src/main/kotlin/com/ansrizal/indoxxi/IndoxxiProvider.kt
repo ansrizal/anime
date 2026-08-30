@@ -94,7 +94,6 @@ class IndoxxiProvider : MainAPI() {
             
         if (title.isEmpty() || title.length < 2) return null
 
-        // Perbaikan ekstraksi poster agar menangkap berbagai variasi atribut lazy load
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
             img?.attr("data-src")
@@ -152,7 +151,7 @@ class IndoxxiProvider : MainAPI() {
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.plot = description`
+                this.plot = description
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -170,7 +169,6 @@ class IndoxxiProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Ekstraksi iframe standar & atribut tersembunyi
         val iframes = document.select("iframe")
         for (iframe in iframes) {
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
@@ -180,7 +178,6 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 2. Ekstraksi tombol pilihan server player/mirror
         val playerElements = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http'], .bonnette, [data-link]")
         for (elem in playerElements) {
             val serverSrc = elem.selectFirst("a")?.attr("href") 
@@ -194,7 +191,6 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 3. Ekstraksi langsung dari tag <video> HTML5
         val videoSources = document.select("video source, video")
         for (video in videoSources) {
             val videoUrl = video.attr("src")

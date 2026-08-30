@@ -168,9 +168,6 @@ class AnimeSailProvider : MainAPI() {
                 th.contains("genre") || th.contains("genres") -> {
                     tags.addAll(td.split(",").map { it.trim() }.filter { it.isNotEmpty() })
                 }
-                th.contains("durasi") || th.contains("duration") -> {
-                    // Duration can be parsed here if needed
-                }
             }
         }
 
@@ -244,14 +241,38 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
-            document.select(".mobius > .mirror > option, select.mirror option").forEach { element ->
+            val options = document.select(".mobius > .mirror > option, select.mirror option")
+            
+            if (options.isEmpty()) {
+                // Try to find iframe directly in the page
+                val iframe = document.selectFirst("iframe[src]")?.attr("src")
+                if (!iframe.isNullOrBlank()) {
+                    val fixedIframe = fixUrl(iframe)
+                    if (fixedIframe.endsWith(".mp4") || fixedIframe.endsWith(".m3u8")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = name,
+                                url = fixedIframe,
+                                type = if (fixedIframe.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+                }
+                return true
+            }
+            
+            for (element in options) {
                 val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) return@forEach
+                if (encodedData.isBlank()) continue
 
                 try {
                     val decoded = base64Decode(encodedData)
                     val iframe = fixUrl(Jsoup.parse(decoded).select("iframe").attr("src"))
-                    if (iframe.isBlank() || iframe.contains("statistic")) return@forEach
+                    if (iframe.isBlank() || iframe.contains("statistic")) continue
 
                     val rawText = element.text().trim()
                     val quality = getIndexQuality(rawText)
@@ -272,20 +293,29 @@ class AnimeSailProvider : MainAPI() {
                             }
                         )
                     } else {
-                        // Handle other iframe types
-                        loadExtractor(iframe, data, subtitleCallback) { link ->
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = link.source,
-                                    name = "$serverName - ${link.name}",
-                                    url = link.url,
-                                    type = link.type
-                                ) {
-                                    this.referer = link.referer
-                                    this.quality = link.quality ?: quality
-                                    this.headers = link.headers
-                                }
-                            )
+                        // For non-direct links, try to extract from the iframe
+                        try {
+                            val iframeContent = request(iframe, ref = data).document
+                            val directLink = iframeContent.selectFirst("video source")?.attr("src")
+                                ?: iframeContent.selectFirst("video")?.attr("src")
+                                ?: iframeContent.selectFirst("iframe[src*='.mp4'], iframe[src*='.m3u8']")?.attr("src")
+                            
+                            if (!directLink.isNullOrBlank()) {
+                                val fixedLink = fixUrl(directLink)
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = serverName,
+                                        name = serverName,
+                                        url = fixedLink,
+                                        type = if (fixedLink.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = iframe
+                                        this.quality = quality
+                                    }
+                                )
+                            }
+                        } catch (e: Exception) {
+                            println("AnimeSail: Error extracting from iframe: ${e.message}")
                         }
                     }
                 } catch (e: Exception) {

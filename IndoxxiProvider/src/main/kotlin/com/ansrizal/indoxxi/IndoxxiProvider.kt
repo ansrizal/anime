@@ -18,8 +18,7 @@ class IndoxxiProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Referer" to "$mainUrl/",
-        "X-Requested-With" to "XMLHttpRequest"
+        "Referer" to "$mainUrl/"
     )
 
     private suspend fun request(url: String): NiceResponse {
@@ -101,11 +100,8 @@ class IndoxxiProvider : MainAPI() {
         var rawImgUrl = img?.attr("data-src")
             ?.ifEmpty { null }
             ?: img?.attr("data-lazy-src")
-            ?.ifEmpty { null }
             ?: img?.attr("data-original")
-            ?.ifEmpty { null }
             ?: img?.attr("srcset")?.substringBefore(" ")
-            ?.ifEmpty { null }
             ?: img?.attr("src")
 
         if (rawImgUrl != null && rawImgUrl.startsWith("//")) {
@@ -138,16 +134,16 @@ class IndoxxiProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        val title = document.selectFirst("h1.entry-title, h1.name, h1, .title")?.text()?.trim() ?: "INDOXXI"
+        val title = document.selectFirst("h1.entry-title, h1.name, h1, .title, header h1")?.text()?.trim() ?: "INDOXXI"
         
-        // Pemindaian gambar detail: Mencakup Open Graph metadata, tag img, dan inline style background
+        // Ekstraksi poster lengkap dengan fallback multi-selector
         var rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content")
             ?: document.selectFirst("meta[name='twitter:image']")?.attr("content")
-            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img")?.attr("data-src")
-            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img")?.attr("src")
+            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img, .content-poster img")?.attr("data-src")
+            ?: document.selectFirst(".poster img, .thumb img, img.wp-post-image, article img, .poster-container img, .mobile-poster img, .g-item img, .content-poster img")?.attr("src")
 
         if (rawPoster.isNullOrEmpty()) {
-            val styleAttr = document.selectFirst(".poster, .thumb, .cover, .backdrop, #cover")?.attr("style")
+            val styleAttr = document.selectFirst(".poster, .thumb, .cover, .backdrop, #cover, .poster-wrapper")?.attr("style")
             if (!styleAttr.isNullOrEmpty() && styleAttr.contains("url(")) {
                 rawPoster = styleAttr.substringAfter("url(").substringBefore(")").replace("'", "").replace("\"", "")
             }
@@ -157,22 +153,22 @@ class IndoxxiProvider : MainAPI() {
             rawPoster = "https:$rawPoster"
         }
         val poster = fixUrlNull(rawPoster)
-        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .plot")?.text()?.trim()
+        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .plot, .entry-content p")?.text()?.trim()
 
-        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/anime/") || document.select("ul.episodios, div.list-episode, .eplister, .listeps, .eps-item, #episode_list, .epsdiv, #episodes").isNotEmpty()
+        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/anime/") || document.select("ul.episodios, div.list-episode, .eplister, .listeps, .eps-item, #episode_list, .epsdiv, #episodes, .les-content, .bxcl").isNotEmpty()
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
             
-            // 1. Pemindaian episode berbasis struktur HTML alternatif (Gdriveplayer / LK21 themes)
-            val episodeElements = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item, #episode_list a, .episodiodiv a, .epsdiv a, div.episodelist a, #episodes a, div.season-list a")
+            // Mencari seluruh episode dari list HTML bawaan tema (Dooplay/Muvi/LK21)
+            val episodeElements = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item, #episode_list a, .episodiodiv a, .epsdiv a, div.episodelist a, #episodes a, div.season-list a, .les-content a, .les-list a")
             
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEachIndexed { index, elem ->
                     val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                     val epUrl = a?.attr("href")?.let { fixUrl(it) } ?: url
-                    val epName = a?.text()?.trim()?.ifEmpty { null } ?: "Episode ${index + 1}"
-                    val epNum = elem.selectFirst(".numerando, .epl-num, .eps, .epnum")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: (index + 1)
+                    val epName = a?.text()?.trim()?.ifEmpty { null } ?: elem.selectFirst(".epl-title, .title, .lex-title")?.text()?.trim() ?: "Episode ${index + 1}"
+                    val epNum = elem.selectFirst(".numerando, .epl-num, .eps, .epnum, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull() ?: (index + 1)
                     
                     episodes.add(
                         newEpisode(epUrl) {
@@ -182,13 +178,13 @@ class IndoxxiProvider : MainAPI() {
                     )
                 }
             } else {
-                // 2. Pemindaian episode berbasis permintaan AJAX & REST API (wp-json)
+                // Ekstraksi AJAX alternatif jika episode disembunyikan dalam tab season
                 val postId = document.selectFirst("input[name=id], input[id=post_id], #post_ID, input[name=post_id]")?.attr("value")
                     ?: document.selectFirst("[data-id]")?.attr("data-id")
                     ?: document.selectFirst("[data-post]")?.attr("data-post")
 
                 if (!postId.isNullOrEmpty()) {
-                    val ajaxActions = listOf("get_episodes", "load_episodes", "get_episodes_list", "fetch_episodes")
+                    val ajaxActions = listOf("get_episodes", "load_episodes", "get_episodes_list", "fetch_episodes", "muvi_episodes")
                     for (actionName in ajaxActions) {
                         try {
                             val ajaxRes = app.post(
@@ -216,7 +212,6 @@ class IndoxxiProvider : MainAPI() {
                 }
             }
 
-            // Standard fallback apabila daftar episode memang berupa single-page player
             if (episodes.isEmpty()) {
                 episodes.add(
                     newEpisode(url) {
@@ -226,7 +221,7 @@ class IndoxxiProvider : MainAPI() {
                 )
             }
 
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes.distinctBy { it.data }) {
                 this.posterUrl = poster
                 this.plot = description
             }
@@ -247,18 +242,18 @@ class IndoxxiProvider : MainAPI() {
         val res = request(data)
         val document = res.document
 
-        // 1. Ekstraksi iframe baku dan atribut pendukungnya
-        val iframes = document.select("iframe")
+        // 1. Ekstraksi iframe & atribut alternatifnya (data-src, data-player, src)
+        val iframes = document.select("iframe, iframe[data-src], iframe[data-lazy-src]")
         for (iframe in iframes) {
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }.ifBlank { iframe.attr("data-lazy-src") }
             if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
+            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com") && !src.contains("disqus.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
 
-        // 2. Ekstraksi dari Opsi Player / Mirror Server Tab (data-type, data-post, data-numpost)
-        val playerTabs = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http'], .bonnette, [data-link], [data-embed], [data-url], .server-item")
+        // 2. Ekstraksi tombol/tab server (embed / stream link)
+        val playerTabs = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http'], .bonnette, [data-link], [data-embed], [data-url], .server-item, .embed-selector a, #player-option-1")
         for (elem in playerTabs) {
             val serverSrc = elem.selectFirst("a")?.attr("href") 
                 ?: elem.attr("data-src") 
@@ -277,25 +272,25 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 3. Scan JavaScriptRegex untuk penanganan pemutar berbasis Base64 / Encrypted Embed
+        // 3. Scan regex script JS untuk mendeteksi URL iframe/player yang di-render secara dinamis
         val scriptContent = document.select("script").joinToString("\n") { it.data() }
-        val embeddedUrls = Regex("""(?:iframe|src|file|link)\s*[:=]\s*["']([^"']+)["']""").findAll(scriptContent)
+        val embeddedUrls = Regex("""(?:iframe|src|file|link|embed)\s*[:=]\s*["']([^"']+)["']""").findAll(scriptContent)
         for (match in embeddedUrls) {
             var extractedUrl = match.groupValues[1]
             if (extractedUrl.startsWith("//")) extractedUrl = "https:$extractedUrl"
-            if (extractedUrl.startsWith("http") && !extractedUrl.contains("facebook") && !extractedUrl.contains("google")) {
+            if (extractedUrl.startsWith("http") && !extractedUrl.contains("facebook") && !extractedUrl.contains("google") && !extractedUrl.contains("schema.org")) {
                 loadExtractor(extractedUrl, subtitleCallback, callback)
             }
         }
 
-        // 4. Penanganan AJAX Player Multifungsi (Admin AJAX)
+        // 4. Pengecekan AJAX Player khusus untuk CMS streaming WordPress
         val postId = document.selectFirst("input[name=id], input[id=post_id], #post_ID, input[name=post_id]")?.attr("value")
             ?: document.selectFirst("[data-id]")?.attr("data-id")
             ?: document.selectFirst("[data-post]")?.attr("data-post")
 
         if (!postId.isNullOrEmpty()) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-            val actions = listOf("player_ajax", "gdriveplayer_ajax", "get_player", "ajax_player", "select_server")
+            val actions = listOf("player_ajax", "gdriveplayer_ajax", "get_player", "ajax_player", "select_server", "doo_player_ajax")
             
             for (actionName in actions) {
                 try {
@@ -305,8 +300,9 @@ class IndoxxiProvider : MainAPI() {
                         data = mapOf("action" to actionName, "post" to postId, "id" to postId, "type" to "movie")
                     ).text
 
-                    val parsedIframe = Jsoup.parse(ajaxRes).selectFirst("iframe")?.attr("src")
-                        ?: Jsoup.parse(ajaxRes).selectFirst("iframe")?.attr("data-src")
+                    val docAjax = Jsoup.parse(ajaxRes)
+                    val parsedIframe = docAjax.selectFirst("iframe")?.attr("src")
+                        ?: docAjax.selectFirst("iframe")?.attr("data-src")
 
                     if (!parsedIframe.isNullOrEmpty()) {
                         var cleanUrl = parsedIframe

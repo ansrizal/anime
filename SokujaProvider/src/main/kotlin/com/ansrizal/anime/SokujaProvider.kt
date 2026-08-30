@@ -34,72 +34,75 @@ class SokujaProvider : MainAPI() {
         "genre/isekai/" to "Isekai Anime"
     )
 
+    // Helper untuk membangun URL halaman dengan paginasi yang benar
+    private fun buildPageUrl(path: String, page: Int): String {
+        val base = mainUrl.removeSuffix("/")
+        return when {
+            page <= 1 -> if (path.isEmpty()) base else "$base/$path"
+            path.isEmpty() -> "$base/page/$page/"
+            path.contains("?") -> {
+                val (basePath, query) = path.split("?", limit = 2)
+                "$base/${basePath.removeSuffix("/")}/page/$page/?$query"
+            }
+            else -> "$base/${path.removeSuffix("/")}/page/$page/"
+        }
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data
-        val url = if (page <= 1) {
-            if (path.isEmpty()) "$mainUrl/" else "$mainUrl/$path"
-        } else {
-            if (path.isEmpty()) {
-                "$mainUrl/page/$page/"
-            } else if (path.contains("?")) {
-                val base = path.substringBefore("?")
-                val query = path.substringAfter("?")
-                "$mainUrl/${base.removeSuffix("/")}/page/$page/?$query"
-            } else {
-                "$mainUrl/${path.removeSuffix("/")}/page/$page/"
-            }
-        }
+        val url = buildPageUrl(path, page)
 
         val res = request(url)
         val document = res.document
 
-        // Mengambil seluruh elemen poster anime di halaman beranda & daftar Sokuja
-        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs, div.animposx, div.swiper-slide")
+        // Selector utama + fallback
+        val items = document.select(
+            "div.bsx, div.listupd article, div.utao, div.uta, div.luf, " +
+            "article.bs, div.post-show article, div.bxb article, div.swiper-slide"
+        )
 
-        val homeItems = items.mapNotNull {
-            it.toSearchResult()
-        }.distinctBy { it.url }
+        // Jika kosong, coba selector lain (beberapa tema pakai div.animposx)
+        val finalItems = if (items.isEmpty()) {
+            document.select("div.animposx, div.bs, div.bsx")
+        } else items
 
-        // Format pengembalian resmi Cloudstream untuk single section pada request.data
+        val homeItems = finalItems.mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+
         return newHomePageResponse(
-            HomePageList(
-                name = request.name,
-                list = homeItems
-            ),
+            HomePageList(name = request.name, list = homeItems),
             hasNext = homeItems.isNotEmpty()
         )
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val linkElement = this.selectFirst("a[href]") ?: return null
-        val href = fixUrl(linkElement.attr("href"))
-        
-        val cleanMain = mainUrl.removeSuffix("/")
-        val cleanHref = href.removeSuffix("/")
-        
-        if (cleanHref == cleanMain || 
-            href.contains("/genre/") || 
-            href.contains("/category/") || 
-            href.contains("/page/") ||
-            href.contains("/bookmark/") ||
-            href.contains("/jadwal-rilis/")) return null
+        val linkElement = selectFirst("a[href]") ?: return null
+        var href = fixUrl(linkElement.attr("href"))
 
-        val title = this.selectFirst(".tt, h2, h3, h4, .title, .entry-title, .luf h4, .post-title, .ttname")?.text()?.trim()
+        // Filter halaman yang tidak valid
+        val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
+        if (invalid.any { href.contains(it) }) return null
+        if (href.removeSuffix("/") == mainUrl.removeSuffix("/")) return null
+
+        // Ambil judul dari berbagai kemungkinan
+        val title = selectFirst(".tt, h2, h3, h4, .title, .entry-title, .post-title, .ttname, .anime-title")
+            ?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
-            ?: this.selectFirst("img")?.attr("alt")?.trim()
+            ?: selectFirst("img")?.attr("alt")?.trim()
             ?: return null
 
         if (title.isEmpty()) return null
 
-        val img = this.selectFirst("img")
+        // Ambil gambar
+        val img = selectFirst("img")
         var rawImg = img?.attr("data-src")
-            ?.ifEmpty { null }
             ?: img?.attr("data-lazy-src")
             ?: img?.attr("src")
             ?: img?.attr("srcset")?.substringBefore(" ")
 
-        if (rawImg != null && rawImg.startsWith("//")) {
-            rawImg = "https:$rawImg"
+        rawImg = when {
+            rawImg.isNullOrBlank() -> null
+            rawImg.startsWith("//") -> "https:$rawImg"
+            else -> rawImg
         }
         val posterUrl = fixUrlNull(rawImg)
 
@@ -109,19 +112,23 @@ class SokujaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/?s=$query"
+        val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, div.post-show article, div.bxb article, div.utao, div.uta, div.luf, article.bs").mapNotNull {
-            it.toSearchResult()
-        }.distinctBy { it.url }
+        return document.select("div.bsx, div.listupd article, div.utao, div.uta, div.luf, article.bs, div.animposx")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
-        
+        // Coba cari link ke halaman daftar episode (jika di halaman detail tidak ada)
+        val seriesLink = document.selectFirst(
+            "a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], " +
+            "div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a"
+        )?.attr("href")
+
         val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {
             val parentUrl = fixUrl(seriesLink)
             if (parentUrl != url) request(parentUrl).document else document
@@ -133,27 +140,33 @@ class SokujaProvider : MainAPI() {
             ?.replace("Nonton Anime ", "")
             ?.replace("Subtitle Indonesia", "")
             ?.trim() ?: "Sokuja Anime"
-        
+
         var rawPoster = targetDoc.selectFirst("meta[property='og:image']")?.attr("content")
             ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("data-src")
             ?: targetDoc.selectFirst("div.fotoanime img, div.thumb img, .poster img")?.attr("src")
-
-        if (rawPoster != null && rawPoster.startsWith("//")) {
-            rawPoster = "https:$rawPoster"
-        }
+        rawPoster = if (rawPoster?.startsWith("//") == true) "https:$rawPoster" else rawPoster
         val poster = fixUrlNull(rawPoster)
+
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        val episodeElements = targetDoc.select("div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li, ul.clnew li, div.epsother article, div.epslist li")
-        
+        // Ambil daftar episode
+        val episodeElements = targetDoc.select(
+            "div.eplister li, div.listeps li, .eplister ul li, " +
+            "div.list-episode li, div.lsteps ul li, ul.clnew li, " +
+            "div.epsother article, div.epslist li"
+        )
+
         val episodes = mutableListOf<Episode>()
-        
+
         if (episodeElements.isNotEmpty()) {
             episodeElements.forEachIndexed { index, elem ->
                 val a = elem.selectFirst("a") ?: return@forEachIndexed
                 val epUrl = fixUrl(a.attr("href"))
-                val epName = a.text().trim().ifEmpty { elem.selectFirst(".title, .epl-title")?.text()?.trim() ?: "Episode ${index + 1}" }
-                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                val epName = a.text().trim().ifEmpty {
+                    elem.selectFirst(".title, .epl-title")?.text()?.trim() ?: "Episode ${index + 1}"
+                }
+                val epNum = elem.selectFirst("span.epstitle, .epl-num, .eps, .epl-zero")?.text()
+                    ?.filter { it.isDigit() }?.toIntOrNull()
                     ?: Regex("""Episode\s?(\d+)""").find(epName)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?: (index + 1)
 
@@ -166,6 +179,7 @@ class SokujaProvider : MainAPI() {
             }
         }
 
+        // Jika tidak ada episode, tambahkan satu episode dari URL saat ini
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(url) {
@@ -178,10 +192,7 @@ class SokujaProvider : MainAPI() {
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(
-                DubStatus.Subbed,
-                episodes.distinctBy { it.data }.reversed()
-            )
+            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.data }.reversed())
         }
     }
 

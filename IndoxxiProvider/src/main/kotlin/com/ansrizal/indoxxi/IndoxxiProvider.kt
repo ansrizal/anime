@@ -57,7 +57,6 @@ class IndoxxiProvider : MainAPI() {
 
         val document = request(url).document
         
-        // Selector khusus struktur HTML Indoxxi/Gdriveplayer/WordPress
         val items = document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx, .archive-container article")
         
         val homeItems = items.mapNotNull {
@@ -82,7 +81,6 @@ class IndoxxiProvider : MainAPI() {
         val cleanMainUrl = mainUrl.removeSuffix("/")
         val cleanHref = href.removeSuffix("/")
         
-        // Filter agar URL navigasi/halaman utama tidak ikut terambil sebagai film
         if (cleanHref == cleanMainUrl || 
             href.contains("/genre/") || 
             href.contains("/category/") || 
@@ -171,7 +169,7 @@ class IndoxxiProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Cari iframe langsung dari halaman film
+        // 1. Ekstraksi iframe standar
         val iframes = document.select("iframe")
         for (iframe in iframes) {
             var src = iframe.attr("src")
@@ -181,7 +179,7 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 2. Cari dari opsi server/player embed (data-post, data-type, data-n, ataulink player)
+        // 2. Ekstraksi dari opsi server/player embed
         val playerElements = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http']")
         for (elem in playerElements) {
             val serverSrc = elem.selectFirst("a")?.attr("href") 
@@ -194,19 +192,21 @@ class IndoxxiProvider : MainAPI() {
             }
         }
 
-        // 3. Ekstraksi langsung dari tag <video> atau <source> jika embed menggunakan HTML5 Native
+        // 3. Ekstraksi tag <video> atau <source> menggunakan newExtractorLink
         val videoSources = document.select("video source, video")
         for (video in videoSources) {
             val videoUrl = video.attr("src")
             if (videoUrl.isNotBlank()) {
                 callback.invoke(
-                    ExtractorLink(
-                        name,
-                        name,
-                        fixUrl(videoUrl),
-                        referer = mainUrl,
-                        quality = Qualities.Unknown.value
-                    )
+                    newExtractorLink(
+                        name = name,
+                        source = name,
+                        url = fixUrl(videoUrl),
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         }

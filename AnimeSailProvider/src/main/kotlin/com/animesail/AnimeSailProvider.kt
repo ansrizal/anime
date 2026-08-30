@@ -7,8 +7,10 @@ import com.lagradost.nicehttp.*
 import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
 
 class AnimeSailProvider : MainAPI() {
+    // Gunakan domain asli. Jika terkena Cloudflare, gunakan tombol "Solve Cloudflare" di Cloudstream.
     override var mainUrl = "https://v1.animesail.xyz"
     override var name = "AnimeSail"
     override val hasMainPage = true
@@ -28,8 +30,10 @@ class AnimeSailProvider : MainAPI() {
             url,
             interceptor = turnstileInterceptor,
             headers = mapOf(
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Referer" to "$mainUrl/"
+            ),
             referer = ref
         )
     }
@@ -51,18 +55,20 @@ class AnimeSailProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = request(url).document
-        val home = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
+        val items = document.select("div.listupd article, article.bs, article.bsz").mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
         
-        return newHomePageResponse(request.name, home)
+        return newHomePageResponse(request.name, items)
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {
         val a = this.selectFirst("a") ?: return null
         val href = fixUrl(a.attr("href"))
 
-        val rawTitle = this.selectFirst(".tt > h2, h2, h3, .title, a[title]")?.text()
+        if (href.contains("/genre/") || href.contains("/page/") || href == "$mainUrl/") return null
+
+        val rawTitle = this.selectFirst(".tt h2, h2, h3, .title")?.text()
             ?: a.attr("title")
             ?: return null
 
@@ -80,9 +86,10 @@ class AnimeSailProvider : MainAPI() {
             ?: img?.attr("src")
         )
 
-        val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val typeText = this.selectFirst(".tt > span, .typez, span.type")?.text() ?: ""
         val type = if (typeText.contains("Movie", ignoreCase = true) || href.contains("/movie/")) TvType.AnimeMovie else TvType.Anime
+
+        val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
@@ -94,7 +101,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = request(link).document
 
-        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").mapNotNull {
+        return document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item").mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
     }
@@ -104,7 +111,6 @@ class AnimeSailProvider : MainAPI() {
         var res = request(currentUrl)
         var document = res.document
         
-        // Auto-redirect from Episode page to Anime page for "Update Terbaru"
         if (!currentUrl.contains("/anime/")) {
             val seriesLink = document.selectFirst(".breadcrumb a[href*='/anime/'], .series-all a[href*='/anime/'], .info-content a[href*='/anime/'], a[href*='/anime/']:has(h1)")?.attr("href")
             if (seriesLink != null) {
@@ -122,11 +128,12 @@ class AnimeSailProvider : MainAPI() {
         val poster = fixImageUrl(document.selectFirst(".thumb img, .entry-content img, meta[property='og:image']")?.attr("src") ?: document.selectFirst("img[alt*='$title']")?.attr("src"))
         
         val typeText = document.select("tbody th:contains(Tipe), .info-content span:contains(Type)").next().text().lowercase()
-        val type = if (typeText.contains("movie")) TvType.AnimeMovie else TvType.Anime
+        val type = if (typeText.contains("movie") || currentUrl.contains("/movie/")) TvType.AnimeMovie else TvType.Anime
+        
         val year = document.select("tbody th:contains(Dirilis), .info-content span:contains(Released)").next().text().trim().toIntOrNull()
         val statusText = document.select("tbody th:contains(Status), .info-content span:contains(Status)").next().text().trim()
-        val plotText = document.selectFirst("div.entry-content p, .desc, .sinopsis")?.text()
-        val tagsList = document.select("tbody th:contains(Genre), .info-content .genx a").select("a").map { it.text() }
+        val plotText = document.selectFirst("div.entry-content p, .desc, .sinopsis, div[itemprop='description'] p")?.text()
+        val tagsList = document.select("tbody th:contains(Genre), .info-content .genx a, .genx a").map { it.text() }
         val durationText = document.select("tbody th:contains(Durasi), .info-content span:contains(Duration)").next().text().trim()
 
         val episodes = document.select("ul.daftar > li, .eplist ul li").mapNotNull {
@@ -145,7 +152,7 @@ class AnimeSailProvider : MainAPI() {
                 this.name = name
                 this.episode = episodeNum
             }
-        }.distinctBy { it.name }.sortedByDescending { it.episode }
+        }.distinctBy { it.data }.sortedByDescending { it.episode }
 
         return newAnimeLoadResponse(title, currentUrl, type) {
             this.posterUrl = poster
@@ -187,22 +194,24 @@ class AnimeSailProvider : MainAPI() {
                     if (it.isLowerCase()) it.titlecase() else it.toString()
                 } ?: name
 
+                val type = if (iframe.endsWith(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                
                 if (iframe.endsWith(".mp4", ignoreCase = true) || iframe.endsWith(".m3u8", ignoreCase = true)) {
                     callback.invoke(
                         newExtractorLink(
                             source = serverName,
                             name = serverName,
                             url = iframe,
-                            type = if (iframe.endsWith(".m3u8", ignoreCase = true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            type = type
                         ) {
-                            referer = mainUrl
+                            this.referer = mainUrl
                             this.quality = quality
                         }
                     )
                 } else if (iframe.contains("${playerPath}popup")) {
                     val encodedUrl = iframe.substringAfter("url=").substringBefore("&")
                     if (encodedUrl.isNotBlank()) {
-                        val realUrl = java.net.URLDecoder.decode(encodedUrl, "UTF-8")
+                        val realUrl = URLDecoder.decode(encodedUrl, "UTF-8")
                         loadFixedExtractor(realUrl, serverName, quality, mainUrl, subtitleCallback, callback)
                     }
                 } else if (iframe.contains("${playerPath}framezilla") || iframe.contains("uservideo.xyz")) {
@@ -262,9 +271,9 @@ class AnimeSailProvider : MainAPI() {
                     source = serverName,
                     name = serverName,
                     url = fixUrl(link),
-                    type = INFER_TYPE
+                    type = ExtractorLinkType.VIDEO
                 ) {
-                    referer = url
+                    this.referer = url
                     this.quality = quality
                 }
             )
@@ -281,15 +290,16 @@ class AnimeSailProvider : MainAPI() {
     ) {
         loadExtractor(url, referer, subtitleCallback) { link ->
             val finalName = if (serverName.equals(link.name, ignoreCase = true)) link.name else "$serverName - ${link.name}"
+            
             runBlocking {
                 callback.invoke(
                     newExtractorLink(
-                        source = link.name,
+                        source = link.source,
                         name = finalName,
                         url = link.url,
                         type = link.type
                     ) {
-                        this.referer = referer ?: mainUrl
+                        this.referer = link.referer
                         this.quality = if (link.type == ExtractorLinkType.M3U8) link.quality else quality ?: Qualities.Unknown.value
                         this.headers = link.headers
                         this.extractorData = link.extractorData

@@ -9,7 +9,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://154.26.137.28"
+    override var mainUrl = "https://v1.animesail.xyz"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
@@ -20,22 +20,6 @@ class AnimeSailProvider : MainAPI() {
         TvType.AnimeMovie,
         TvType.OVA
     )
-
-    companion object {
-        fun getType(t: String): TvType {
-            return if (t.contains("OVA", true) || t.contains("Special")) TvType.OVA
-            else if (t.contains("Movie", true)) TvType.AnimeMovie
-            else TvType.Anime
-        }
-
-        fun getStatus(t: String): ShowStatus {
-            return when (t) {
-                "Completed" -> ShowStatus.Completed
-                "Ongoing" -> ShowStatus.Ongoing
-                else -> ShowStatus.Completed
-            }
-        }
-    }
 
     private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
 
@@ -75,11 +59,11 @@ class AnimeSailProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {
-        val rawHref = this.selectFirst("a")?.attr("href") ?: return null
-        val href = fixUrl(rawHref)
+        val a = this.selectFirst("a") ?: return null
+        val href = fixUrl(a.attr("href"))
 
         val rawTitle = this.selectFirst(".tt > h2, h2, h3, .title, a[title]")?.text()
-            ?: this.selectFirst("a[title]")?.attr("title")
+            ?: a.attr("title")
             ?: return null
 
         val title = rawTitle.replace(Regex("(?i)Episode\\s?\\d+"), "")
@@ -97,7 +81,6 @@ class AnimeSailProvider : MainAPI() {
         )
 
         val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
-
         val typeText = this.selectFirst(".tt > span, .typez, span.type")?.text() ?: ""
         val type = if (typeText.contains("Movie", ignoreCase = true) || href.contains("/movie/")) TvType.AnimeMovie else TvType.Anime
 
@@ -121,7 +104,7 @@ class AnimeSailProvider : MainAPI() {
         var res = request(currentUrl)
         var document = res.document
         
-        // Auto-redirect from Episode page to Anime page to get full list
+        // Auto-redirect from Episode page to Anime page for "Update Terbaru"
         if (!currentUrl.contains("/anime/")) {
             val seriesLink = document.selectFirst(".breadcrumb a[href*='/anime/'], .series-all a[href*='/anime/'], .info-content a[href*='/anime/'], a[href*='/anime/']:has(h1)")?.attr("href")
             if (seriesLink != null) {
@@ -139,7 +122,7 @@ class AnimeSailProvider : MainAPI() {
         val poster = fixImageUrl(document.selectFirst(".thumb img, .entry-content img, meta[property='og:image']")?.attr("src") ?: document.selectFirst("img[alt*='$title']")?.attr("src"))
         
         val typeText = document.select("tbody th:contains(Tipe), .info-content span:contains(Type)").next().text().lowercase()
-        val type = getType(typeText)
+        val type = if (typeText.contains("movie")) TvType.AnimeMovie else TvType.Anime
         val year = document.select("tbody th:contains(Dirilis), .info-content span:contains(Released)").next().text().trim().toIntOrNull()
         val statusText = document.select("tbody th:contains(Status), .info-content span:contains(Status)").next().text().trim()
         val plotText = document.selectFirst("div.entry-content p, .desc, .sinopsis")?.text()
@@ -162,14 +145,14 @@ class AnimeSailProvider : MainAPI() {
                 this.name = name
                 this.episode = episodeNum
             }
-        }.distinctBy { it.data }.sortedByDescending { it.episode }
+        }.distinctBy { it.name }.sortedByDescending { it.episode }
 
         return newAnimeLoadResponse(title, currentUrl, type) {
             this.posterUrl = poster
             this.year = year
             this.duration = getDurationFromString(durationText)
             addEpisodes(DubStatus.Subbed, episodes)
-            this.showStatus = getStatus(statusText)
+            this.showStatus = if (statusText.contains("ongoing", true)) ShowStatus.Ongoing else ShowStatus.Completed
             this.plot = plotText
             this.tags = tagsList
         }
@@ -189,7 +172,7 @@ class AnimeSailProvider : MainAPI() {
         val document = request(data).document
         val playerPath = "$mainUrl/utils/player/"
 
-        document.select(".mobius > .mirror > option, select.mirror option").forEach { element ->
+        document.select(".mobius > .mirror > option, select.mirror option").amap { element ->
             safeApiCall {
                 val encodedData = element.attr("data-em")
                 if (encodedData.isBlank()) return@safeApiCall
@@ -229,13 +212,11 @@ class AnimeSailProvider : MainAPI() {
                     if (!bsrc.isNullOrBlank()) {
                         try {
                             innerLink = base64Decode(bsrc)
-                        } catch (_: Exception) {
-                        }
+                        } catch (_: Exception) {}
                     }
                     
                     if (innerLink.isBlank()) {
-                        val doc = request(iframe, ref = data).document
-                        innerLink = doc.select("iframe").attr("src")
+                        innerLink = request(iframe, ref = data).document.select("iframe").attr("src")
                     }
                     
                     if (innerLink.isNotBlank()) {
@@ -268,20 +249,12 @@ class AnimeSailProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         val res = request(url, ref = ref).text
+        val doc = Jsoup.parse(res)
         
         var link = Jsoup.parse(res.substringAfter("= `", "").substringBefore("`;", "")).select("source").last()?.attr("src")
-        
-        if (link.isNullOrBlank()) {
-            link = Jsoup.parse(res).select("source").attr("src")
-        }
-        
-        if (link.isNullOrBlank()) {
-            link = Jsoup.parse(res).select("video").attr("src")
-        }
-        
-        if (link.isNullOrBlank()) {
-            link = Regex("""(?:file|src):\s*["']([^"']+)["']""").find(res)?.groupValues?.getOrNull(1)
-        }
+        if (link.isNullOrBlank()) link = doc.select("source").attr("src")
+        if (link.isNullOrBlank()) link = doc.select("video").attr("src")
+        if (link.isNullOrBlank()) link = Regex("""(?:file|src):\s*["']([^"']+)["']""").find(res)?.groupValues?.getOrNull(1)
 
         if (!link.isNullOrBlank()) {
             callback.invoke(
@@ -308,7 +281,6 @@ class AnimeSailProvider : MainAPI() {
     ) {
         loadExtractor(url, referer, subtitleCallback) { link ->
             val finalName = if (serverName.equals(link.name, ignoreCase = true)) link.name else "$serverName - ${link.name}"
-
             runBlocking {
                 callback.invoke(
                     newExtractorLink(

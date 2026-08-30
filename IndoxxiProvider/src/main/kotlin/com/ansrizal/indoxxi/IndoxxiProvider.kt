@@ -39,11 +39,10 @@ class IndoxxiProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "movies/" to "Film Terbaru",
-        "tv-series/" to "TV Series",
+        "category/movie/" to "Film Terbaru",
+        "category/tv-series/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror",
-        "trending/" to "Trending"
+        "genre/horror/" to "Horror"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -57,24 +56,13 @@ class IndoxxiProvider : MainAPI() {
         }
 
         val document = request(url).document
-        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article, div.post-item")
         
-        var homeItems = items.mapNotNull { it.toSearchResult() }
+        // Selector khusus struktur HTML Indoxxi/Gdriveplayer/WordPress
+        val items = document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx, .archive-container article")
         
-        if (homeItems.isEmpty()) {
-            homeItems = document.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/movie/'], a[href*='/series/']").mapNotNull { a ->
-                val title = a.attr("title").ifBlank { a.text() }
-                val href = a.attr("href")
-                if (title.length < 3 || href.contains("/genre/") || href.contains("/category/")) return@mapNotNull null
-                
-                val img = a.selectFirst("img")
-                val poster = fixUrlNull(img?.attr("data-src") ?: img?.attr("src"))
-                
-                newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
-                    this.posterUrl = poster
-                }
-            }.distinctBy { it.url }.take(20)
-        }
+        val homeItems = items.mapNotNull {
+            it.toSearchResult()
+        }.distinctBy { it.url }
 
         return newHomePageResponse(
             list = listOf(
@@ -88,23 +76,26 @@ class IndoxxiProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")
-        val title = titleElement?.text()?.trim() 
-            ?: this.selectFirst("a")?.attr("title")?.trim()
-            ?: return null
-            
-        if (title.isEmpty()) return null
-            
-        val linkElement = this.selectFirst("a") ?: return null
+        val linkElement = this.selectFirst("a[href]") ?: return null
         val href = fixUrl(linkElement.attr("href"))
         
         val cleanMainUrl = mainUrl.removeSuffix("/")
         val cleanHref = href.removeSuffix("/")
         
+        // Filter agar URL navigasi/halaman utama tidak ikut terambil sebagai film
         if (cleanHref == cleanMainUrl || 
             href.contains("/genre/") || 
             href.contains("/category/") || 
+            href.contains("/page/") ||
             href.contains("/tag/")) return null
+
+        val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, .mli-info h2")
+        val title = titleElement?.text()?.trim() 
+            ?: linkElement.attr("title").trim()
+            ?: this.selectFirst("img")?.attr("alt")?.trim()
+            ?: return null
+            
+        if (title.isEmpty() || title.length < 2) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
@@ -131,16 +122,19 @@ class IndoxxiProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = request(searchUrl).document
 
-        return document.select("div.listupd article, div.bs, div.bsx, div.ml-item, article.item, .archive-container article").mapNotNull {
+        return document.select("div.ml-item, div.item, article.item, div.post-item, div.bs, div.bsx").mapNotNull {
             it.toSearchResult()
-        }
+        }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "INDOXXI"
-        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
+        val title = document.selectFirst("h1.entry-title, h1.name, h1, .title")?.text()?.trim() ?: "INDOXXI"
+        val poster = fixUrlNull(
+            document.selectFirst("meta[property='og:image']")?.attr("content") 
+            ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src")
+        )
         val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description")?.text()?.trim()
 
         val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
@@ -177,20 +171,43 @@ class IndoxxiProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
+        // 1. Cari iframe langsung dari halaman film
         val iframes = document.select("iframe")
         for (iframe in iframes) {
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank() && !src.contains("facebook.com")) {
+            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
 
-        val servers = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item")
-        for (li in servers) {
-            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: li.attr("data-href") ?: ""
+        // 2. Cari dari opsi server/player embed (data-post, data-type, data-n, ataulink player)
+        val playerElements = document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item, option[value*='http']")
+        for (elem in playerElements) {
+            val serverSrc = elem.selectFirst("a")?.attr("href") 
+                ?: elem.attr("data-src") 
+                ?: elem.attr("data-href") 
+                ?: elem.attr("value")
+            
             if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
                 loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
+            }
+        }
+
+        // 3. Ekstraksi langsung dari tag <video> atau <source> jika embed menggunakan HTML5 Native
+        val videoSources = document.select("video source, video")
+        for (video in videoSources) {
+            val videoUrl = video.attr("src")
+            if (videoUrl.isNotBlank()) {
+                callback.invoke(
+                    ExtractorLink(
+                        name,
+                        name,
+                        fixUrl(videoUrl),
+                        referer = mainUrl,
+                        quality = Qualities.Unknown.value
+                    )
+                )
             }
         }
 

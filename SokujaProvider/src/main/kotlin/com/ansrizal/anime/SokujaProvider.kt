@@ -374,47 +374,83 @@ class SokujaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = request(data).document
+        val document = app.get(data).document
 
-        // Cari IFRAME dan EMBED
-        document.select("iframe, iframe[data-src], embed, embed[data-src]").forEach { iframe ->
-            var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
-            if (src.startsWith("//")) src = "https:$src"
+        // Kumpulkan semua server URLs dari data-video attribute
+        // Struktur: <a class="server" data-video="URL">Nama Server</a>
+        val serverUrls = mutableListOf<String>()
 
-            if (src.isNotBlank() && !src.contains("facebook") && !src.contains("disqus")) {
-                loadExtractor(src, subtitleCallback, callback)
+        // Default server dari iframe src
+        document.selectFirst("iframe#tontonin")?.attr("src")?.ifBlank { null }?.let {
+            serverUrls.add(it)
+        }
+
+        // Server tambahan dari a.server[data-video]
+        document.select("a.server[data-video]").asIterable().forEach { a ->
+            val url = a.attr("data-video").ifBlank { null } ?: return@forEach
+            if (!serverUrls.contains(url)) serverUrls.add(url)
+        }
+
+        // Load semua server
+        serverUrls.forEach { url ->
+            val fullUrl = if (url.startsWith("/")) "$mainUrl$url" else url
+            if (fullUrl.contains("btube3.php")) {
+                // Internal player (btube3.php) — ambil direct video URL dari <source> tag
+                try {
+                    val playerDoc = app.get(fullUrl).document
+                    val videoSrc = playerDoc.selectFirst("source[src]")?.attr("src")
+                        ?: playerDoc.selectFirst("video")?.attr("src")
+                    if (!videoSrc.isNullOrBlank()) {
+                        val itag = Regex("[?&]itag=(\\d+)").find(videoSrc)
+                            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        val quality = when (itag) {
+                            18 -> Qualities.P360.value
+                            22 -> Qualities.P720.value
+                            37 -> Qualities.P1080.value
+                            59 -> Qualities.P480.value
+                            else -> Qualities.Unknown.value
+                        }
+                        callback(
+                            newExtractorLink(
+                                "AnimeIndo",
+                                "B-TUBE",
+                                videoSrc
+                            ) {
+                                this.quality = quality
+                                this.referer = "https://www.blogger.com/"
+                            }
+                        )
+                    }
+                } catch (_: Exception) {}
+            } else if (fullUrl.contains("xtwap.top")) {
+                // CEPAT server — parse JWPlayer source dan extract HLS qualities
+                try {
+                    val html = app.get(fullUrl).text
+                    val fileMatch = Regex("\"file\"\\s*:\\s*\"([^\"]+)\"").find(html)
+                    val filePath = fileMatch?.groupValues?.getOrNull(1)
+                    if (!filePath.isNullOrBlank()) {
+                        val masterUrl = if (filePath.startsWith("/")) "https://xtwap.top$filePath" else filePath
+                        val links = M3u8Helper.generateM3u8("AnimeIndo", masterUrl, fullUrl)
+                        if (links.isNotEmpty()) {
+                            links.forEach { callback(it) }
+                        } else {
+                            callback(newExtractorLink("AnimeIndo", "CEPAT", masterUrl, type = ExtractorLinkType.M3U8) {
+                                this.referer = fullUrl
+                            })
+                        }
+                    }
+                } catch (_: Exception) {}
+            } else {
+                // External servers (blogger.com, gdplayer.to, dll)
+                loadExtractor(fullUrl, data, subtitleCallback, callback)
             }
         }
 
-        // [PERBAIKAN PLAYER] - Memperbaiki penanganan String? (nullable)
-        val serverOptions = document.select(
-            "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], div.player, div.video-player, [data-links], [data-em], [data-index], [data-src], [onclick]"
-        )
-
-        for (option in serverOptions) {
-            val onclickAttr = option.attr("onclick")
-            val extractedOnclick = if (onclickAttr.isNotBlank()) {
-                Regex("""['"](.*?)['"]""").find(onclickAttr)?.groupValues?.getOrNull(1)
-            } else null
-
-            val embedUrl: String? = option.attr("value").ifBlank { null }
-                ?: option.attr("data-em").ifBlank { null }
-                ?: option.attr("data-links").ifBlank { null }
-                ?: option.attr("data-index").ifBlank { null }
-                ?: option.attr("href").ifBlank { null }
-                ?: option.attr("src").ifBlank { null }
-                ?: extractedOnclick
-
-            val cleanUrl = when {
-                embedUrl.isNullOrBlank() -> null
-                embedUrl.startsWith("//") -> "https:$embedUrl"
-                embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
-                embedUrl.startsWith("http") -> embedUrl
-                else -> null
-            }
-
-            if (cleanUrl != null && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
-                loadExtractor(cleanUrl, subtitleCallback, callback)
+        // Download link dari .navi (biasanya GDrive)
+        document.select("div.navi a[href]").asIterable().forEach { a ->
+            val href = a.attr("href").ifBlank { null } ?: return@forEach
+            if (href.startsWith("http") && !href.contains(mainUrl)) {
+                loadExtractor(href, data, subtitleCallback, callback)
             }
         }
 

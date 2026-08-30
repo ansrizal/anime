@@ -166,13 +166,13 @@ class SokujaProvider : MainAPI() {
         val res = request(url)
         val document = res.document
 
-        val selectors = listOf(
-            "a.group.block", "div.bsx", "div.listupd article", "div.utao", "div.uta", "div.animposx", "div.bs"
-        )
-
-        val potentialItems = mutableListOf<Element>()
-        for (sel in selectors) {
-            potentialItems.addAll(document.select(sel))
+        // Next.js streams data into hidden divs with ID S:1, S:2, etc.
+        // S:1 is usually "Update Terbaru" on the homepage.
+        val potentialItems = if (path.isEmpty()) {
+            val updateSection = document.getElementById("S:1") ?: document.selectFirst("#update-terbaru")
+            updateSection?.select("a.group.block") ?: document.select("a.group.block")
+        } else {
+            document.select("a.group.block, div.bsx, div.listupd article, div.utao, div.uta, div.animposx, div.bs")
         }
 
         // Prefer items that have a poster to avoid gray placeholders from Next.js streaming
@@ -198,7 +198,7 @@ class SokujaProvider : MainAPI() {
         if (invalid.any { href.contains(it) }) return null
         if (href.removeSuffix("/") == mainUrl.removeSuffix("/")) return null
 
-        val title = selectFirst("h3, h2, .tt, .title, .entry-title")?.text()?.trim()
+        var title = selectFirst("h3, h2, .tt, .title, .entry-title")?.text()?.trim()
             ?: linkElement.attr("title").trim().ifEmpty { null }
             ?: return null
 
@@ -207,6 +207,13 @@ class SokujaProvider : MainAPI() {
         val lowerTitle = title.lowercase()
         if (lowerTitle == "daftar anime" || lowerTitle == "update terbaru" || lowerTitle.contains("genre")) {
             return null
+        }
+
+        // Check for episode info to make it clear it's an update
+        val epText = selectFirst(".epx, .ep, .episode, .text-gray-400")?.text()?.trim()
+        if (!epText.isNullOrBlank() && (epText.contains("Episode", true) || epText.contains("EP ", true))) {
+            val cleanEp = epText.replace(Regex("""\s*·.*"""), "") // Remove "· 11 menit lalu"
+            title = "$title - $cleanEp"
         }
 
         val img = selectFirst("img")

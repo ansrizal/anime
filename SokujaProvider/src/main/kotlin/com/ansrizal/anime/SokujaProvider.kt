@@ -386,29 +386,34 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // [PERBAIKAN PLAYER TIDAK BISA DIPUTAR] - Gabungkan SEMUA selector menjadi SATU String
+        // [PERBAIKAN PLAYER] - Memperbaiki penanganan String? (nullable)
         val serverOptions = document.select(
             "select.mirror option, select option, ul.mserver li a, div.mirror-stream a, div.server a, li.mirror a, div.mirror a, ul#server-list li a, div.anime-mirror a, a[href*='embed'], a[href*='mirror'], a[href*='stream'], a[href*='player'], a[href*='watch'], div.player, div.video-player, [data-links], [data-em], [data-index], [data-src], [onclick]"
         )
 
         for (option in serverOptions) {
-            val embedUrl = option.attr("value")
-                .ifBlank { option.attr("data-em") }
-                .ifBlank { option.attr("data-links") }
-                .ifBlank { option.attr("data-index") }
-                .ifBlank { option.attr("href") }
-                .ifBlank { option.attr("src") }
-                .ifBlank { option.attr("onclick")?.let { Regex("""['"](.*?)['"]""").find(it)?.groupValues?.get(1) } }
+            val onclickAttr = option.attr("onclick")
+            val extractedOnclick = if (onclickAttr.isNotBlank()) {
+                Regex("""['"](.*?)['"]""").find(onclickAttr)?.groupValues?.getOrNull(1)
+            } else null
+
+            val embedUrl: String? = option.attr("value").ifBlank { null }
+                ?: option.attr("data-em").ifBlank { null }
+                ?: option.attr("data-links").ifBlank { null }
+                ?: option.attr("data-index").ifBlank { null }
+                ?: option.attr("href").ifBlank { null }
+                ?: option.attr("src").ifBlank { null }
+                ?: extractedOnclick
 
             val cleanUrl = when {
-                embedUrl.isBlank() -> null
+                embedUrl.isNullOrBlank() -> null
                 embedUrl.startsWith("//") -> "https:$embedUrl"
                 embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
                 embedUrl.startsWith("http") -> embedUrl
                 else -> null
             }
 
-            if (cleanUrl != null && cleanUrl.startsWith("http") && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
+            if (cleanUrl != null && !cleanUrl.contains("facebook") && !cleanUrl.contains("disqus")) {
                 loadExtractor(cleanUrl, subtitleCallback, callback)
             }
         }

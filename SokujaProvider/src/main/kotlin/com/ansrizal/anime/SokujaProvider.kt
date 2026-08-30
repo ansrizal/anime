@@ -4,19 +4,16 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
-import org.jsoup.Jsoup
 
 class SokujaProvider : MainAPI() {
     override var mainUrl = "https://x6.sokuja.uk"
-    override var name = "Sokuja Anime"
+    override var name = "Sokuja"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
-    private val turnstileInterceptor = TurnstileInterceptor("cf_clearance")
-
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer" to "$mainUrl/"
@@ -24,18 +21,9 @@ class SokujaProvider : MainAPI() {
 
     private suspend fun request(url: String): NiceResponse {
         return try {
-            app.get(
-                url,
-                headers = headers,
-                interceptor = turnstileInterceptor,
-                timeout = 30
-            )
+            app.get(url, headers = headers, timeout = 30)
         } catch (e: Exception) {
-            app.get(
-                url,
-                headers = headers,
-                timeout = 20
-            )
+            app.get(url, timeout = 30)
         }
     }
 
@@ -62,22 +50,32 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        val document = request(url).document
+        val res = request(url)
+        val document = res.document
         
-        // Selektor presisi berdasarkan struktur HTML Sokuja (Update Terbaru & Grid Anime)
-        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf")
+        // Pemindai serbaguna untuk postingan di Sokuja (Update Terbaru & Listing)
+        val items = document.select("div.post-show article, div.bxb article, div.listupd article, div.bs, div.bsx, div.utao, div.uta, div.luf, article.bs")
+        
         val homeItems = items.mapNotNull {
             it.toSearchResult()
         }.distinctBy { it.url }
+
+        // Emergency Fallback: Jika halaman utama diblokir/kosong, ambil dari jalur anime/
+        val finalItems = if (homeItems.isEmpty() && path.isEmpty()) {
+            val fallbackDoc = request("$mainUrl/anime/").document
+            fallbackDoc.select("div.listupd article, div.bs, div.bsx, article").mapNotNull { it.toSearchResult() }
+        } else {
+            homeItems
+        }
 
         return newHomePageResponse(
             list = listOf(
                 HomePageList(
                     name = request.name,
-                    list = homeItems
+                    list = finalItems
                 )
             ),
-            hasNext = homeItems.isNotEmpty()
+            hasNext = finalItems.isNotEmpty()
         )
     }
 
@@ -130,7 +128,7 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = request(url).document
 
-        // 1. Jika URL yang dibuka adalah halaman episode (seperti di screenshot), cari link "Semua Episode" atau halaman Anime Utama
+        // Jika URL adalah halaman episode tunggal, alihkan ke halaman utama serial
         val seriesLink = document.selectFirst("a:contains(Semua Episode), div.breadcrumb a[href*='/anime/'], div.ninfo a[href*='/anime/'], span.all-ep a, .all-episode a")?.attr("href")
         
         val targetDoc = if (seriesLink != null && !url.contains("/anime/")) {
@@ -152,7 +150,6 @@ class SokujaProvider : MainAPI() {
         val poster = fixUrlNull(rawPoster)
         val description = targetDoc.selectFirst("div.sinopc, div.entry-content, div.synopsis, [itemprop=description]")?.text()?.trim()
 
-        // 2. Mengambil seluruh episode dari section "Episode Lainnya" / "List Episode"
         val episodeElements = targetDoc.select("div.eplister li, div.listeps li, .eplister ul li, div.list-episode li, div.lsteps ul li, ul.clnew li, div.epsother article, div.epslist li")
         
         val episodes = mutableListOf<Episode>()
@@ -175,7 +172,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Fallback jika hanya 1 episode yang terdeteksi di halaman tersebut
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(url) {
@@ -203,7 +199,6 @@ class SokujaProvider : MainAPI() {
     ): Boolean {
         val document = request(data).document
 
-        // 1. Pindai seluruh iframe pemutar video (seperti player 480p, 720p, 1080p pada screenshot)
         document.select("iframe, iframe[data-src]").forEach { iframe ->
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.startsWith("//")) src = "https:$src"
@@ -213,7 +208,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // 2. Pindai opsi server / kualitas video yang ada di dalam player
         val serverOptions = document.select("select.mirror option, ul.mserver li a, .select-server option, [data-index], div.mirror-stream a")
         for (option in serverOptions) {
             val embedUrl = option.attr("value").ifBlank { option.attr("data-em") }.ifBlank { option.attr("href") }

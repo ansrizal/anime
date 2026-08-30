@@ -47,32 +47,50 @@ class IndoxxiProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-    val path = request.data
-    val formattedPath = if (path.isEmpty()) "" else if (path.endsWith("/")) path else "$path/"
-    
-    val url = if (page <= 1) {
-        "$mainUrl/$formattedPath"
-    } else {
-        "$mainUrl/${formattedPath}page/$page/"
-    }
+        val path = request.data
+        val formattedPath = if (path.isEmpty()) "" else if (path.endsWith("/")) path else "$path/"
+        
+        val url = if (page <= 1) {
+            "$mainUrl/$formattedPath"
+        } else {
+            "$mainUrl/${formattedPath}page/$page/"
+        }
 
-    val document = request(url).document
-    
-    val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article")
-    
-    val homeItems = items.mapNotNull {
-        it.toSearchResult()
-    }
+        val document = request(url).document
+        
+        // Selector dibuat lebih spesifik mencakup struktur standar streaming film
+        val items = document.select("div.listupd article, div.bs, div.bsx, div.ml-item, div.item, article.item, div.grid-item, .archive-container article, div.post-item")
+        
+        var homeItems = items.mapNotNull {
+            it.toSearchResult()
+        }
+        
+        // Fallback jika selector utama tidak menemukan film sama sekali
+        if (homeItems.isEmpty()) {
+            homeItems = document.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/movie/'], a[href*='/series/']").mapNotNull { a ->
+                val title = a.attr("title").ifBlank { a.text() }
+                val href = a.attr("href")
+                if (title.length < 3 || href.contains("/genre/") || href.contains("/category/")) return@mapNotNull null
+                
+                val img = a.selectFirst("img")
+                val poster = fixUrlNull(img?.attr("data-src") ?: img?.attr("src"))
+                
+                newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+                    this.posterUrl = poster
+                }
+            }.distinctBy { it.url }.take(20)
+        }
 
-    // Mengembalikan HomePageResponse standar untuk satu baris kategori/section
-    return newHomePageResponse(
-        HomePageList(
-            name = request.name,
-            list = homeItems
-        ),
-        hasNext = homeItems.isNotEmpty()
-    )
-}
+        return newHomePageResponse(
+            list = listOf(
+                HomePageList(
+                    name = request.name,
+                    list = homeItems
+                )
+            ),
+            hasNext = homeItems.isNotEmpty()
+        )
+    }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val titleElement = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")
@@ -109,6 +127,79 @@ class IndoxxiProvider : MainAPI() {
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+            }
+        }
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchUrl = "$mainUrl/?s=$query"
+        val document = request(searchUrl).document
+
+        return document.select("div.listupd article, div.bs, div.bsx, div.ml-item, article.item, .archive-container article").mapNotNull {
+            it.toSearchResult()
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val document = request(url).document
+
+        val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "INDOXXI"
+        val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
+        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description")?.text()?.trim()
+
+        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
+
+        return if (isSeries) {
+            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li, div.eps-item").mapNotNull { elem ->
+                val a = elem.selectFirst("a") ?: return@mapNotNull null
+                val epUrl = fixUrl(a.attr("href"))
+                val epName = a.text().trim()
+                val epNum = elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull()
+                
+                newEpisode(epUrl) {
+                    this.name = epName
+                    this.episode = epNum
+                }
+            }
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        } else {
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val document = request(data).document
+
+        document.select("iframe").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.startsWith("//")) src = "https:$src"
+            if (src.isNotBlank() && !src.contains("facebook.com")) {
+                loadExtractor(src, subtitleCallback, callback)
+            }
+        }
+        
+        document.select("ul.muvi-player-list li, div.source-box li, .player-source, .mirror-item").forEach { li ->
+            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: li.attr("data-href") ?: ""
+            if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
+                loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
+            }
+        }
+
+        return true
+    }
+}
                 this.posterUrl = posterUrl
             }
         }

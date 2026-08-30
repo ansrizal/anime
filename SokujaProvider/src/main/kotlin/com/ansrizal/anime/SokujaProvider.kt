@@ -58,6 +58,7 @@ class SokujaProvider : MainAPI() {
     // [PERBAIKAN KATEGORI] - Daftar Genre Lengkap sesuai web
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
+        "anime/?type=movie&order=update" to "Movie Terbaru",
         "anime/" to "Daftar Anime",
         "genre/action/" to "Action",
         "genre/adult-cast/" to "Adult Cast",
@@ -153,15 +154,18 @@ class SokujaProvider : MainAPI() {
         val cleanPath = path.trim('/')
 
         return when {
-            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page" // Fix untuk Update Terbaru
+            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page"
             page <= 1 -> "$base/$cleanPath"
-            else -> "$base/$cleanPath/page/$page/"
-        }
+            else -> {
+                if (cleanPath.contains("?")) "$base/$cleanPath&page=$page"
+                else "$base/$cleanPath/page/$page/"
+            }
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data
         val url = buildPageUrl(path, page)
+        val isMovie = path.contains("type=movie")
 
         val res = request(url)
         val document = res.document
@@ -176,7 +180,7 @@ class SokujaProvider : MainAPI() {
         }
 
         // Prefer items that have a poster to avoid gray placeholders from Next.js streaming
-        val homeItems = potentialItems.mapNotNull { it.toSearchResult() }
+        val homeItems = potentialItems.mapNotNull { it.toSearchResult(isMovie) }
             .groupBy { it.url }
             .map { (_, results) ->
                 results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
@@ -188,10 +192,9 @@ class SokujaProvider : MainAPI() {
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
+        private fun Element.toSearchResult(isMovieHint: Boolean = false): SearchResponse? {
         val linkElement = if (tagName() == "a" && hasAttr("href")) this else selectFirst("a[href]")
         if (linkElement == null) return null
-        
         val href = fixUrl(linkElement.attr("href"))
 
         val invalid = listOf("/genre/", "/category/", "/page/", "/bookmark/", "/jadwal-rilis/", "/tag/")
@@ -212,8 +215,10 @@ class SokujaProvider : MainAPI() {
         // Check for episode info to make it clear it's an update
         val epText = selectFirst(".epx, .ep, .episode, .text-gray-400")?.text()?.trim()
         if (!epText.isNullOrBlank() && (epText.contains("Episode", true) || epText.contains("EP ", true))) {
-            val cleanEp = epText.replace(Regex("""\s*·.*"""), "") // Remove "· 11 menit lalu"
-            title = "$title - $cleanEp"
+            val cleanEp = epText.replace(Regex("""\s*·.*"""), "")
+            if (!title.contains(cleanEp, true)) {
+                title = "$title - $cleanEp"
+            }
         }
 
         val img = selectFirst("img")
@@ -223,8 +228,9 @@ class SokujaProvider : MainAPI() {
             ?: img?.attr("srcset")?.split(",")?.firstOrNull()?.trim()?.split(" ")?.firstOrNull()
 
         val posterUrl = fixImageUrl(rawImg)
+        val type = if (isMovieHint || lowerTitle.contains("movie") || href.contains("movie")) TvType.AnimeMovie else TvType.Anime
 
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
+            return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
         }
     }
@@ -268,18 +274,12 @@ class SokujaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         var res = request(url)
         var document = res.document
-        var finalUrl = url
+        val isEpisodePage = !url.contains("/anime/")
 
-        // Jika ini adalah halaman episode (tidak ada '/anime/' di URL), 
-        // kita coba cari link ke halaman utama anime tersebut agar daftar episode lengkap.
-        if (!url.contains("/anime/")) {
-            val animeLink = document.selectFirst("a[href*='/anime/'], .breadcrumb a[href*='/anime/'], .info-content a[href*='/anime/']")
-            if (animeLink != null) {
-                finalUrl = fixUrl(animeLink.attr("href"))
-                res = request(finalUrl)
-                document = res.document
-            }
-        }
+        // Ambil ID dari script data untuk mirror API (Penting untuk Direct Play)
+        val rawData = document.select("script").joinToString { it.data() }
+        val scriptData = rawData.replace("\\\"", "\"").replace("\\\\", "\\")
+        val pageId = Regex("""["']id["']:\s*(\d+)""").find(scriptData)?.groupValues?.get(1)
 
         val title = document.selectFirst("h1")?.text()
             ?.replace("Subtitle Indonesia", "")
@@ -291,19 +291,29 @@ class SokujaProvider : MainAPI() {
 
         val description = document.selectFirst("p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // [PERBAIKAN EPISODE] - Parsing dari JSON di script tags
+        if (isEpisodePage && pageId != null) {
+            // Jika ini halaman episode, kita buat LoadResponse yang isinya HANYA episode ini agar langsung bisa diputar
+            val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+            return newAnimeLoadResponse(title, url, TvType.Anime) {
+                this.posterUrl = poster
+                this.plot = description
+                addEpisodes(DubStatus.Subbed, listOf(newEpisode(url) {
+                    this.name = title
+                    this.episode = epNum
+                    this.data = pageId
+                }))
+            }
+        }
+
+        // Jika halaman utama anime (/anime/...), ambil semua episode
         val episodes = mutableListOf<Episode>()
-        val rawData = document.select("script").joinToString { it.data() }
-        val scriptData = rawData.replace("\\\"", "\"").replace("\\\\", "\\")
-        
-        // Regex yang lebih fleksibel untuk mencari pola episode dalam JSON Next.js
         val epRegex = Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
         epRegex.findAll(scriptData).forEach { match ->
             val id = match.groupValues[1]
             val slug = match.groupValues[2]
             val epTitle = match.groupValues[3]
             val epNum = match.groupValues[4].toIntOrNull() ?: 0
-            
             val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
             
             episodes.add(newEpisode(epUrl) {
@@ -313,40 +323,24 @@ class SokujaProvider : MainAPI() {
             })
         }
 
-        // Fallback jika parsing JSON gagal atau jika ini tetap halaman single episode
         if (episodes.isEmpty()) {
-            // Coba ambil ID dari script data untuk mirror API
-            val pageId = Regex("""["']id["']:\s*(\d+)""").find(scriptData)?.groupValues?.get(1)
-            
-            val epElements = document.select("a[href*='-episode-'], .eplist ul li a")
-            if (epElements.isNotEmpty()) {
-                epElements.forEach { a ->
-                    val href = a.attr("href")
-                    val epTitle = a.text().trim()
-                    val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
-                        ?: Regex("""\d+""").find(a.selectFirst(".num, .ep")?.text() ?: "")?.value?.toIntOrNull()
-                    
-                    if (epNum != null) {
-                        episodes.add(newEpisode(fixUrl(href)) {
-                            this.name = epTitle
-                            this.episode = epNum
-                        })
-                    }
+            document.select("a[href*='-episode-'], .eplist ul li a").forEach { a ->
+                val href = a.attr("href")
+                val epTitle = a.text().trim()
+                val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
+                if (epNum != null) {
+                    episodes.add(newEpisode(fixUrl(href)) {
+                        this.name = epTitle
+                        this.episode = epNum
+                    })
                 }
-            } else if (pageId != null && !url.contains("/anime/")) {
-                // Jika benar-benar tidak ada list, tapi ada ID (ini halaman episode tunggal)
-                episodes.add(newEpisode(url) {
-                    this.name = title
-                    this.episode = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                    this.data = pageId
-                })
             }
         }
 
-        return newAnimeLoadResponse(title, finalUrl, TvType.Anime) {
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedBy { it.episode })
+            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedByDescending { it.episode })
         }
     }
 
@@ -374,11 +368,11 @@ class SokujaProvider : MainAPI() {
 
         if (episodeId != null) {
             val mirrorRes = app.get("$mainUrl/api/video-mirrors?e=$episodeId", headers = defaultHeaders).parsedSafe<MirrorResponse>()
-            
+
             mirrorRes?.mirrors?.forEach { mirror ->
                 val url = mirror.embedUrl ?: return@forEach
                 val quality = mirror.quality?.filter { it.isDigit() }?.toIntOrNull() ?: Qualities.Unknown.value
-                
+
                 if (mirror.embedType == "mp4" || url.endsWith(".mp4")) {
                     callback(
                         newExtractorLink(

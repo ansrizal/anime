@@ -31,7 +31,7 @@ class OppadramaProvider : MainAPI() {
         "country/china/" to "Drama Chinese",
         "country/japan/" to "Drama Jepang",
         "country/thailand/" to "Drama Thailand",
-        "movies/" to "Movies",
+        "movies/" to "Movies"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -42,12 +42,10 @@ class OppadramaProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
-        // Selector spesifik untuk item daftar
         val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
-        // Fallback jika tidak ditemukan (misal di halaman lain)
+        // fallback jika selector utama gagal
         val finalItems = if (items.isEmpty()) {
-            document.select("article.bs, div.bs, div.bsx, div.ml-item, div.item, div.uta")
-                .mapNotNull { it.toSearchResult() }
+            document.select("article.bs, div.bs, div.bsx, div.ml-item").mapNotNull { it.toSearchResult() }
         } else items
 
         return newHomePageResponse(HomePageList(request.name, finalItems), hasNext = finalItems.isNotEmpty())
@@ -56,14 +54,18 @@ class OppadramaProvider : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val link = this.selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
-        // Ambil judul dari atribut title atau dari div.tt
-        val title = link.attr("title").ifBlank {
-            this.selectFirst("div.tt")?.text()?.trim()
-        } ?: return null
+
+        // Ambil judul dari atribut title, lalu dari div.tt atau div.tts, terakhir h2
+        var title = link.attr("title").ifBlank {
+            this.selectFirst("div.tt, div.tts")?.text()?.trim()
+        }
+        if (title.isNullOrBlank()) {
+            title = this.selectFirst("h2")?.text()?.trim()
+        }
+        if (title.isNullOrBlank()) return null
 
         val img = this.selectFirst("img")
         val poster = img?.let {
-            // Coba beberapa atribut
             it.attr("abs:data-src").ifBlank { 
                 it.attr("abs:src").ifBlank { 
                     it.getImageAttr()
@@ -90,8 +92,7 @@ class OppadramaProvider : MainAPI() {
         val document = app.get(url, timeout = 50000L).document
         val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
         return if (items.isNotEmpty()) items else {
-            document.select("article.bs, div.bs, div.bsx, div.ml-item, div.item, div.uta")
-                .mapNotNull { it.toSearchResult() }
+            document.select("article.bs, div.bs, div.bsx").mapNotNull { it.toSearchResult() }
         }
     }
 

@@ -13,7 +13,6 @@ class DonghubProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
-    // Semua kategori termasuk genre dari sidebar
     override val mainPage = mainPageOf(
         "anime/" to "Latest Releases",
         "status/ongoing/" to "Series Ongoing",
@@ -54,10 +53,7 @@ class DonghubProvider : MainAPI() {
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )).document
         
-        // Selector item: article.bs dan article.styleegg
         var items = document.select("article.bs, article.styleegg").mapNotNull { it.toSearchResult() }
-        
-        // Fallback: jika kosong, coba selector lain
         if (items.isEmpty()) {
             items = document.select("div.listupd article").mapNotNull { it.toSearchResult() }
         }
@@ -72,11 +68,9 @@ class DonghubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Cari link
         val link = selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
         
-        // Judul dari atribut title (paling akurat)
         var title = link.attr("title").trim()
         if (title.isBlank()) {
             title = selectFirst(".eggtitle")?.text()?.trim() ?:
@@ -84,17 +78,12 @@ class DonghubProvider : MainAPI() {
                     selectFirst("h2")?.text()?.trim() ?: return null
         }
         
-        // Gambar: cari di dalam .limit atau langsung
         val img = selectFirst(".limit img, img")
         val poster = img?.let {
-            // Prioritaskan src karena di HTML menggunakan src langsung
             val src = it.attr("src").ifBlank { it.attr("data-src") }
-            if (src.isNotBlank() && !src.contains("default")) {
-                fixUrlNull(src)
-            } else null
+            if (src.isNotBlank() && !src.contains("default")) fixUrlNull(src) else null
         }
         
-        // Tipe dari .typez
         val typeEl = selectFirst(".typez")
         val isMovie = typeEl?.text()?.contains("Movie", ignoreCase = true) == true
 
@@ -130,18 +119,14 @@ class DonghubProvider : MainAPI() {
         
         val title = document.selectFirst("h1.entry-title")?.text().orEmpty()
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
-        
-        // Cek tipe dari .spe atau .typez
         val typeText = document.selectFirst(".spe")?.text().orEmpty()
         val isMovie = typeText.contains("Movie", ignoreCase = true) || 
                       document.select(".typez.Movie").isNotEmpty()
 
-        // Poster: coba dari .ime, .bigcontent, atau meta
         val poster = document.select("div.ime > img, div.bigcontent img").first()?.getsrcAttribute()
             ?: document.select("meta[property=og:image]").attr("content")
             ?: document.select("img.attachment-post-thumbnail").first()?.getsrcAttribute()
 
-        // Episode list
         val epBlocks = document.select(".eplister li").ifEmpty {
             document.select("div.list-episode .episode-item")
         }.ifEmpty {
@@ -184,7 +169,6 @@ class DonghubProvider : MainAPI() {
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         )).document
 
-        // Ambil dari option yang di-base64 (mobius)
         document.select(".mobius option").forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {
@@ -199,7 +183,6 @@ class DonghubProvider : MainAPI() {
             }
         }
 
-        // Fallback: iframe langsung di player
         document.select("div.player-embed iframe, div.embed iframe, iframe[src]").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotBlank() && !src.contains("google")) {
@@ -207,7 +190,7 @@ class DonghubProvider : MainAPI() {
             }
         }
 
-        // Coba dari link download
+        // Bagian download link – gunakan M3U8 sebagai tipe karena DIRECT tidak tersedia
         document.select("a[href*='.mp4'], a[href*='.m3u8'], a[href*='.mkv']").forEach { a ->
             val url = a.attr("href")
             if (url.isNotBlank()) {
@@ -216,7 +199,7 @@ class DonghubProvider : MainAPI() {
                         source = name,
                         name = "Download",
                         url = fixUrl(url),
-                        type = ExtractorLinkType.DIRECT
+                        type = ExtractorLinkType.M3U8 // Ganti dari DIRECT ke M3U8
                     )
                 )
             }

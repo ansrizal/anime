@@ -13,8 +13,10 @@ class DonghubProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
+    // Path "" untuk Latest Releases (halaman utama yang menampilkan episode terbaru)
     override val mainPage = mainPageOf(
-        "?status=&type=&order=update" to "Latest Releases",
+        "" to "Latest Releases",
+        "anime/" to "All Anime",
         "status/ongoing/" to "Series Ongoing",
         "status/completed/" to "Series Completed",
         "type/movie/" to "Movie",
@@ -44,7 +46,7 @@ class DonghubProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data.trim('/')
         val url = when {
-            page <= 1 -> "$mainUrl$path/"
+            page <= 1 -> if (path.isEmpty()) mainUrl else "$mainUrl$path/"
             path.contains('?') -> "$mainUrl$path&page=$page"
             else -> "$mainUrl$path/page/$page/"
         }.replace("(?<!:)/{2,}".toRegex(), "/")
@@ -71,7 +73,6 @@ class DonghubProvider : MainAPI() {
         val link = selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
         
-        // Judul: prioritas dari title, lalu .eggtitle, .tt, h2
         var title = link.attr("title").trim()
         if (title.isBlank()) {
             title = selectFirst(".eggtitle")?.text()?.trim() ?:
@@ -79,9 +80,8 @@ class DonghubProvider : MainAPI() {
                     selectFirst("h2")?.text()?.trim() ?: return null
         }
         
-        // Gambar: cari di .limit img, lalu img biasa
-        val img = selectFirst(".limit img")
-            ?: selectFirst("img")
+        // Gambar: ambil dari .limit img, lalu fallback
+        val img = selectFirst(".limit img") ?: selectFirst("img")
         val poster = img?.let {
             val src = it.attr("src").ifBlank { it.attr("data-src") }
             if (src.isNotBlank()) fixUrlNull(src) else null
@@ -138,12 +138,14 @@ class DonghubProvider : MainAPI() {
         }
 
         return if (!isMovie && epBlocks.isNotEmpty()) {
-            val episodes = epBlocks.map { ep ->
+            val episodes = epBlocks.mapIndexed { index, ep ->
                 val link = fixUrl(ep.selectFirst("a")?.attr("href").orEmpty())
                 val epTitle = ep.selectFirst(".epl-title, .epx")?.text()?.trim() ?: ep.text()
                 newEpisode(link) {
                     this.name = epTitle
                     this.posterUrl = fixUrlNull(poster)
+                    // Tambahkan skip OP
+                    this.skipOp = true
                 }
             }.reversed()
 
@@ -194,7 +196,6 @@ class DonghubProvider : MainAPI() {
             }
         }
 
-        // Download links
         document.select("a[href*='.mp4'], a[href*='.m3u8'], a[href*='.mkv']").forEach { a ->
             val url = a.attr("href")
             if (url.isNotBlank()) {

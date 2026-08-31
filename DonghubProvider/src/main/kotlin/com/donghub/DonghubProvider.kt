@@ -142,7 +142,6 @@ class DonghubProvider : MainAPI() {
                 newEpisode(link) {
                     this.name = epTitle
                     this.posterUrl = poster
-                    this.skipOp = true // skip opening
                 }
             }.reversed()
 

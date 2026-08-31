@@ -59,7 +59,7 @@ class SokujaProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
         "anime/?type=movie&order=update" to "Movie Terbaru",
-        "anime/" to "Daftar Anime",
+        "anime/?order=title_az" to "Daftar Anime",
         "genre/action/" to "Action",
         "genre/adult-cast/" to "Adult Cast",
         "genre/adventure/" to "Adventure",

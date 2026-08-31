@@ -59,7 +59,6 @@ class MissAVProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}?page=$page"
-        // Cache main page for 60 minutes
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 60).document
         val home = document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
@@ -80,7 +79,6 @@ class MissAVProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/id/search/${query.replace(" ", "%20")}"
-        // Cache search results for 30 minutes
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 30).document
         return document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
@@ -88,7 +86,6 @@ class MissAVProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Cache movie details for 1 day
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 60 * 24).document
         val title = document.selectFirst("h1.text-base")?.text()?.trim() 
             ?: document.selectFirst("h1")?.text()?.trim() 
@@ -123,52 +120,60 @@ class MissAVProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Don't cache links as they might expire
         val response = app.get(data, headers = mapOf("Referer" to "$mainUrl/")).text
         
-        val surritRegex = Regex("""(https?://surrit\.com/[a-z0-9-]+/[^"']+\.m3u8)""")
-        val m3u8Links = surritRegex.findAll(response).map { it.value }.toList()
+        // Use the decoder to extract the UUID from the packed JavaScript or other markers
+        val uuid = MissAVDecoder.extractUuid(response)
         
-        if (m3u8Links.isNotEmpty()) {
-            m3u8Links.forEach { link ->
-                val (name, quality) = when {
-                    link.contains("/1080p/") -> "Surrit 1080p" to Qualities.P1080.value
-                    link.contains("/720p/") -> "Surrit 720p" to Qualities.P720.value
-                    link.contains("/480p/") -> "Surrit 480p" to Qualities.P480.value
-                    link.contains("/360p/") -> "Surrit 360p" to Qualities.P360.value
-                    else -> "Surrit Auto" to Qualities.Unknown.value
-                }
+        if (uuid != null) {
+            val baseSurritUrl = "https://surrit.com/$uuid"
+            
+            // Construct common quality patterns
+            val qualities = listOf(
+                "playlist" to Qualities.Unknown.value,
+                "1080p/video" to Qualities.P1080.value,
+                "720p/video" to Qualities.P720.value,
+                "480p/video" to Qualities.P480.value,
+                "360p/video" to Qualities.P360.value
+            )
+            
+            qualities.forEach { (path, qualityValue) ->
+                val link = "$baseSurritUrl/$path.m3u8"
+                val name = if (path == "playlist") "Surrit Auto" else "Surrit ${path.replace("/video", "")}"
+                
                 callback.invoke(
-                    newExtractorLink(
+                    ExtractorLink(
                         this.name,
                         name,
                         link,
-                        type = if (link.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = quality
-                    }
+                        mainUrl,
+                        qualityValue,
+                        isM3u8 = true
+                    )
                 )
             }
+            return true
         } else {
-            val m3u8 = Regex("""["']?file["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
-                ?: Regex("""["']?source["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
-                ?: Regex("""(https?://[^"']+\.m3u8[^"']*)""").find(response)?.groupValues?.get(1)
+            // Robust fallback: Scan for any m3u8 link not related to thumbnails
+            val m3u8Regex = Regex("""(https?://[^"'\s<>]+\.m3u8[^"'\s<>]*?)["']""")
+            val links = m3u8Regex.findAll(response).map { it.groupValues[1] }.filter { !it.contains("seek") }.distinct().toList()
             
-            if (m3u8 != null) {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        name,
-                        m3u8,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.P1080.value
-                    }
-                )
+            if (links.isNotEmpty()) {
+                links.forEach { link ->
+                    callback.invoke(
+                        ExtractorLink(
+                            this.name,
+                            this.name,
+                            link,
+                            mainUrl,
+                            Qualities.Unknown.value,
+                            isM3u8 = true
+                        )
+                    )
+                }
+                return true
             }
         }
-        return true
+        return false
     }
 }

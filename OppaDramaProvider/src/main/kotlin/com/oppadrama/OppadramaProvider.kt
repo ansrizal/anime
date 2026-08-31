@@ -9,6 +9,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
+    // Gunakan domain utama yang benar, pastikan ada trailing slash
     override var mainUrl = "https://oppa.biz/"
     override var name = "OppaDrama"
     override val hasMainPage = true
@@ -25,9 +26,8 @@ class OppadramaProvider : MainAPI() {
         }
     }
 
-    // Perbaikan: gunakan "" untuk Latest Update (root)
     override val mainPage = mainPageOf(
-        "" to "Latest Update",
+        "" to "Latest Update",          // root
         "country/south-korea/" to "Drama Korea",
         "country/china/" to "Drama Chinese",
         "country/japan/" to "Drama Jepang",
@@ -36,15 +36,16 @@ class OppadramaProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page <= 1) {
-            "$mainUrl${request.data}"
-        } else {
-            val data = request.data.removeSuffix("/")
-            if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
-            } else {
-                "$mainUrl/$data/page/$page/"
+        // Bangun URL dengan benar, pastikan tidak ada double slash
+        val base = mainUrl.trimEnd('/')
+        val path = request.data.trim('/')
+        val url = when {
+            page <= 1 -> "$base/$path/"
+            path.contains("?") -> {
+                val (before, after) = path.split("?", limit = 2)
+                "$base/$before/page/$page/?$after"
             }
+            else -> "$base/$path/page/$page/"
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
@@ -64,7 +65,7 @@ class OppadramaProvider : MainAPI() {
         val img = this.selectFirst("img")
         val poster = img?.attr("abs:data-src") ?: img?.attr("abs:src") ?: img?.getImageAttr()
 
-        // Ambil tipe dari elemen .typez
+        // Ambil tipe dari elemen .typez (Movie / Drama / TV Show)
         val typeElement = this.selectFirst("div.typez")
         val typeText = typeElement?.text() ?: ""
         val isMovie = typeText.equals("Movie", ignoreCase = true)
@@ -81,7 +82,8 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", timeout = 50000L).document
+        val url = "$mainUrl?s=$query"
+        val document = app.get(url, timeout = 50000L).document
         val results = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
             .asIterable()
             .mapNotNull { it.toSearchResult() }
@@ -92,7 +94,6 @@ class OppadramaProvider : MainAPI() {
         val title = this.selectFirst("div.tt")?.text()?.trim() ?: return null
         val href = this.selectFirst("a")?.attr("href") ?: return null
         val posterUrl = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        // Tipe rekomendasi biasanya series, tapi kita set sebagai Movie agar tidak error
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
         }

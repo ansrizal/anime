@@ -25,7 +25,6 @@ class DonghubProvider : MainAPI() {
         val url = if (page <= 1) {
             "$mainUrl$path/"
         } else {
-            // Jika path mengandung '?' berarti sudah ada parameter query
             if (path.contains('?')) {
                 "$mainUrl$path&page=$page"
             } else {
@@ -34,8 +33,17 @@ class DonghubProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-        // Selector mencakup article.bs dan article.styleegg (sesuai HTML)
-        val items = document.select("article.bs, article.styleegg").mapNotNull { it.toSearchResult() }
+        
+        // Selector utama mencakup semua item di halaman
+        var items = document.select("article.bs, article.styleegg").mapNotNull { it.toSearchResult() }
+        // Fallback jika kosong
+        if (items.isEmpty()) {
+            items = document.select("div.listupd article").mapNotNull { it.toSearchResult() }
+        }
+        if (items.isEmpty()) {
+            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+        }
+        
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
             hasNext = items.isNotEmpty(),
@@ -43,18 +51,34 @@ class DonghubProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("a[title]")?.attr("title")?.trim()
-            ?: selectFirst(".tt, h2, h3, .title")?.text()?.trim()
-            ?: return null
-        val href = fixUrl(selectFirst("a")?.attr("href") ?: return null)
-        val poster = fixUrlNull(selectFirst("img")?.getsrcAttribute())
-
-        // Tentukan tipe dari elemen .typez
+        val link = selectFirst("a[href]") ?: return null
+        val href = fixUrl(link.attr("href"))
+        
+        // Judul dari atribut title atau dari elemen judul
+        var title = link.attr("title").trim()
+        if (title.isBlank()) {
+            title = selectFirst(".tt, .eggtitle, h2")?.text()?.trim() ?: return null
+        }
+        
+        // Poster: cari gambar di dalam .limit atau langsung
+        val img = selectFirst(".limit img, img")
+        val poster = img?.let {
+            val src = it.attr("src").ifBlank { it.attr("data-src") }
+            if (src.isNotBlank()) fixUrlNull(src) else null
+        }
+        
+        // Tipe dari .typez
         val typeEl = selectFirst(".typez")
         val isMovie = typeEl?.text()?.contains("Movie", ignoreCase = true) == true
 
-        return newAnimeSearchResponse(title, href, if (isMovie) TvType.Movie else TvType.Anime) {
-            this.posterUrl = poster
+        return if (isMovie) {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = poster
+            }
+        } else {
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = poster
+            }
         }
     }
 
@@ -79,6 +103,7 @@ class DonghubProvider : MainAPI() {
 
         val poster = document.select("div.ime > img").first()?.getsrcAttribute()
             ?: document.select("meta[property=og:image]").attr("content")
+            ?: document.select("div.bigcontent img").first()?.getsrcAttribute()
 
         val epBlocks =
             document.select(".eplister li").ifEmpty {
@@ -102,7 +127,6 @@ class DonghubProvider : MainAPI() {
                 this.plot = description
             }
         } else {
-            // Movie atau tidak ada episode
             val movieLink = document.selectFirst(".eplister li > a")
                 ?.attr("href")
                 ?.let { fixUrl(it) } ?: url
@@ -122,7 +146,6 @@ class DonghubProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
 
-        // Ambil dari option yang di-base64
         document.select(".mobius option").asIterable().forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {
@@ -137,7 +160,6 @@ class DonghubProvider : MainAPI() {
             }
         }
 
-        // Fallback: iframe langsung di player
         document.select("div.player-embed iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotBlank()) {
@@ -152,8 +174,8 @@ class DonghubProvider : MainAPI() {
         val src = this.attr("src")
         val dataSrc = this.attr("data-src")
         return when {
-            dataSrc.startsWith("http") -> dataSrc
-            src.startsWith("http") -> src
+            dataSrc.isNotBlank() -> dataSrc
+            src.isNotBlank() -> src
             else -> ""
         }
     }

@@ -14,7 +14,7 @@ class DonghubProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/?status=&type=&order=update/" to "Latest Releases",
+        "?status=&type=&order=update" to "Latest Releases",
         "status/ongoing/" to "Series Ongoing",
         "status/completed/" to "Series Completed",
         "type/movie/" to "Movie",
@@ -71,6 +71,7 @@ class DonghubProvider : MainAPI() {
         val link = selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
         
+        // Judul: prioritas dari title, lalu .eggtitle, .tt, h2
         var title = link.attr("title").trim()
         if (title.isBlank()) {
             title = selectFirst(".eggtitle")?.text()?.trim() ?:
@@ -78,10 +79,12 @@ class DonghubProvider : MainAPI() {
                     selectFirst("h2")?.text()?.trim() ?: return null
         }
         
-        val img = selectFirst(".limit img, img")
+        // Gambar: cari di .limit img, lalu img biasa
+        val img = selectFirst(".limit img")
+            ?: selectFirst("img")
         val poster = img?.let {
             val src = it.attr("src").ifBlank { it.attr("data-src") }
-            if (src.isNotBlank() && !src.contains("default")) fixUrlNull(src) else null
+            if (src.isNotBlank()) fixUrlNull(src) else null
         }
         
         val typeEl = selectFirst(".typez")
@@ -126,6 +129,7 @@ class DonghubProvider : MainAPI() {
         val poster = document.select("div.ime > img, div.bigcontent img").first()?.getsrcAttribute()
             ?: document.select("meta[property=og:image]").attr("content")
             ?: document.select("img.attachment-post-thumbnail").first()?.getsrcAttribute()
+            ?: ""
 
         val epBlocks = document.select(".eplister li").ifEmpty {
             document.select("div.list-episode .episode-item")
@@ -190,7 +194,7 @@ class DonghubProvider : MainAPI() {
             }
         }
 
-        // Bagian download link – gunakan M3U8 sebagai tipe karena DIRECT tidak tersedia
+        // Download links
         document.select("a[href*='.mp4'], a[href*='.m3u8'], a[href*='.mkv']").forEach { a ->
             val url = a.attr("href")
             if (url.isNotBlank()) {
@@ -199,7 +203,7 @@ class DonghubProvider : MainAPI() {
                         source = name,
                         name = "Download",
                         url = fixUrl(url),
-                        type = ExtractorLinkType.M3U8 // Ganti dari DIRECT ke M3U8
+                        type = ExtractorLinkType.M3U8
                     )
                 )
             }

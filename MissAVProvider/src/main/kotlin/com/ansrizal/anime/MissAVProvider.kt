@@ -6,7 +6,7 @@ import org.jsoup.nodes.Element
 import java.net.URLDecoder
 
 class MissAVProvider : MainAPI() {
-    override var mainUrl = "https://missav.ws"
+    override var mainUrl = "https://missav.ws" // Base URL, mungkin perlu diupdate jika domain berubah
     override var name = "MissAV"
     override val hasMainPage = true
     override var lang = "id"
@@ -90,14 +90,14 @@ class MissAVProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         // Cache movie details for 1 day
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 60 * 24).document
-        val title = document.selectFirst("h1.text-base")?.text()?.trim() 
-            ?: document.selectFirst("h1")?.text()?.trim() 
+        val title = document.selectFirst("h1.text-base")?.text()?.trim()
+            ?: document.selectFirst("h1")?.text()?.trim()
             ?: document.selectFirst("meta[property='og:title']")?.attr("content")
             ?: ""
-        
+
         val poster = document.selectFirst("video.player")?.attr("data-poster")
             ?: document.selectFirst("meta[property='og:image']")?.attr("content")
-            
+
         val plot = document.selectFirst("div.mb-4 .text-secondary")?.text()?.trim()
             ?: document.selectFirst("meta[property='og:description']")?.attr("content")
 
@@ -123,52 +123,80 @@ class MissAVProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Don't cache links as they might expire
+        // Ambil response HTML dari halaman video
         val response = app.get(data, headers = mapOf("Referer" to "$mainUrl/")).text
-        
-        val surritRegex = Regex("""(https?://surrit\.com/[a-z0-9-]+/[^"']+\.m3u8)""")
-        val m3u8Links = surritRegex.findAll(response).map { it.value }.toList()
-        
-        if (m3u8Links.isNotEmpty()) {
-            m3u8Links.forEach { link ->
-                val (name, quality) = when {
-                    link.contains("/1080p/") -> "Surrit 1080p" to Qualities.P1080.value
-                    link.contains("/720p/") -> "Surrit 720p" to Qualities.P720.value
-                    link.contains("/480p/") -> "Surrit 480p" to Qualities.P480.value
-                    link.contains("/360p/") -> "Surrit 360p" to Qualities.P360.value
-                    else -> "Surrit Auto" to Qualities.Unknown.value
+
+        // --- Pendekatan Baru: Ekstrak tautan dari JavaScript ---
+
+        // 1. Cari blok script yang berisi variabel 'source'
+        // Pattern ini akan mencocokkan "source='...'" atau 'source="..."' yang berada di dalam tag <script>
+        val scriptRegex = Regex("<script[^>]*>.*?(source\\s*=\\s*['\"])(.*?)(['\"])", RegexOption.DOT_MATCHES_ALL)
+        val scriptMatch = scriptRegex.find(response)
+
+        if (scriptMatch != null) {
+            // Kita sudah menemukan blok script, sekarang ekstrak semua tautan .m3u8 dari dalamnya
+            // Karena kita mencari tautan, kita bisa gunakan pattern yang lebih sederhana
+            val m3u8Regex = Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""")
+            val allLinks = m3u8Regex.findAll(scriptMatch.value).map { it.value }.toList()
+
+            // Filter link untuk mendapatkan yang terbaik (prioritas: 1280x720 > 842x480 > playlist)
+            // Urutan prioritas ini bisa disesuaikan
+            val prioritizedLinks = allLinks.sortedByDescending { link ->
+                when {
+                    link.contains("1280x720") -> 3
+                    link.contains("842x480") -> 2
+                    link.contains("playlist") -> 1
+                    else -> 0
                 }
+            }
+
+            if (prioritizedLinks.isNotEmpty()) {
+                // Gunakan link dengan prioritas tertinggi
+                val bestLink = prioritizedLinks.first()
+                var quality = Qualities.Unknown.value
+                val name = when {
+                    bestLink.contains("1280x720") -> "Surrit 720p"
+                    bestLink.contains("842x480") -> "Surrit 480p"
+                    else -> "Surrit Auto"
+                }
+
                 callback.invoke(
                     newExtractorLink(
                         this.name,
                         name,
-                        link,
-                        type = if (link.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        bestLink,
+                        type = ExtractorLinkType.M3U8
                     ) {
                         this.referer = mainUrl
                         this.quality = quality
                     }
                 )
-            }
-        } else {
-            val m3u8 = Regex("""["']?file["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
-                ?: Regex("""["']?source["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
-                ?: Regex("""(https?://[^"']+\.m3u8[^"']*)""").find(response)?.groupValues?.get(1)
-            
-            if (m3u8 != null) {
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        name,
-                        m3u8,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.P1080.value
-                    }
-                )
+                return true
             }
         }
-        return true
+
+        // --- Pendekatan Cadangan (Fallback) ---
+        // Jika pendekatan utama gagal, coba cari tautan langsung di HTML (mungkin untuk kasus tertentu)
+        val fallbackM3u8 = Regex("""["']?file["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
+            ?: Regex("""["']?source["']?\s*:\s*["'](https?://[^"']+\.m3u8.*?)["']""").find(response)?.groupValues?.get(1)
+            ?: Regex("""(https?://[^"']+\.m3u8[^"']*)""").find(response)?.groupValues?.get(1)
+
+        if (fallbackM3u8 != null) {
+            callback.invoke(
+                newExtractorLink(
+                    name,
+                    "Surrit (Fallback)",
+                    fallbackM3u8,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.P1080.value
+                }
+            )
+            return true
+        }
+
+        // Jika semua gagal, tidak ada link ditemukan
+        return false
     }
 }

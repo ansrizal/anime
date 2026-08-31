@@ -10,7 +10,7 @@ import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
     // Gunakan IP atau domain tanpa trailing slash, sama seperti pembanding
-    override var mainUrl = "http://oppa.biz"  // bisa ganti dengan "http://oppa.biz" jika berhasil
+    override var mainUrl = "http://45.11.57.188"  // bisa ganti dengan "http://oppa.biz" jika berhasil
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"

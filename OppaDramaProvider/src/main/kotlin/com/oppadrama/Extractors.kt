@@ -10,10 +10,8 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import org.jsoup.select.Elements
-import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.*
-import org.jsoup.nodes.Element
+
+
 
 class Smoothpre: VidHidePro() {
     override var name = "EarnVids"
@@ -32,7 +30,7 @@ class BuzzServer : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val qualityText = app.get(url).document.selectFirst("div.max-w-2xl > span")?.text()
+            val qualityText = app.get(url).documentLarge.selectFirst("div.max-w-2xl > span")?.text()
             val quality = getQualityFromName(qualityText)
             val response = app.get("$url/download", referer = url, allowRedirects = false)
             val redirectUrl = response.headers["hx-redirect"] ?: ""
@@ -42,7 +40,8 @@ class BuzzServer : ExtractorApi() {
                     newExtractorLink(
                         "BuzzServer",
                         "BuzzServer",
-                        redirectUrl) {
+                        redirectUrl,
+                    ) {
                         this.quality = quality
                     }
                 )

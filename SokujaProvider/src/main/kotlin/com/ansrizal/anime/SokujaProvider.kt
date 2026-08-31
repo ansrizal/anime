@@ -20,7 +20,8 @@ class SokujaProvider : MainAPI() {
         val poster: String?,
         val plot: String?,
         val episodes: List<Episode>,
-        val type: TvType
+        val type: TvType,
+        val tags: List<String>? = null
     )
     private val animeCache = mutableMapOf<String, CachedAnimeData>()
     private val linkCache = mutableMapOf<String, List<ExtractorLink>>()
@@ -267,6 +268,7 @@ class SokujaProvider : MainAPI() {
             return newAnimeLoadResponse(cached.title, currentUrl, cached.type) {
                 this.posterUrl = cached.poster
                 this.plot = cached.plot
+                this.tags = cached.tags
                 addEpisodes(DubStatus.Subbed, cached.episodes)
             }
         }
@@ -276,8 +278,17 @@ class SokujaProvider : MainAPI() {
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
-        val description = document.selectFirst("p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
+        // ----- PERBAIKAN SINopsis & GENRE -----
+        // Cari sinopsis di area "Informasi Series"
+        val description = document.selectFirst("div.rounded-xl.bg-sokuja-card.p-4 div.mt-3 p.text-sm.leading-relaxed")?.text()?.trim()
+            ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
+
+        // Ambil genre dari area "Informasi Series" (bukan dari footer)
+        val genreElements = document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
+        val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
+
+        // ----- AMBIL DAFTAR EPISODE -----
         val episodes = mutableListOf<Episode>()
         Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
             .findAll(rawData).forEach { match ->
@@ -297,15 +308,19 @@ class SokujaProvider : MainAPI() {
             }
         }
 
+        // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
+        val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
+
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
 
         // ----- SIMPAN KE CACHE -----
-        animeCache[currentUrl] = CachedAnimeData(title, poster, description, episodes.toList(), type)
+        animeCache[currentUrl] = CachedAnimeData(title, poster, description, sortedEpisodes, type, tags)
 
         return newAnimeLoadResponse(title, currentUrl, type) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedByDescending { it.episode })
+            this.tags = tags
+            addEpisodes(DubStatus.Subbed, sortedEpisodes)
         }
     }
 

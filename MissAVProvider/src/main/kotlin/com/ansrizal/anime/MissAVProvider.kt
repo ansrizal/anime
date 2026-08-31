@@ -3,7 +3,6 @@ package com.ansrizal.anime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URLDecoder
 
 class MissAVProvider : MainAPI() {
     override var mainUrl = "https://missav.ws"
@@ -59,6 +58,7 @@ class MissAVProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}?page=$page"
+        // Cache main page for 60 minutes
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 60).document
         val home = document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
@@ -79,6 +79,7 @@ class MissAVProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/id/search/${query.replace(" ", "%20")}"
+        // Cache search results for 30 minutes
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 30).document
         return document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
@@ -86,6 +87,7 @@ class MissAVProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // Cache movie details for 1 day
         val document = app.get(url, headers = mapOf("Referer" to "$mainUrl/"), cacheTime = 60 * 24).document
         val title = document.selectFirst("h1.text-base")?.text()?.trim() 
             ?: document.selectFirst("h1")?.text()?.trim() 
@@ -142,14 +144,15 @@ class MissAVProvider : MainAPI() {
                 val name = if (path == "playlist") "Surrit Auto" else "Surrit ${path.replace("/video", "")}"
                 
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         this.name,
                         name,
                         link,
-                        mainUrl,
-                        qualityValue,
-                        isM3u8 = true
-                    )
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = qualityValue
+                    }
                 )
             }
             return true
@@ -161,14 +164,15 @@ class MissAVProvider : MainAPI() {
             if (links.isNotEmpty()) {
                 links.forEach { link ->
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             this.name,
                             this.name,
                             link,
-                            mainUrl,
-                            Qualities.Unknown.value,
-                            isM3u8 = true
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
                 return true

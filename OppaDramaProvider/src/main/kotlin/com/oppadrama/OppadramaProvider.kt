@@ -41,37 +41,38 @@ class OppadramaProvider : MainAPI() {
             else -> "$mainUrl$path/page/$page/"
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
-        val document = app.get(url).document
+        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")).document
+        
+        // Selector paling spesifik dari HTML
         val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
-        // fallback jika selector utama gagal
-        val finalItems = if (items.isEmpty()) {
-            document.select("article.bs, div.bs, div.bsx, div.ml-item").mapNotNull { it.toSearchResult() }
-        } else items
-
-        return newHomePageResponse(HomePageList(request.name, finalItems), hasNext = finalItems.isNotEmpty())
+        
+        // Jika masih kosong, coba selector alternatif
+        return if (items.isNotEmpty()) {
+            newHomePageResponse(HomePageList(request.name, items), hasNext = true)
+        } else {
+            // Fallback: coba selector lain
+            val fallbackItems = document.select("article.bs").mapNotNull { it.toSearchResult() }
+            newHomePageResponse(HomePageList(request.name, fallbackItems), hasNext = fallbackItems.isNotEmpty())
+        }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val link = this.selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
-
-        // Ambil judul dari atribut title, lalu dari div.tt atau div.tts, terakhir h2
-        var title = link.attr("title").ifBlank {
-            this.selectFirst("div.tt, div.tts")?.text()?.trim()
+        
+        // Ambil judul dari atribut title
+        var title = link.attr("title").trim()
+        if (title.isBlank()) {
+            title = this.selectFirst("div.tt")?.text()?.trim() ?: 
+                    this.selectFirst("div.tts")?.text()?.trim() ?:
+                    this.selectFirst("h2")?.text()?.trim() ?: return null
         }
-        if (title.isNullOrBlank()) {
-            title = this.selectFirst("h2")?.text()?.trim()
-        }
-        if (title.isNullOrBlank()) return null
-
+        
         val img = this.selectFirst("img")
         val poster = img?.let {
-            it.attr("abs:data-src").ifBlank { 
-                it.attr("abs:src").ifBlank { 
-                    it.getImageAttr()
-                }
-            }
-        }?.let { fixUrlNull(it) }
+            val src = it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
+            fixUrlNull(src.ifBlank { it.getImageAttr() })
+        }
 
         val typeElement = this.selectFirst("div.typez")
         val isMovie = typeElement?.text()?.equals("Movie", ignoreCase = true) == true
@@ -89,10 +90,10 @@ class OppadramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl?s=$query"
-        val document = app.get(url, timeout = 50000L).document
+        val document = app.get(url, timeout = 50000L, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")).document
         val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
         return if (items.isNotEmpty()) items else {
-            document.select("article.bs, div.bs, div.bsx").mapNotNull { it.toSearchResult() }
+            document.select("article.bs").mapNotNull { it.toSearchResult() }
         }
     }
 
@@ -107,7 +108,7 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")).document
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
@@ -147,7 +148,7 @@ class OppadramaProvider : MainAPI() {
                 ?: ""
         )
 
-        val recommendations = document.select("div.listupd article.bs")
+        val recommendations = document.select("article.bs")
             .mapNotNull { it.toRecommendResult() }
 
         val episodeElements = document.select("div.eplister ul li a")
@@ -196,7 +197,7 @@ class OppadramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")).document
 
         document.selectFirst("div.player-embed iframe")
             ?.getIframeAttr()

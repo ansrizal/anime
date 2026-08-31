@@ -62,9 +62,16 @@ class DonghubProvider : MainAPI() {
             items = document.select("article.bsx").mapNotNull { it.toSearchResult() }
         }
         
+        // Deteksi apakah ada halaman berikutnya
+        val nextPageUrl = "/page/${page + 1}/"
+        val hasNext = document.select(".hpage a.r, a.r, .pagination a.next, a[rel='next']").any { 
+            it.attr("href").contains(nextPageUrl)
+        }
+        val finalHasNext = items.isNotEmpty() && hasNext
+        
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = items.isNotEmpty(),
+            hasNext = finalHasNext,
         )
     }
 
@@ -79,9 +86,8 @@ class DonghubProvider : MainAPI() {
                     selectFirst("h2")?.text()?.trim() ?: return null
         }
         
-        // Ambil gambar dari .limit img (poster utama)
+        // Ambil gambar langsung dari src (URL absolut)
         val img = selectFirst(".limit img") ?: selectFirst("img")
-        // URL gambar sudah absolut, ambil langsung
         val poster = img?.attr("src")?.takeIf { it.isNotBlank() }
         
         val typeEl = selectFirst(".typez")
@@ -123,7 +129,6 @@ class DonghubProvider : MainAPI() {
         val isMovie = typeText.contains("Movie", ignoreCase = true) || 
                       document.select(".typez.Movie").isNotEmpty()
 
-        // Ambil poster dari berbagai sumber, langsung ambil src
         val poster = document.select("div.ime > img, div.bigcontent img").first()?.attr("src")
             ?: document.select("meta[property=og:image]").attr("content")
             ?: document.select("img.attachment-post-thumbnail").first()?.attr("src")
@@ -207,17 +212,5 @@ class DonghubProvider : MainAPI() {
         }
 
         return true
-    }
-
-    private fun Element.getsrcAttribute(): String {
-        val src = this.attr("src")
-        val dataSrc = this.attr("data-src")
-        val dataLazy = this.attr("data-lazy-src")
-        return when {
-            src.isNotBlank() && src.startsWith("http") -> src
-            dataSrc.isNotBlank() && dataSrc.startsWith("http") -> dataSrc
-            dataLazy.isNotBlank() && dataLazy.startsWith("http") -> dataLazy
-            else -> ""
-        }
     }
 }

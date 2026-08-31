@@ -120,83 +120,79 @@ class MissAVProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data, headers = mapOf("Referer" to "$mainUrl/")).text
-        
-        // Cari semua script tags
-        val scriptRegex = Regex("<script[^>]*>([\\s\\S]*?)</script>")
-        val allScripts = scriptRegex.findAll(response).map { it.groupValues[1] }.toList()
-        
-        var foundLink = false
-        
-        // Cari di setiap script untuk menemukan source m3u8
-        for (script in allScripts) {
-            // Cari pola yang mendeklarasikan variabel source
-            val sourceRegex = Regex("""(?:source|source842|source1280)\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]""")
-            val match = sourceRegex.find(script)
-            
-            if (match != null) {
-                val videoUrl = match.groupValues[1]
-                if (videoUrl.isNotEmpty()) {
-                    // Tentukan kualitas berdasarkan URL
-                    val quality = when {
-                        videoUrl.contains("1280x720") -> Qualities.P720.value
-                        videoUrl.contains("842x480") -> Qualities.P480.value
-                        videoUrl.contains("playlist") -> Qualities.Unknown.value
-                        else -> Qualities.Unknown.value
-                    }
-                    
-                    val qualityName = when {
-                        videoUrl.contains("1280x720") -> "720p"
-                        videoUrl.contains("842x480") -> "480p"
-                        videoUrl.contains("playlist") -> "Auto"
-                        else -> "Source"
-                    }
-                    
-                    // Buat ExtractorLink dengan cara yang benar
-                    val link = ExtractorLink(
-                        source = this.name,
-                        name = "Surrit $qualityName",
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8,
-                        quality = quality,
-                        referer = mainUrl,
-                        headers = mapOf("Referer" to mainUrl)
-                    )
-                    
-                    callback.invoke(link)
-                    foundLink = true
-                    break
+
+        // Cari semua URL .m3u8 di seluruh halaman (termasuk di dalam script eval)
+        val m3u8Regex = Regex("""https?://surrit\.com/[a-f0-9-]+/[^"'\s<>]+\.m3u8[^"'\s<>]*""")
+        val allLinks = m3u8Regex.findAll(response).map { it.value }.toList().distinct()
+
+        if (allLinks.isNotEmpty()) {
+            // Urutkan prioritas: 1280x720 > 720p > 842x480 > 480p > playlist
+            val sortedLinks = allLinks.sortedByDescending { link ->
+                when {
+                    link.contains("1280x720") -> 4
+                    link.contains("720p") -> 3
+                    link.contains("842x480") -> 2
+                    link.contains("480p") -> 1
+                    link.contains("playlist") -> 0
+                    else -> -1
                 }
             }
-        }
-        
-        // Jika tidak ditemukan di script, coba cari langsung di HTML
-        if (!foundLink) {
-            // Cari pola m3u8 di seluruh HTML
-            val m3u8Regex = Regex("""https?://[^"'\s<>]+\.m3u8[^"'\s<>]*""")
-            val allLinks = m3u8Regex.findAll(response).map { it.value }.toList()
-            
-            if (allLinks.isNotEmpty()) {
-                // Pilih link terbaik (prioritaskan 720p > 480p > playlist)
-                val bestLink = allLinks.firstOrNull { it.contains("1280x720") } 
-                    ?: allLinks.firstOrNull { it.contains("842x480") }
-                    ?: allLinks.firstOrNull { it.contains("playlist") }
-                    ?: allLinks.first()
-                
-                val link = ExtractorLink(
+
+            val bestLink = sortedLinks.first()
+            val qualityName = when {
+                bestLink.contains("1280x720") -> "720p"
+                bestLink.contains("720p") -> "720p"
+                bestLink.contains("842x480") -> "480p"
+                bestLink.contains("480p") -> "480p"
+                else -> "Auto"
+            }
+
+            val quality = when {
+                bestLink.contains("1280x720") -> Qualities.P720.value
+                bestLink.contains("720p") -> Qualities.P720.value
+                bestLink.contains("842x480") -> Qualities.P480.value
+                bestLink.contains("480p") -> Qualities.P480.value
+                else -> Qualities.Unknown.value
+            }
+
+            callback.invoke(
+                ExtractorLink(
                     source = this.name,
-                    name = "Surrit",
+                    name = "Surrit $qualityName",
                     url = bestLink,
                     type = ExtractorLinkType.M3U8,
-                    quality = Qualities.P720.value,
+                    quality = quality,
                     referer = mainUrl,
                     headers = mapOf("Referer" to mainUrl)
                 )
-                
-                callback.invoke(link)
-                foundLink = true
+            )
+            return true
+        }
+
+        // Fallback: coba cari pola source = '...' di dalam script
+        val scriptRegex = Regex("<script[^>]*>([\\s\\S]*?)</script>")
+        val allScripts = scriptRegex.findAll(response).map { it.groupValues[1] }.toList()
+
+        for (script in allScripts) {
+            val sourceRegex = Regex("""(?:source|source842|source1280)\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]""")
+            val match = sourceRegex.find(script)
+            if (match != null) {
+                val videoUrl = match.groupValues[1]
+                callback.invoke(
+                    ExtractorLink(
+                        source = this.name,
+                        name = "Surrit",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8,
+                        quality = Qualities.P720.value,
+                        referer = mainUrl,
+                        headers = mapOf("Referer" to mainUrl)
+                    )
+                )
+                return true
             }
         }
-        
-        return foundLink
+
+        return false
     }
 }

@@ -279,14 +279,18 @@ class SokujaProvider : MainAPI() {
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
 
-        // ----- PERBAIKAN SINopsis & GENRE -----
-        // Cari sinopsis di area "Informasi Series"
-        val description = document.selectFirst("div.rounded-xl.bg-sokuja-card.p-4 div.mt-3 p.text-sm.leading-relaxed")?.text()?.trim()
+        // ----- PERBAIKAN SINopsis & GENRE UNTUK HALAMAN ANIME -----
+        // 1. Sinopsis: cari di div.prose.prose-invert (atau .prose-invert) pada halaman anime
+        val description = document.selectFirst("div.prose.prose-invert, div.prose-invert, div.prose")?.text()?.trim()
             ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // Ambil genre dari area "Informasi Series" (bukan dari footer)
-        val genreElements = document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
+        // 2. Genre: ambil dari div.flex.flex-wrap.gap-2 yang berisi link genre (biasanya di atas halaman anime)
+        val genreElements = document.select("div.flex.flex-wrap.gap-2 a[href*='/genre/']")
         val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
+            .ifEmpty { // fallback ke area informasi series jika tidak ditemukan
+                document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
+                    .mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
+            }
 
         // ----- AMBIL DAFTAR EPISODE -----
         val episodes = mutableListOf<Episode>()

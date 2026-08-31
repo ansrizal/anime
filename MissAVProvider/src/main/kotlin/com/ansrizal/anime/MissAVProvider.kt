@@ -113,6 +113,29 @@ class MissAVProvider : MainAPI() {
         }
     }
 
+    // Fungsi untuk mendekode script eval
+    private fun decodeEvalScript(script: String): String? {
+        val evalRegex = Regex(
+            """eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)\s*\{[^}]*\}\s*\(\s*'([^']*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*\[([^\]]*)\]\s*,\s*[^,]*,\s*[^)]*\)\s*\)""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val match = evalRegex.find(script) ?: return null
+        val p = match.groupValues[1]
+        val a = match.groupValues[2].toInt()
+        val kRaw = match.groupValues[4]
+        // Parse array k
+        val k = kRaw.split(',').map { 
+            it.trim().removeSurrounding("'", "'").removeSurrounding("\"", "\"") 
+        }
+        var decoded = p
+        for (i in 0 until a) {
+            val token = i.toString(36) // base36
+            val pattern = Regex("\\b$token\\b")
+            decoded = decoded.replace(pattern, k[i])
+        }
+        return decoded
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -121,13 +144,43 @@ class MissAVProvider : MainAPI() {
     ): Boolean {
         val response = app.get(data, headers = mapOf("Referer" to "$mainUrl/")).text
 
-        // Cari semua URL .m3u8 di seluruh halaman (termasuk di dalam script eval)
-        val m3u8Regex = Regex("""https?://surrit\.com/[a-f0-9-]+/[^"'\s<>]+\.m3u8[^"'\s<>]*""")
-        val allLinks = m3u8Regex.findAll(response).map { it.value }.toList().distinct()
+        // Kumpulkan semua script
+        val scriptRegex = Regex("<script[^>]*>([\\s\\S]*?)</script>", RegexOption.DOT_MATCHES_ALL)
+        val allScripts = scriptRegex.findAll(response).map { it.groupValues[1] }.toList()
 
-        if (allLinks.isNotEmpty()) {
-            // Urutkan prioritas: 1280x720 > 720p > 842x480 > 480p > playlist
-            val sortedLinks = allLinks.sortedByDescending { link ->
+        val allLinks = mutableListOf<String>()
+
+        // Proses setiap script
+        for (script in allScripts) {
+            // Coba decode eval jika ada
+            if (script.contains("eval(function(")) {
+                val decoded = decodeEvalScript(script)
+                if (decoded != null) {
+                    // Cari URL .m3u8 di hasil decode
+                    val m3u8Regex = Regex("""https?://[^"'\s<>]+\.m3u8[^"'\s<>]*""")
+                    val links = m3u8Regex.findAll(decoded).map { it.value }.toList()
+                    allLinks.addAll(links)
+                }
+            } else {
+                // Cari URL langsung
+                val m3u8Regex = Regex("""https?://surrit\.com/[a-f0-9-]+/[^"'\s<>]+\.m3u8[^"'\s<>]*""")
+                val links = m3u8Regex.findAll(script).map { it.value }.toList()
+                allLinks.addAll(links)
+            }
+        }
+
+        // Jika masih belum ada, cari di seluruh HTML (fallback)
+        if (allLinks.isEmpty()) {
+            val m3u8Regex = Regex("""https?://[^"'\s<>]+\.m3u8[^"'\s<>]*""")
+            allLinks.addAll(m3u8Regex.findAll(response).map { it.value }.toList())
+        }
+
+        // Hapus duplikat
+        val uniqueLinks = allLinks.distinct()
+
+        if (uniqueLinks.isNotEmpty()) {
+            // Pilih link terbaik berdasarkan kualitas
+            val bestLink = uniqueLinks.sortedByDescending { link ->
                 when {
                     link.contains("1280x720") -> 4
                     link.contains("720p") -> 3
@@ -136,9 +189,8 @@ class MissAVProvider : MainAPI() {
                     link.contains("playlist") -> 0
                     else -> -1
                 }
-            }
+            }.first()
 
-            val bestLink = sortedLinks.first()
             val qualityName = when {
                 bestLink.contains("1280x720") -> "720p"
                 bestLink.contains("720p") -> "720p"
@@ -167,30 +219,6 @@ class MissAVProvider : MainAPI() {
                 )
             )
             return true
-        }
-
-        // Fallback: coba cari pola source = '...' di dalam script
-        val scriptRegex = Regex("<script[^>]*>([\\s\\S]*?)</script>")
-        val allScripts = scriptRegex.findAll(response).map { it.groupValues[1] }.toList()
-
-        for (script in allScripts) {
-            val sourceRegex = Regex("""(?:source|source842|source1280)\s*=\s*['"]([^'"]+\.m3u8[^'"]*)['"]""")
-            val match = sourceRegex.find(script)
-            if (match != null) {
-                val videoUrl = match.groupValues[1]
-                callback.invoke(
-                    ExtractorLink(
-                        source = this.name,
-                        name = "Surrit",
-                        url = videoUrl,
-                        type = ExtractorLinkType.M3U8,
-                        quality = Qualities.P720.value,
-                        referer = mainUrl,
-                        headers = mapOf("Referer" to mainUrl)
-                    )
-                )
-                return true
-            }
         }
 
         return false

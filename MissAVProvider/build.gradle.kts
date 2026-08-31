@@ -4,6 +4,8 @@ plugins {
     id("com.lagradost.cloudstream3.gradle")
 }
 
+val cloudstreamApiVersion = "-SNAPSHOT"
+
 cloudstream {
     setRepo("https://github.com/ansrizal/anime")
     authors = listOf("Ans Rizal")

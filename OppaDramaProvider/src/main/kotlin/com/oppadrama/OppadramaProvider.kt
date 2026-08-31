@@ -42,20 +42,33 @@ class OppadramaProvider : MainAPI() {
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
-        val items = document.select("article.bs").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
+        // Selector spesifik untuk item daftar
+        val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        // Fallback jika tidak ditemukan (misal di halaman lain)
+        val finalItems = if (items.isEmpty()) {
+            document.select("article.bs, div.bs, div.bsx, div.ml-item, div.item, div.uta")
+                .mapNotNull { it.toSearchResult() }
+        } else items
+
+        return newHomePageResponse(HomePageList(request.name, finalItems), hasNext = finalItems.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val link = this.selectFirst("a[href]") ?: return null
         val href = fixUrl(link.attr("href"))
+        // Ambil judul dari atribut title atau dari div.tt
         val title = link.attr("title").ifBlank {
             this.selectFirst("div.tt")?.text()?.trim()
         } ?: return null
 
         val img = this.selectFirst("img")
         val poster = img?.let {
-            it.attr("abs:data-src").ifBlank { it.attr("abs:src") }.ifBlank { it.getImageAttr() }
+            // Coba beberapa atribut
+            it.attr("abs:data-src").ifBlank { 
+                it.attr("abs:src").ifBlank { 
+                    it.getImageAttr()
+                }
+            }
         }?.let { fixUrlNull(it) }
 
         val typeElement = this.selectFirst("div.typez")
@@ -75,7 +88,11 @@ class OppadramaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl?s=$query"
         val document = app.get(url, timeout = 50000L).document
-        return document.select("article.bs").mapNotNull { it.toSearchResult() }
+        val items = document.select("div.listupd article.bs").mapNotNull { it.toSearchResult() }
+        return if (items.isNotEmpty()) items else {
+            document.select("article.bs, div.bs, div.bsx, div.ml-item, div.item, div.uta")
+                .mapNotNull { it.toSearchResult() }
+        }
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {

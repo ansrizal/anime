@@ -14,7 +14,7 @@ class DonghubProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/" to "Latest Releases",
+        "anime/?status=&type=&order=update/" to "Latest Releases",
         "status/ongoing/" to "Series Ongoing",
         "status/completed/" to "Series Completed",
         "type/movie/" to "Movie",

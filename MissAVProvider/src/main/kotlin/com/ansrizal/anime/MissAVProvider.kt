@@ -151,16 +151,18 @@ class MissAVProvider : MainAPI() {
                         else -> "Source"
                     }
                     
-                    callback.invoke(
-                        newExtractorLink(
-                            name = this.name,
-                            source = "Surrit $qualityName",
-                            url = videoUrl,
-                            type = ExtractorLinkType.M3U8,
-                            quality = quality,
-                            referer = mainUrl
-                        )
+                    // Buat ExtractorLink dengan cara yang benar
+                    val link = ExtractorLink(
+                        source = this.name,
+                        name = "Surrit $qualityName",
+                        url = videoUrl,
+                        type = ExtractorLinkType.M3U8,
+                        quality = quality,
+                        referer = mainUrl,
+                        headers = mapOf("Referer" to mainUrl)
                     )
+                    
+                    callback.invoke(link)
                     foundLink = true
                     break
                 }
@@ -180,16 +182,17 @@ class MissAVProvider : MainAPI() {
                     ?: allLinks.firstOrNull { it.contains("playlist") }
                     ?: allLinks.first()
                 
-                callback.invoke(
-                    newExtractorLink(
-                        name = this.name,
-                        source = "Surrit",
-                        url = bestLink,
-                        type = ExtractorLinkType.M3U8,
-                        quality = Qualities.P720.value,
-                        referer = mainUrl
-                    )
+                val link = ExtractorLink(
+                    source = this.name,
+                    name = "Surrit",
+                    url = bestLink,
+                    type = ExtractorLinkType.M3U8,
+                    quality = Qualities.P720.value,
+                    referer = mainUrl,
+                    headers = mapOf("Referer" to mainUrl)
                 )
+                
+                callback.invoke(link)
                 foundLink = true
             }
         }

@@ -9,8 +9,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
-    // Gunakan domain utama yang benar, pastikan ada trailing slash
-    override var mainUrl = "https://oppa.biz/"
+    override var mainUrl = "http://oppa.biz/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -27,7 +26,7 @@ class OppadramaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "" to "Latest Update",          // root
+        "" to "Latest Update",
         "country/south-korea/" to "Drama Korea",
         "country/china/" to "Drama Chinese",
         "country/japan/" to "Drama Jepang",
@@ -36,47 +35,39 @@ class OppadramaProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Bangun URL dengan benar, pastikan tidak ada double slash
-        val base = mainUrl.trimEnd('/')
         val path = request.data.trim('/')
         val url = when {
-            page <= 1 -> "$base/$path/"
-            path.contains("?") -> {
-                val (before, after) = path.split("?", limit = 2)
-                "$base/$before/page/$page/?$after"
-            }
-            else -> "$base/$path/page/$page/"
+            page <= 1 -> if (path.isEmpty()) mainUrl else "$mainUrl$path/"
+            else -> "$mainUrl$path/page/$page/"
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = app.get(url).document
-        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
-                            .asSequence()
-                            .mapNotNull { it.toSearchResult() }
-                            .toList()
+        val items = document.select("article.bs").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val linkElement = this.selectFirst("a") ?: return null
-        val href = fixUrl(linkElement.attr("href"))
-        val title = linkElement.attr("title").ifBlank {
-            this.selectFirst("div.tt, h2, h3, .title, a[title]")?.text()
+        val link = this.selectFirst("a[href]") ?: return null
+        val href = fixUrl(link.attr("href"))
+        val title = link.attr("title").ifBlank {
+            this.selectFirst("div.tt")?.text()?.trim()
         } ?: return null
-        val img = this.selectFirst("img")
-        val poster = img?.attr("abs:data-src") ?: img?.attr("abs:src") ?: img?.getImageAttr()
 
-        // Ambil tipe dari elemen .typez (Movie / Drama / TV Show)
+        val img = this.selectFirst("img")
+        val poster = img?.let {
+            it.attr("abs:data-src").ifBlank { it.attr("abs:src") }.ifBlank { it.getImageAttr() }
+        }?.let { fixUrlNull(it) }
+
         val typeElement = this.selectFirst("div.typez")
-        val typeText = typeElement?.text() ?: ""
-        val isMovie = typeText.equals("Movie", ignoreCase = true)
+        val isMovie = typeElement?.text()?.equals("Movie", ignoreCase = true) == true
 
         return if (isMovie) {
             newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = fixUrlNull(poster)
+                this.posterUrl = poster
             }
         } else {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = fixUrlNull(poster)
+                this.posterUrl = poster
             }
         }
     }
@@ -84,18 +75,16 @@ class OppadramaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl?s=$query"
         val document = app.get(url, timeout = 50000L).document
-        val results = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta")
-            .asIterable()
-            .mapNotNull { it.toSearchResult() }
-        return results
+        return document.select("article.bs").mapNotNull { it.toSearchResult() }
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {
+        val link = this.selectFirst("a[href]") ?: return null
         val title = this.selectFirst("div.tt")?.text()?.trim() ?: return null
-        val href = this.selectFirst("a")?.attr("href") ?: return null
-        val posterUrl = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+        val href = fixUrl(link.attr("href"))
+        val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
         return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
+            this.posterUrl = poster
         }
     }
 
@@ -119,12 +108,10 @@ class OppadramaProvider : MainAPI() {
             (h * 60) + m
         }
 
-        val tags = document.select("div.genxed a").asIterable().map { it.text() }
+        val tags = document.select("div.genxed a").map { it.text() }
 
         val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
-            .asSequence()
             .map { it.text().trim() }
-            .toList()
 
         val rating = document.selectFirst("div.rating strong")
             ?.text()
@@ -139,14 +126,13 @@ class OppadramaProvider : MainAPI() {
                 ?.ownText()
                 ?.replace(":", "")
                 ?.trim()
-                ?: "",
+                ?: ""
         )
 
         val recommendations = document.select("div.listupd article.bs")
-            .asIterable()
             .mapNotNull { it.toRecommendResult() }
 
-        val episodeElements = document.select("div.eplister ul li a").asIterable()
+        val episodeElements = document.select("div.eplister ul li a")
 
         val episodes = episodeElements
             .reversed()

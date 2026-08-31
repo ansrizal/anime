@@ -136,7 +136,7 @@ class MissAVProvider : MainAPI() {
             if (match != null) {
                 val videoUrl = match.groupValues[1]
                 if (videoUrl.isNotEmpty()) {
-                    // Tentukan kualitas berdasarkan sumber
+                    // Tentukan kualitas berdasarkan URL
                     val quality = when {
                         videoUrl.contains("1280x720") -> Qualities.P720.value
                         videoUrl.contains("842x480") -> Qualities.P480.value
@@ -153,15 +153,13 @@ class MissAVProvider : MainAPI() {
                     
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "Surrit $qualityName",
-                            videoUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = mainUrl
-                            this.quality = quality
-                            this.isM3u8 = true
-                        }
+                            name = this.name,
+                            source = "Surrit $qualityName",
+                            url = videoUrl,
+                            type = ExtractorLinkType.M3U8,
+                            quality = quality,
+                            referer = mainUrl
+                        )
                     )
                     foundLink = true
                     break
@@ -184,15 +182,13 @@ class MissAVProvider : MainAPI() {
                 
                 callback.invoke(
                     newExtractorLink(
-                        this.name,
-                        "Surrit",
-                        bestLink,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = mainUrl
-                        this.quality = Qualities.P720.value
-                        this.isM3u8 = true
-                    }
+                        name = this.name,
+                        source = "Surrit",
+                        url = bestLink,
+                        type = ExtractorLinkType.M3U8,
+                        quality = Qualities.P720.value,
+                        referer = mainUrl
+                    )
                 )
                 foundLink = true
             }

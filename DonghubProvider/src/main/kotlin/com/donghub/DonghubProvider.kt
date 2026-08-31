@@ -14,48 +14,104 @@ class DonghubProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
 
     override val mainPage = mainPageOf(
-        "anime/" to "Latest Releases",
+        "" to "Latest Releases",
+        "anime/" to "All Anime",
         "status/ongoing/" to "Series Ongoing",
         "status/completed/" to "Series Completed",
         "type/movie/" to "Movie",
+        "genres/action/" to "Action",
+        "genres/adventure/" to "Adventure",
+        "genres/comedy/" to "Comedy",
+        "genres/cultivation/" to "Cultivation",
+        "genres/drama/" to "Drama",
+        "genres/fantasy/" to "Fantasy",
+        "genres/game/" to "Game",
+        "genres/historical/" to "Historical",
+        "genres/horor/" to "Horor",
+        "genres/isekai/" to "Isekai",
+        "genres/martial-arts/" to "Martial Arts",
+        "genres/mystery/" to "Mystery",
+        "genres/op-mc/" to "OP-MC",
+        "genres/psychological/" to "Psychological",
+        "genres/reincarnation/" to "Reincarnation",
+        "genres/romance/" to "Romance",
+        "genres/sci-fi/" to "Sci-fi",
+        "genres/super-power/" to "Super Power",
+        "genres/supranatural/" to "Supranatural",
+        "genres/war/" to "War",
+        "genres/wuxia/" to "Wuxia"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page <= 1) {
-            "$mainUrl/${request.data}"
-        } else {
-            val data = request.data.removeSuffix("/")
-            if (data.contains("?")) {
-                "$mainUrl/${data.substringBefore("?")}/page/$page/?${data.substringAfter("?")}"
-            } else {
-                "$mainUrl/$data/page/$page/"
-            }
+        val path = request.data.trim('/')
+        val url = when {
+            page <= 1 -> if (path.isEmpty()) mainUrl else "$mainUrl$path/"
+            path.contains('?') -> "$mainUrl$path&page=$page"
+            else -> "$mainUrl$path/page/$page/"
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
-        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-        val items = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asSequence().mapNotNull { it.toSearchResult() }.toList()
+        val document = app.get(url, headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )).document
+        
+        var items = document.select("article.bs, article.styleegg").mapNotNull { it.toSearchResult() }
+        if (items.isEmpty()) {
+            items = document.select("div.listupd article").mapNotNull { it.toSearchResult() }
+        }
+        if (items.isEmpty()) {
+            items = document.select("article.bsx").mapNotNull { it.toSearchResult() }
+        }
+        
+        // Deteksi apakah ada halaman berikutnya
+        val nextPageUrl = "/page/${page + 1}/"
+        val hasNext = document.select(".hpage a.r, a.r, .pagination a.next, a[rel='next']").any { 
+            it.attr("href").contains(nextPageUrl)
+        }
+        val finalHasNext = items.isNotEmpty() && hasNext
+        
         return newHomePageResponse(
             HomePageList(request.name, items, isHorizontalImages = false),
-            hasNext = items.isNotEmpty(),
+            hasNext = finalHasNext,
         )
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("a[title]")?.attr("title")?.trim()
-            ?: selectFirst(".tt, h2, h3, .title")?.text()?.trim()
-            ?: return null
-        val href = fixUrl(selectFirst("a")?.attr("href") ?: return null)
-        val poster = fixUrlNull(selectFirst("img")?.getsrcAttribute())
-        return newAnimeSearchResponse(title, href, TvType.Anime) {
-            this.posterUrl = poster
+        val link = selectFirst("a[href]") ?: return null
+        val href = fixUrl(link.attr("href"))
+        
+        var title = link.attr("title").trim()
+        if (title.isBlank()) {
+            title = selectFirst(".eggtitle")?.text()?.trim() ?:
+                    selectFirst(".tt")?.text()?.trim() ?:
+                    selectFirst("h2")?.text()?.trim() ?: return null
+        }
+        
+        // Ambil gambar langsung dari src (URL absolut)
+        val img = selectFirst(".limit img") ?: selectFirst("img")
+        val poster = img?.attr("src")?.takeIf { it.isNotBlank() }
+        
+        val typeEl = selectFirst(".typez")
+        val isMovie = typeEl?.text()?.contains("Movie", ignoreCase = true) == true
+
+        return if (isMovie) {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = poster
+            }
+        } else {
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = poster
+            }
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val list = mutableListOf<SearchResponse>()
         for (i in 1..2) {
-            val document = app.get("$mainUrl/page/$i/?s=$query", headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-            val result = document.select("div.listupd article, article.bs, div.bs, div.bsx, div.ml-item, div.item, article, div.uta").asSequence().mapNotNull { it.toSearchResult() }.toList()
+            val url = "$mainUrl/page/$i/?s=$query"
+            val document = app.get(url, headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            )).document
+            val result = document.select("article.bs, article.styleegg").mapNotNull { it.toSearchResult() }
             if (result.isEmpty()) break
             list.addAll(result)
         }
@@ -63,43 +119,48 @@ class DonghubProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
+        val document = app.get(url, headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )).document
+        
         val title = document.selectFirst("h1.entry-title")?.text().orEmpty()
         val description = document.selectFirst("div.entry-content")?.text()?.trim()
         val typeText = document.selectFirst(".spe")?.text().orEmpty()
-        val isMovie = typeText.contains("Movie", ignoreCase = true)
+        val isMovie = typeText.contains("Movie", ignoreCase = true) || 
+                      document.select(".typez.Movie").isNotEmpty()
 
-        val poster = document.select("div.ime > img").first()?.getsrcAttribute()
+        val poster = document.select("div.ime > img, div.bigcontent img").first()?.attr("src")
             ?: document.select("meta[property=og:image]").attr("content")
+            ?: document.select("img.attachment-post-thumbnail").first()?.attr("src")
+            ?: ""
 
-        val epBlocks =
-            document.select(".eplister li").ifEmpty {
-                document.select("div.list-episode .episode-item")
-            }.ifEmpty {
-                document.select("#episodes a")
-            }
+        val epBlocks = document.select(".eplister li").ifEmpty {
+            document.select("div.list-episode .episode-item")
+        }.ifEmpty {
+            document.select("#episodes a")
+        }
 
-        return if (!isMovie) {
+        return if (!isMovie && epBlocks.isNotEmpty()) {
             val episodes = epBlocks.map { ep ->
                 val link = fixUrl(ep.selectFirst("a")?.attr("href").orEmpty())
-                val epTitle = ep.selectFirst(".epl-title")?.text() ?: ep.text()
+                val epTitle = ep.selectFirst(".epl-title, .epx")?.text()?.trim() ?: ep.text()
                 newEpisode(link) {
-                    this.name = epTitle.trim()
-                    this.posterUrl = fixUrlNull(poster)
+                    this.name = epTitle
+                    this.posterUrl = poster
                 }
             }.reversed()
 
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl = fixUrlNull(poster)
+                this.posterUrl = poster
                 this.plot = description
             }
         } else {
-            val movieLink = document.selectFirst(".eplister li > a")
+            val movieLink = document.selectFirst(".eplister li > a, .download a")
                 ?.attr("href")
                 ?.let { fixUrl(it) } ?: url
 
             newMovieLoadResponse(title, movieLink, TvType.Movie, movieLink) {
-                this.posterUrl = fixUrlNull(poster)
+                this.posterUrl = poster
                 this.plot = description
             }
         }
@@ -111,26 +172,45 @@ class DonghubProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")).document
-        document.select(".mobius option").asIterable().forEach { item ->
+        val document = app.get(data, headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        )).document
+
+        document.select(".mobius option").forEach { item ->
             val base64 = item.attr("value")
             if (base64.isNotBlank()) {
-                val decoded = base64Decode(base64)
-                val doc = Jsoup.parse(decoded)
-                val iframe = doc.select("iframe").attr("src")
-                loadExtractor(fixUrl(iframe), subtitleCallback, callback)
+                try {
+                    val decoded = base64Decode(base64)
+                    val doc = Jsoup.parse(decoded)
+                    val iframe = doc.select("iframe").attr("src")
+                    if (iframe.isNotBlank()) {
+                        loadExtractor(fixUrl(iframe), subtitleCallback, callback)
+                    }
+                } catch (_: Exception) { }
             }
         }
-        return true
-    }
 
-    private fun Element.getsrcAttribute(): String {
-        val src = this.attr("src")
-        val dataSrc = this.attr("data-src")
-        return when {
-            dataSrc.startsWith("http") -> dataSrc
-            src.startsWith("http") -> src
-            else -> ""
+        document.select("div.player-embed iframe, div.embed iframe, iframe[src]").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank() && !src.contains("google")) {
+                loadExtractor(fixUrl(src), subtitleCallback, callback)
+            }
         }
+
+        document.select("a[href*='.mp4'], a[href*='.m3u8'], a[href*='.mkv']").forEach { a ->
+            val url = a.attr("href")
+            if (url.isNotBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "Download",
+                        url = fixUrl(url),
+                        type = ExtractorLinkType.M3U8
+                    )
+                )
+            }
+        }
+
+        return true
     }
 }

@@ -14,6 +14,19 @@ class SokujaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
+    // ========== CACHE ==========
+    private data class CachedAnimeData(
+        val title: String,
+        val poster: String?,
+        val plot: String?,
+        val episodes: List<Episode>,
+        val type: TvType,
+        val tags: List<String>? = null
+    )
+    private val animeCache = mutableMapOf<String, CachedAnimeData>()
+    private val linkCache = mutableMapOf<String, List<ExtractorLink>>()
+    // ===========================
+
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -59,7 +72,7 @@ class SokujaProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
         "anime/?type=movie&order=update" to "Movie Terbaru",
-        "anime/" to "Daftar Anime",
+        "anime/?order=title_az" to "Daftar Anime",
         "genre/action/" to "Action",
         "genre/adult-cast/" to "Adult Cast",
         "genre/adventure/" to "Adventure",
@@ -214,8 +227,6 @@ class SokujaProvider : MainAPI() {
             ?: img?.attr("data-lazy-src") ?: img?.attr("data-src")
             ?: img?.attr("srcset")?.split(",")?.firstOrNull()?.trim()?.split(" ")?.firstOrNull()
 
-        // PENTING: Gunakan TvType.Anime untuk Update Terbaru agar Cloudstream memicu fungsi load() 
-        // dan kita bisa melakukan redirect ke halaman series utama.
         val type = if (isMovieHint || title.lowercase().contains("movie") || href.contains("movie")) TvType.AnimeMovie else TvType.Anime
 
         return newAnimeSearchResponse(title, href, type) {
@@ -252,12 +263,36 @@ class SokujaProvider : MainAPI() {
             }
         }
 
+        // ----- CEK CACHE -----
+        animeCache[currentUrl]?.let { cached ->
+            return newAnimeLoadResponse(cached.title, currentUrl, cached.type) {
+                this.posterUrl = cached.poster
+                this.plot = cached.plot
+                this.tags = cached.tags
+                addEpisodes(DubStatus.Subbed, cached.episodes)
+            }
+        }
+
+        // ----- PARSING SEPERTI BIASA -----
         val rawData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
-        val description = document.selectFirst("p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
+        // ----- PERBAIKAN SINopsis & GENRE UNTUK HALAMAN ANIME -----
+        // 1. Sinopsis: cari di div.prose.prose-invert (atau .prose-invert) pada halaman anime
+        val description = document.selectFirst("div.prose.prose-invert, div.prose-invert, div.prose")?.text()?.trim()
+            ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
+
+        // 2. Genre: ambil dari div.flex.flex-wrap.gap-2 yang berisi link genre (biasanya di atas halaman anime)
+        val genreElements = document.select("div.flex.flex-wrap.gap-2 a[href*='/genre/']")
+        val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
+            .ifEmpty { // fallback ke area informasi series jika tidak ditemukan
+                document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
+                    .mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
+            }
+
+        // ----- AMBIL DAFTAR EPISODE -----
         val episodes = mutableListOf<Episode>()
         Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
             .findAll(rawData).forEach { match ->
@@ -277,12 +312,19 @@ class SokujaProvider : MainAPI() {
             }
         }
 
+        // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
+        val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
+
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
-        
+
+        // ----- SIMPAN KE CACHE -----
+        animeCache[currentUrl] = CachedAnimeData(title, poster, description, sortedEpisodes, type, tags)
+
         return newAnimeLoadResponse(title, currentUrl, type) {
             this.posterUrl = poster
             this.plot = description
-            addEpisodes(DubStatus.Subbed, episodes.distinctBy { it.episode }.sortedByDescending { it.episode })
+            this.tags = tags
+            addEpisodes(DubStatus.Subbed, sortedEpisodes)
         }
     }
 
@@ -292,8 +334,15 @@ class SokujaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // ----- CEK CACHE LINK MP4 -----
+        linkCache[data]?.let { cachedLinks ->
+            cachedLinks.forEach { callback(it) }
+            return true
+        }
+
         var episodeId = data.toIntOrNull()
-        
+        val collectedLinks = mutableListOf<ExtractorLink>()
+
         if (episodeId == null && data.startsWith("http")) {
             val doc = request(data).document
             val scriptData = doc.select("script").joinToString { it.data() }.replace("\\\"", "\"")
@@ -314,15 +363,23 @@ class SokujaProvider : MainAPI() {
                 val quality = mirror.quality?.filter { it.isDigit() }?.toIntOrNull() ?: Qualities.Unknown.value
                 
                 if (mirror.embedType == "mp4" || url.endsWith(".mp4")) {
-                    callback(newExtractorLink(mirror.serverName ?: name, mirror.serverName ?: name, url) {
+                    val link = newExtractorLink(mirror.serverName ?: name, mirror.serverName ?: name, url) {
                         this.referer = "$mainUrl/"
                         this.quality = quality
-                    })
+                    }
+                    collectedLinks.add(link)
+                    callback(link)
                 } else {
                     loadExtractor(url, subtitleCallback, callback)
                 }
             }
         }
+
+        // ----- SIMPAN LINK MP4 KE CACHE -----
+        if (collectedLinks.isNotEmpty()) {
+            linkCache[data] = collectedLinks
+        }
+
         return true
     }
 }

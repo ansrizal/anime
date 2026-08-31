@@ -144,8 +144,6 @@ class DonghubProvider : MainAPI() {
                 newEpisode(link) {
                     this.name = epTitle
                     this.posterUrl = fixUrlNull(poster)
-                    // Tambahkan skip OP
-                    this.skipOp = true
                 }
             }.reversed()
 

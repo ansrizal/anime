@@ -9,8 +9,8 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
-    // Gunakan IP atau domain tanpa trailing slash, sama seperti pembanding
-    override var mainUrl = "http://45.11.57.188"  // bisa ganti dengan "http://oppa.biz" jika berhasil
+    // Gunakan IP yang sama dengan yang ada di HTML
+    override var mainUrl = "http://45.11.57.188/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -26,44 +26,51 @@ class OppadramaProvider : MainAPI() {
         }
     }
 
-    // Path menggunakan query parameter seperti pembanding
+    // Path menggunakan parameter query (seperti pembanding) untuk kategori, tapi root tetap ""
     override val mainPage = mainPageOf(
-        "series/?status=&type=&order=update" to "Latest Update",
+        "" to "Latest Update",                                  // root
         "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
         "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
         "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
         "series/?country%5B%5D=thailand&type=Drama&order=update" to "Drama Thailand",
-        "series/?country%5B%5D=usa&type=Drama&order=update" to "Drama Western",
-        "series/?country%5B%5D=south-korea&status=&type=Movie&order=update" to "Korean Movie",
-        "series/?country%5B%5D=china&status=&type=Movie&order=update" to "Chinese Movie",
-        "series/?country%5B%5D=japan&type=Movie&order=update" to "Japan Movie",
-        "series/?country%5B%5D=thailand&status=&type=Movie&order=update" to "Thailand Movie",
-        "series/?country%5B%5D=united-states&status=&type=Movie&order=update" to "Western Movie",
-        "series/?country%5B%5D=philippines&status=&type=Movie&order=update" to "Philippines Movie",
-        "series/?country%5B%5D=taiwan&status=&type=Movie&order=update" to "Taiwan Movie",
-        "series/?country%5B%5D=hong-kong&status=&type=Movie&order=update" to "Hong Kong Movie",
-        "series/?country%5B%5D=india&status=&type=Movie&order=update" to "India Movie"
+        "series/?type=Movie&order=update" to "Movies"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Bangun URL dengan parameter page seperti pembanding
-        val url = "$mainUrl/${request.data}".plus("&page=$page")
+        val path = request.data.trim('/')
+        val url = when {
+            // Jika path kosong (root) gunakan pagination /page/
+            path.isEmpty() -> if (page <= 1) mainUrl else "$mainUrl/page/$page/"
+            // Jika path mengandung '?' (query) berarti sudah ada parameter, tambahkan &page
+            path.contains('?') -> "$mainUrl$path&page=$page"
+            // Path biasa (misal country/...) tambahkan /page/
+            else -> if (page <= 1) "$mainUrl$path/" else "$mainUrl$path/page/$page/"
+        }.replace("(?<!:)/{2,}".toRegex(), "/")
+
         val document = app.get(url).document
-        val items = document.select("div.listupd article.bs")
-                            .mapNotNull { it.toSearchResult() }
+        // Coba selector yang paling umum
+        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+        if (items.isEmpty()) {
+            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+        }
         return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val linkElement = this.selectFirst("a") ?: return null
-        val href = fixUrl(linkElement.attr("href"))
-        val title = linkElement.attr("title").ifBlank {
-            this.selectFirst("div.tt")?.text()
-        } ?: return null
-        val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+        val link = this.selectFirst("a[href]") ?: return null
+        val href = fixUrl(link.attr("href"))
+        var title = link.attr("title").trim()
+        if (title.isBlank()) {
+            title = this.selectFirst(".tt")?.text()?.trim() ?:
+                    this.selectFirst(".tts")?.text()?.trim() ?:
+                    this.selectFirst("h2")?.text()?.trim() ?: return null
+        }
+        val img = this.selectFirst("img")
+        val poster = img?.let {
+            it.attr("abs:data-src").ifBlank { it.attr("abs:src") }
+        }?.let { fixUrlNull(it) }
 
-        // Tentukan tipe dari elemen .typez (lebih akurat)
-        val typeElement = this.selectFirst("div.typez")
+        val typeElement = this.selectFirst(".typez")
         val isMovie = typeElement?.text()?.equals("Movie", ignoreCase = true) == true
 
         return if (isMovie) {
@@ -78,18 +85,22 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", timeout = 50000L).document
-        val results = document.select("div.listupd article.bs")
-            .mapNotNull { it.toSearchResult() }
-        return results
+        val url = "$mainUrl?s=$query"
+        val document = app.get(url, timeout = 50000L).document
+        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+        if (items.isEmpty()) {
+            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+        }
+        return items
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {
-        val title = this.selectFirst("div.tt")?.text()?.trim() ?: return null
-        val href = this.selectFirst("a")?.attr("href") ?: return null
-        val posterUrl = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
+        val link = this.selectFirst("a[href]") ?: return null
+        val title = this.selectFirst(".tt")?.text()?.trim() ?: return null
+        val href = fixUrl(link.attr("href"))
+        val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
         return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
+            this.posterUrl = poster
         }
     }
 
@@ -134,7 +145,7 @@ class OppadramaProvider : MainAPI() {
                 ?: ""
         )
 
-        val recommendations = document.select("div.listupd article.bs")
+        val recommendations = document.select("article.bs")
             .mapNotNull { it.toRecommendResult() }
 
         val episodeElements = document.select("div.eplister ul li a")

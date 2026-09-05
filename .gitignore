@@ -1,0 +1,18 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+**/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.vscodetest.txt
+
+# Logs and crash reports
+hs_err_pid*
+replay_pid*
+.kotlin/
+*.log

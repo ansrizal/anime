@@ -19,6 +19,7 @@ class BStation : MainAPI() {
     override val mainPage = mainPageOf(
         "" to "Populer",
         "timeline" to "Anime Schedule",
+        "?bstar_from=bstar-web.homepage.recommend.all" to "Direkomendasikan untukmu"
     )
 
     override suspend fun getMainPage(

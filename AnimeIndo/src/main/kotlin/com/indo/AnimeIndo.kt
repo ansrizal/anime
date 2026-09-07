@@ -29,16 +29,19 @@ class AnimeIndo : MainAPI() {
     // ---------- HELPERS ----------
     private fun getPosterUrl(element: Element?): String? {
         if (element == null) return null
-        // Cari elemen img di dalam container
         val img = element.selectFirst("img") ?: return null
-        // Ambil atribut gambar dengan prioritas: data-original > data-src > src
-        var src = img.attr("data-original").ifBlank { img.attr("data-src") }.ifBlank { img.attr("src") }
+        // Coba atribut yang umum digunakan untuk lazy loading
+        var src = img.attr("data-original")
+            .ifBlank { img.attr("data-src") }
+            .ifBlank { img.attr("src") }
         if (src.isBlank()) return null
-        // Jika src mengandung "loading" atau "placeholder", abaikan
-        if (src.contains("loading", ignoreCase = true) || src.contains("placeholder", ignoreCase = true)) {
+        // Abaikan gambar placeholder/loading
+        if (src.contains("loading", ignoreCase = true) || 
+            src.contains("placeholder", ignoreCase = true) ||
+            src.contains("blank", ignoreCase = true)) {
             return null
         }
-        // Ubah ke URL absolut jika relatif
+        // Ubah ke URL absolut
         return if (src.startsWith("http")) src else fixUrl(src)
     }
 
@@ -93,22 +96,18 @@ class AnimeIndo : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    // Parser untuk daftar anime (anime-list)
+    // Parser untuk daftar anime (anime-list) - tidak ada gambar di halaman ini
     private fun parseAnimeList(document: Document): List<SearchResponse> {
-        // Coba selector yang lebih spesifik untuk item anime di halaman daftar
-        val items = document.select("div.anime-list a[href], table.otable a[href], div.list-anime a[href]")
-        return items.asIterable().mapNotNull { a ->
-            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            // Cari container yang berisi gambar dan judul
-            val container = a.selectFirst("div.list-anime, div.thumb, td.vithumb") ?: a
-            val title = container.selectFirst("p, .title, h2, h3, td.videsc a")?.text()?.trim()?.ifBlank { null }
-                ?: a.text().trim().ifBlank { null }
-                ?: return@mapNotNull null
-            val poster = getPosterUrl(container)
-            newAnimeSearchResponse(title, fixUrl(href), TvType.Anime) {
-                this.posterUrl = poster
-            }
-        }.distinctBy { it.url }
+        // Di halaman ini hanya ada teks, tidak ada gambar.
+        // Kita hanya tampilkan judul tanpa poster.
+        return document.select("div.anime-list a[href], table.otable a[href], div.list-anime a[href]")
+            .asIterable().mapNotNull { a ->
+                val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+                val title = a.text().trim().ifBlank { null } ?: return@mapNotNull null
+                newAnimeSearchResponse(title, fixUrl(href), TvType.Anime) {
+                    // posterUrl = null (tidak ada gambar)
+                }
+            }.distinctBy { it.url }
     }
 
     // Helper untuk mengubah URL episode menjadi URL anime
@@ -118,7 +117,7 @@ class AnimeIndo : MainAPI() {
         return "$mainUrl/anime/$animeSlug/"
     }
 
-    // ---------- SEARCH ----------
+    // ---------- SEARCH ---------- (diperbaiki agar gambar muncul)
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrls = listOf(
             "$mainUrl/search.php?q=$query",
@@ -129,18 +128,22 @@ class AnimeIndo : MainAPI() {
         for (url in searchUrls) {
             try {
                 document = app.get(url).document
-                if (document.select("div.list-anime, div.anime-item, a[href*=/anime/]").isNotEmpty()) {
+                // Periksa apakah ada hasil
+                if (document.select("div.result, div.list-anime, div.anime-item, a[href*=/anime/]").isNotEmpty()) {
                     break
                 }
             } catch (_: Exception) { }
         }
         document ?: return emptyList()
 
-        // Selector luas untuk menangkap hasil pencarian
-        val results = document.select("div.menu a[href], div.list-anime a[href], div.anime-list a[href], a[href*=/anime/]")
-        return results.asIterable().mapNotNull { a ->
+        // Cari elemen yang berisi link ke anime dan memiliki gambar
+        // Selektor mencakup struktur hasil pencarian yang umum
+        val items = document.select("div.result a[href], div.list-anime a[href], div.menu a[href], a[href*=/anime/]")
+        return items.asIterable().mapNotNull { a ->
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val container = a.selectFirst("div.list-anime, div.thumb, td.vithumb") ?: a
+            // Cari container yang berisi gambar dan teks
+            val container = a.selectFirst("div.list-anime, div.thumb, div.result") ?: a
+            // Judul bisa dari berbagai elemen
             val title = container.selectFirst("p, h2, h3, .title, .anime-title, td.videsc a")?.text()?.trim()?.ifBlank { null }
                 ?: a.text().trim().ifBlank { null }
                 ?: return@mapNotNull null

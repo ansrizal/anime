@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import android.util.Base64
+import java.util.Base64
 
 class Oploverz : MainAPI() {
     override var mainUrl = "https://oploverz.ch"
@@ -24,53 +24,31 @@ class Oploverz : MainAPI() {
                 else -> ShowStatus.Completed
             }
         }
-
-        fun getStatusText(el: org.jsoup.nodes.Element?): String? {
-            return el?.selectFirst("div.status")?.text()?.trim()
-        }
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Update Terbaru",
-        "$mainUrl/az-list/" to "AZ List"
+        "$mainUrl/page/" to "Update Terbaru"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        return when {
-            request.data.contains("/page/") -> {
-                val pageLink = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
-                val document = app.get(pageLink).document
-                val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
-                    val a = el.selectFirst("a[href]") ?: return@mapNotNull null
-                    val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-                    val rawTitle = el.selectFirst("div.tt")?.ownText()?.trim()
-                        ?: el.selectFirst("h2")?.text()?.trim()
-                        ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
-                    val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-                    val statusText = getStatusText(el)
-                    val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
-                    val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    val animeLink = if (epNum != null) episodeUrlToAnimeUrl(href) else href
-                    val titleWithStatus = if (!statusText.isNullOrBlank()) "$rawTitle ($statusText)" else rawTitle
-                    newAnimeSearchResponse(titleWithStatus, animeLink, TvType.Anime) {
-                        this.posterUrl = poster
-                        addSub(epNum)
-                    }
-                }.distinctBy { it.url }
-                newHomePageResponse(request.name, home)
+        val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+        val document = app.get(url).document
+        val home = document.select("div.bsx").asIterable().mapNotNull { el ->
+            val a = el.selectFirst("a[href]") ?: return@mapNotNull null
+            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+            val title = el.selectFirst("div.tt")?.ownText()?.trim()
+                ?: el.selectFirst("h2")?.text()?.trim()
+                ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
+            val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
+            val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
+            val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
+            newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
+                this.posterUrl = poster
+                addSub(epNum)
             }
-            request.data.contains("/az-list/") -> {
-                val doc = app.get("$mainUrl/az-list/").document
-                val letters = doc.select("a[href*='?show=']").map { a ->
-                    val href = a.attr("href")
-                    val showParam = Regex("\\?show=([^&]*)").find(href)?.groupValues?.getOrNull(1) ?: ""
-                    val label = a.text().trim().ifBlank { showParam }
-                    newAnimeSearchResponse(label, "$mainUrl/az-list/?show=$showParam", TvType.Anime) { }
-                }.distinctBy { it.url }
-                newHomePageResponse(request.name, letters)
-            }
-            else -> newHomePageResponse(request.name, emptyList())
-        }
+        }.distinctBy { it.url }
+        return newHomePageResponse(request.name, home)
     }
 
     private fun episodeUrlToAnimeUrl(episodeUrl: String): String {
@@ -84,57 +62,15 @@ class Oploverz : MainAPI() {
         return document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val rawTitle = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
+            val title = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-            val statusText = getStatusText(el)
-            val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
-            val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val titleWithStatus = if (!statusText.isNullOrBlank()) "$rawTitle ($statusText)" else rawTitle
-            newAnimeSearchResponse(titleWithStatus, href, TvType.Anime) {
-                this.posterUrl = poster
-                addSub(epNum)
-            }
+            newAnimeSearchResponse(title, href, TvType.Anime) { this.posterUrl = poster }
         }.distinctBy { it.url }
     }
 
-    // ===== load() dengan parameter "link" =====
-    override suspend fun load(link: String): LoadResponse {
-        return if (link.contains("/az-list/")) {
-            loadAzList(link)
-        } else {
-            loadAnimeDetail(link)
-        }
-    }
-
-    // ===== AZ List – daftar anime per huruf =====
-    private suspend fun loadAzList(azListLink: String): LoadResponse {
-        val document = app.get(azListLink).document
-        val showParam = Regex("\\?show=([^&]*)").find(azListLink)?.groupValues?.getOrNull(1) ?: "Semua"
-        val title = "AZ List - $showParam"
-
-        val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
-            val a = el.selectFirst("a[href]") ?: return@mapNotNull null
-            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val rawName = el.selectFirst("div.tt")?.ownText()?.trim()
-                ?: el.selectFirst("h2")?.text()?.trim()
-                ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
-            val statusText = getStatusText(el)
-            val nameWithStatus = if (!statusText.isNullOrBlank()) "$rawName ($statusText)" else rawName
-            newEpisode(href) { this.name = nameWithStatus }
-        }.distinctBy { it.data }
-
-        val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
-
-        return newAnimeLoadResponse(title, azListLink, TvType.Anime) {
-            this.posterUrl = firstPoster
-            addEpisodes(DubStatus.Subbed, episodes)
-        }
-    }
-
-    // ===== Detail anime =====
-    private suspend fun loadAnimeDetail(detailLink: String): LoadResponse {
-        val document = app.get(detailLink).document
+    override suspend fun load(url: String): LoadResponse {
+        val document = app.get(url).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.trim()
             ?.replace(Regex("\\s*Subtitle\\s*Indonesia.*", RegexOption.IGNORE_CASE), "")
@@ -149,6 +85,7 @@ class Oploverz : MainAPI() {
         val year = document.selectFirst("div.spe span:contains(Released)")
             ?.text()?.let { Regex("\\b(20\\d{2})\\b").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
 
+        // Episode list dari halaman series
         val episodes = document.select("div.eplister ul li, ul#episodelist li").asIterable().mapNotNull { li ->
             val a = li.selectFirst("a") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -158,7 +95,7 @@ class Oploverz : MainAPI() {
         }.reversed()
 
         val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(TvType.Anime), year, true)
-        return newAnimeLoadResponse(title, detailLink, TvType.Anime) {
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
             engName = title
             posterUrl = tracker?.image ?: poster
             backgroundPosterUrl = tracker?.cover
@@ -175,20 +112,23 @@ class Oploverz : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val document = app.get(data).document
 
+        // Iframe dari player-embed
         document.select("div#pembed iframe, div.player-embed iframe, div.video-content iframe")
             .asIterable()
             .forEach { iframe ->
                 val src = iframe.attr("src").ifBlank { null } ?: return@forEach
-                if (src.startsWith("http")) handleExtractorLink(src, data, subtitleCallback, callback)
+                if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
             }
 
+        // Mirror option values (base64 encoded iframes)
         document.select("select.mirror option").asIterable().forEach { option ->
             val encoded = option.attr("value").ifBlank { null } ?: return@forEach
-            val decoded = try { String(Base64.decode(encoded, Base64.DEFAULT)) } catch (e: Exception) { null } ?: return@forEach
+            val decoded = try { String(Base64.getDecoder().decode(encoded)) } catch (e: Exception) { null } ?: return@forEach
             val src = Regex("src\\s*=\\s*\"([^\"]+)\"").find(decoded)?.groupValues?.getOrNull(1) ?: return@forEach
-            if (src.startsWith("http")) handleExtractorLink(src, data, subtitleCallback, callback)
+            if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
         }
 
+        // Gofile download link — pakai built-in Gofile extractor (API v2)
         document.select("a[href*=gofile.io]").asIterable().forEach { a ->
             val href = a.attr("href").ifBlank { null } ?: return@forEach
             loadExtractor(href, data, subtitleCallback, callback)
@@ -197,18 +137,21 @@ class Oploverz : MainAPI() {
         return true
     }
 
-    private suspend fun handleExtractorLink(extractorLink: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        if (extractorLink.contains("blogger.com")) {
-            handleBloggerLink(extractorLink, referer, subtitleCallback, callback)
+    private suspend fun handleUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        if (url.contains("blogger.com")) {
+            handleBloggerUrl(url, referer, subtitleCallback, callback)
         } else {
-            loadExtractor(extractorLink, referer, subtitleCallback, callback)
+            loadExtractor(url, referer, subtitleCallback, callback)
         }
     }
 
-    private suspend fun handleBloggerLink(bloggerLink: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        loadExtractor(bloggerLink, referer, subtitleCallback, callback)
+    private suspend fun handleBloggerUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        // Try built-in Blogger extractor (may produce links for old-style pages)
+        loadExtractor(url, referer, subtitleCallback, callback)
+
+        // Manual parsing of the Blogger page (fallback for old-style pages)
         try {
-            val doc = app.get(bloggerLink).document
+            val doc = app.get(url).document
             doc.select("script").asIterable().forEach { script ->
                 val text = script.data()
                 val streamsStart = text.indexOf("\"streams\":[")

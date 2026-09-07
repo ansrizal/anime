@@ -24,6 +24,11 @@ class Oploverz : MainAPI() {
                 else -> ShowStatus.Completed
             }
         }
+
+        // Mengambil status teks mentah dari elemen
+        fun getStatusText(el: org.jsoup.nodes.Element?): String? {
+            return el?.selectFirst("div.status")?.text()?.trim()
+        }
     }
 
     override val mainPage = mainPageOf(
@@ -39,17 +44,19 @@ class Oploverz : MainAPI() {
                 val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
                     val a = el.selectFirst("a[href]") ?: return@mapNotNull null
                     val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-                    val title = el.selectFirst("div.tt")?.ownText()?.trim()
+                    val rawTitle = el.selectFirst("div.tt")?.ownText()?.trim()
                         ?: el.selectFirst("h2")?.text()?.trim()
                         ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
                     val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-                    val statusText = el.selectFirst("div.status")?.text()?.trim()
+                    val statusText = getStatusText(el)
                     val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
                     val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
-                    newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
+                    // Tambahkan status ke judul
+                    val titleWithStatus = if (!statusText.isNullOrBlank()) "$rawTitle ($statusText)" else rawTitle
+                    newAnimeSearchResponse(titleWithStatus, animeUrl, TvType.Anime) {
                         this.posterUrl = poster
-                        this.sub = listOfNotNull(epNum?.toString(), statusText).joinToString(" - ")
+                        addSub(epNum)
                     }
                 }.distinctBy { it.url }
                 newHomePageResponse(request.name, home)
@@ -79,15 +86,16 @@ class Oploverz : MainAPI() {
         return document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val title = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
+            val rawTitle = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-            val statusText = el.selectFirst("div.status")?.text()?.trim()
+            val statusText = getStatusText(el)
             val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
             val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            newAnimeSearchResponse(title, href, TvType.Anime) {
+            val titleWithStatus = if (!statusText.isNullOrBlank()) "$rawTitle ($statusText)" else rawTitle
+            newAnimeSearchResponse(titleWithStatus, href, TvType.Anime) {
                 this.posterUrl = poster
-                this.sub = listOfNotNull(epNum?.toString(), statusText).joinToString(" - ")
+                addSub(epNum)
             }
         }.distinctBy { it.url }
     }
@@ -107,10 +115,12 @@ class Oploverz : MainAPI() {
         val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val name = el.selectFirst("div.tt")?.ownText()?.trim()
+            val rawName = el.selectFirst("div.tt")?.ownText()?.trim()
                 ?: el.selectFirst("h2")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
-            newEpisode(href) { this.name = name }
+            val statusText = getStatusText(el)
+            val nameWithStatus = if (!statusText.isNullOrBlank()) "$rawName ($statusText)" else rawName
+            newEpisode(href) { this.name = nameWithStatus }
         }.distinctBy { it.url }
 
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")

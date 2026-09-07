@@ -25,7 +25,6 @@ class Oploverz : MainAPI() {
             }
         }
 
-        // Ambil teks status dari elemen
         fun getStatusText(el: org.jsoup.nodes.Element?): String? {
             return el?.selectFirst("div.status")?.text()?.trim()
         }
@@ -61,7 +60,6 @@ class Oploverz : MainAPI() {
                 newHomePageResponse(request.name, home)
             }
             request.data.contains("/az-list/") -> {
-                // Tampilkan indeks huruf
                 val doc = app.get("$mainUrl/az-list/").document
                 val letters = doc.select("a[href*='?show=']").map { a ->
                     val href = a.attr("href")
@@ -108,10 +106,9 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // Fungsi untuk menampilkan daftar anime per huruf (AZ List)
-    private suspend fun loadAzList(azUrl: String): LoadResponse {
-        val document = app.get(azUrl).document
-        val showParam = Regex("\\?show=([^&]*)").find(azUrl)?.groupValues?.getOrNull(1) ?: "Semua"
+    private suspend fun loadAzList(azListUrl: String): LoadResponse {
+        val document = app.get(azListUrl).document
+        val showParam = Regex("\\?show=([^&]*)").find(azListUrl)?.groupValues?.getOrNull(1) ?: "Semua"
         val title = "AZ List - $showParam"
 
         val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
@@ -127,15 +124,14 @@ class Oploverz : MainAPI() {
 
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
 
-        return newAnimeLoadResponse(title, azUrl, TvType.Anime) {
+        return newAnimeLoadResponse(title, azListUrl, TvType.Anime) {
             this.posterUrl = firstPoster
             addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
-    // Fungsi untuk halaman detail anime
-    private suspend fun loadAnimeDetail(url: String): LoadResponse {
-        val document = app.get(url).document
+    private suspend fun loadAnimeDetail(detailUrl: String): LoadResponse {
+        val document = app.get(detailUrl).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.trim()
             ?.replace(Regex("\\s*Subtitle\\s*Indonesia.*", RegexOption.IGNORE_CASE), "")
@@ -159,7 +155,7 @@ class Oploverz : MainAPI() {
         }.reversed()
 
         val tracker = APIHolder.getTracker(listOf(title), TrackerType.getTypes(TvType.Anime), year, true)
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        return newAnimeLoadResponse(title, detailUrl, TvType.Anime) {
             engName = title
             posterUrl = tracker?.image ?: poster
             backgroundPosterUrl = tracker?.cover

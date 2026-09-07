@@ -28,31 +28,67 @@ class Oploverz : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Update Terbaru",
-        "$mainUrl/az-list/page/" to "AZ List"   // <-- Tambahan kategori AZ List
+        // AZ List dengan parameter huruf
+        "$mainUrl/az-list/?show=." to "AZ List #",
+        "$mainUrl/az-list/?show=0-9" to "AZ List 0-9",
+        "$mainUrl/az-list/?show=A" to "AZ List A",
+        "$mainUrl/az-list/?show=B" to "AZ List B",
+        "$mainUrl/az-list/?show=C" to "AZ List C",
+        "$mainUrl/az-list/?show=D" to "AZ List D",
+        "$mainUrl/az-list/?show=E" to "AZ List E",
+        "$mainUrl/az-list/?show=F" to "AZ List F",
+        "$mainUrl/az-list/?show=G" to "AZ List G",
+        "$mainUrl/az-list/?show=H" to "AZ List H",
+        "$mainUrl/az-list/?show=I" to "AZ List I",
+        "$mainUrl/az-list/?show=J" to "AZ List J",
+        "$mainUrl/az-list/?show=K" to "AZ List K",
+        "$mainUrl/az-list/?show=L" to "AZ List L",
+        "$mainUrl/az-list/?show=M" to "AZ List M",
+        "$mainUrl/az-list/?show=N" to "AZ List N",
+        "$mainUrl/az-list/?show=O" to "AZ List O",
+        "$mainUrl/az-list/?show=P" to "AZ List P",
+        "$mainUrl/az-list/?show=Q" to "AZ List Q",
+        "$mainUrl/az-list/?show=R" to "AZ List R",
+        "$mainUrl/az-list/?show=S" to "AZ List S",
+        "$mainUrl/az-list/?show=T" to "AZ List T",
+        "$mainUrl/az-list/?show=U" to "AZ List U",
+        "$mainUrl/az-list/?show=V" to "AZ List V",
+        "$mainUrl/az-list/?show=W" to "AZ List W",
+        "$mainUrl/az-list/?show=X" to "AZ List X",
+        "$mainUrl/az-list/?show=Y" to "AZ List Y",
+        "$mainUrl/az-list/?show=Z" to "AZ List Z"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Penanganan khusus untuk AZ List agar halaman pertama menggunakan /az-list/
-        val url = if (page <= 1) {
-            if (request.data.contains("/az-list/")) "$mainUrl/az-list/"
-            else "$mainUrl/"
+        // Untuk AZ List, URL sudah lengkap dengan parameter show, tidak perlu tambahan page
+        val url = if (request.data.contains("/az-list/")) {
+            request.data
         } else {
-            "${request.data}$page/"
+            // Untuk Update Terbaru
+            if (page <= 1) "$mainUrl/" else "${request.data}$page/"
         }
         val document = app.get(url).document
-        val home = document.select("div.bsx").asIterable().mapNotNull { el ->
+        val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
             val title = el.selectFirst("div.tt")?.ownText()?.trim()
                 ?: el.selectFirst("h2")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
+            
+            // Ambil status dari elemen div.status
+            val statusText = el.selectFirst("div.status")?.text()?.trim()
+            val status = getStatus(statusText)
+            
             val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
             val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
             val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
+            
             newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
                 this.posterUrl = poster
                 addSub(epNum)
+                // Tambahkan status ke response
+                this.status = status
             }
         }.distinctBy { it.url }
         return newHomePageResponse(request.name, home)
@@ -72,7 +108,15 @@ class Oploverz : MainAPI() {
             val title = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-            newAnimeSearchResponse(title, href, TvType.Anime) { this.posterUrl = poster }
+            
+            // Ambil status dari elemen div.status
+            val statusText = el.selectFirst("div.status")?.text()?.trim()
+            val status = getStatus(statusText)
+            
+            newAnimeSearchResponse(title, href, TvType.Anime) { 
+                this.posterUrl = poster
+                this.status = status
+            }
         }.distinctBy { it.url }
     }
 

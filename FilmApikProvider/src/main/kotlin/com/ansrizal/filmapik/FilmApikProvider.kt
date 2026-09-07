@@ -30,14 +30,15 @@ class FilmApikProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "" to "Film Terbaru",
-        "genre/action/" to "Action",
-        "genre/comedy/" to "Comedy",
-        "genre/drama/" to "Drama",
-        "genre/horror/" to "Horror",
-        "genre/science-fiction/" to "Sci-Fi",
-        "trending/" to "Trending",
-        "ratings/" to "Rating Terbaik"
+        "" to "Beranda",
+        "category/box-office/" to "Box Office",
+        "latest/" to "Film Terbaru",
+        "tvshows/" to "Drama Terbaru",
+        "tvshows-genre/anime/" to "Anime",
+        "tvshows-genre/k-drama/" to "Drama Korea",
+        "category/action/" to "Action",
+        "category/comedy/" to "Comedy",
+        "category/horror/" to "Horror",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -46,77 +47,93 @@ class FilmApikProvider : MainAPI() {
         } else {
             val data = request.data.removeSuffix("/")
             if (data.isEmpty()) {
-                "$mainUrl/page/$page/"
+                "$mainUrl/latest/page/$page/"
             } else {
                 "$mainUrl/$data/page/$page/"
             }
         }.replace("(?<!:)/{2,}".toRegex(), "/")
 
         val document = request(url).document
-        val homeItems = document.select("div.ml-item, div.item, article, div.bs, div.bsx, div.uta").mapNotNull {
-            it.toSearchResult()
+        val home = mutableListOf<HomePageList>()
+
+        if (request.data.isEmpty() && page <= 1) {
+            // Box Office Section
+            val boxOffice = document.select("#famv-boxoffice a.group").mapNotNull { it.toSearchResult() }
+            if (boxOffice.isNotEmpty()) home.add(HomePageList("Box Office", boxOffice, isHorizontalImages = true))
+
+            // TV Shows Section
+            val tvShows = document.select("#famv-tvshows a.group").mapNotNull { it.toSearchResult() }
+            if (tvShows.isNotEmpty()) home.add(HomePageList("Drama Terbaru", tvShows, isHorizontalImages = true))
+
+            // Latest Movies Grid
+            val latest = document.select("article.card, .grid article").mapNotNull { it.toSearchResult() }
+            if (latest.isNotEmpty()) home.add(HomePageList("Film Terbaru", latest))
+        } else {
+            val items = document.select("article.card, .grid article, a.group, div.card").mapNotNull { it.toSearchResult() }
+            home.add(HomePageList(request.name, items))
         }
-        return newHomePageResponse(request.name, homeItems, hasNext = homeItems.isNotEmpty())
+
+        return newHomePageResponse(home, true)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2, h3, h4, .tt, .title, a[title]")?.text()?.trim() 
-            ?: this.selectFirst("a")?.attr("title")?.trim()
+        val title = this.selectFirst("h3, .title, a[title]")?.text()?.trim() 
+            ?: this.selectFirst("img")?.attr("alt")?.trim()
             ?: return null
         
-        val linkElement = this.selectFirst("a") ?: return null
-        val href = fixUrl(linkElement.attr("href"))
-        if (href == mainUrl || href == "$mainUrl/" || href.contains("/genre/") || href.contains("/category/")) return null
+        val linkElement = if (this.tagName() == "a") this else this.selectFirst("a")
+        val href = fixUrl(linkElement?.attr("href") ?: return null)
+        if (href == mainUrl || href == "$mainUrl/" || href.contains("/category/") || href.contains("/release-year/")) return null
 
         val img = this.selectFirst("img")
         val posterUrl = fixUrlNull(
             img?.attr("abs:data-src")
-            ?: img?.attr("abs:data-lazy-src")
             ?: img?.attr("abs:src")
             ?: img?.attr("src")
         )
 
-        val isSeries = href.contains("/tv-series/") || href.contains("/series/") || href.contains("/tv/")
+        val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/")
+        val quality = this.selectFirst(".badge-quality")?.text()?.trim()
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
+                quality?.let { addQuality(it) }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
+                quality?.let { addQuality(it) }
             }
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val document = app.get(searchUrl).document
+        val document = request(searchUrl).document
 
-        return document.select("div.ml-item, div.item, article, div.bs, div.bsx, div.uta").mapNotNull {
+        return document.select("article.card, .grid article, a.group").mapNotNull {
             it.toSearchResult()
         }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = request(url).document
 
-        val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: "FilmApik"
+        val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: ""
         val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
-        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description")?.text()?.trim()
+        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
-        val isSeries = url.contains("/tv-series/") || url.contains("/series/") || url.contains("/tv/")
+        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/")
 
         return if (isSeries) {
-            val episodes = document.select("ul.episodios li, div.list-episode li, .eplister li, .listeps li").mapNotNull { elem ->
-                val a = elem.selectFirst("a") ?: return@mapNotNull null
-                val epUrl = fixUrl(a.attr("href"))
+            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a").mapNotNull { elem ->
+                val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
+                val epUrl = fixUrl(a?.attr("href") ?: return@mapNotNull null)
                 val epName = a.text().trim()
-                val epNum = elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.filter { it.isDigit() }?.toIntOrNull()
                 
                 newEpisode(epUrl) {
                     this.name = epName
-                    this.episode = epNum
                 }
             }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -147,11 +164,12 @@ class FilmApikProvider : MainAPI() {
             }
         }
         
-        // Check mirror links and player sources
-        document.select("ul.muvi-player-list li, div.source-box li, .player-source").asIterable().forEach { li ->
-            val serverSrc = li.selectFirst("a")?.attr("href") ?: li.attr("data-src") ?: ""
-            if (serverSrc.startsWith("http") || serverSrc.startsWith("//")) {
-                loadExtractor(fixUrl(serverSrc), subtitleCallback, callback)
+        // Try to find player data in script tags
+        document.select("script").forEach { script ->
+            val content = script.data()
+            if (content.contains("iframe src=")) {
+                val src = Regex("""iframe src=["'](.*?)["']""").find(content)?.groupValues?.get(1)
+                if (src != null) loadExtractor(fixUrl(src), subtitleCallback, callback)
             }
         }
 

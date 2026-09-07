@@ -61,7 +61,7 @@ class AnimeIndo : MainAPI() {
             val animeUrl = episodeToAnimeUrl(href)
             newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
                 this.posterUrl = poster
-                this.subtitle = epNum?.let { "Episode $it" }
+                this.plot = epNum?.let { "Episode $it" }  // <- perbaikan: menggunakan plot
             }
         }.distinctBy { it.url }
     }

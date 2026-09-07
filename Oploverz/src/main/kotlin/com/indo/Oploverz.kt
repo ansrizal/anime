@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import java.util.Base64
+import android.util.Base64
 
 class Oploverz : MainAPI() {
     override var mainUrl = "https://oploverz.ch"
@@ -98,16 +98,16 @@ class Oploverz : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    // === load() – parameter "inputLink" ===
-    override suspend fun load(inputLink: String): LoadResponse {
-        return if (inputLink.contains("/az-list/")) {
-            loadAzList(inputLink)
+    // ===== load() dengan parameter "link" =====
+    override suspend fun load(link: String): LoadResponse {
+        return if (link.contains("/az-list/")) {
+            loadAzList(link)
         } else {
-            loadAnimeDetail(inputLink)
+            loadAnimeDetail(link)
         }
     }
 
-    // === AZ List – daftar anime per huruf ===
+    // ===== AZ List – daftar anime per huruf =====
     private suspend fun loadAzList(azListLink: String): LoadResponse {
         val document = app.get(azListLink).document
         val showParam = Regex("\\?show=([^&]*)").find(azListLink)?.groupValues?.getOrNull(1) ?: "Semua"
@@ -122,7 +122,7 @@ class Oploverz : MainAPI() {
             val statusText = getStatusText(el)
             val nameWithStatus = if (!statusText.isNullOrBlank()) "$rawName ($statusText)" else rawName
             newEpisode(href) { this.name = nameWithStatus }
-        }.distinctBy { it.url }
+        }.distinctBy { it.data }
 
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
 
@@ -132,7 +132,7 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // === Detail anime ===
+    // ===== Detail anime =====
     private suspend fun loadAnimeDetail(detailLink: String): LoadResponse {
         val document = app.get(detailLink).document
 
@@ -184,7 +184,7 @@ class Oploverz : MainAPI() {
 
         document.select("select.mirror option").asIterable().forEach { option ->
             val encoded = option.attr("value").ifBlank { null } ?: return@forEach
-            val decoded = try { String(Base64.getDecoder().decode(encoded)) } catch (e: Exception) { null } ?: return@forEach
+            val decoded = try { String(Base64.decode(encoded, Base64.DEFAULT)) } catch (e: Exception) { null } ?: return@forEach
             val src = Regex("src\\s*=\\s*\"([^\"]+)\"").find(decoded)?.groupValues?.getOrNull(1) ?: return@forEach
             if (src.startsWith("http")) handleExtractorLink(src, data, subtitleCallback, callback)
         }

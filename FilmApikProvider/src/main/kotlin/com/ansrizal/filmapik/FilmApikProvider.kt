@@ -130,27 +130,19 @@ class FilmApikProvider : MainAPI() {
         val description = document.selectFirst("meta[property='og:description']")?.attr("content")
             ?: document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
-        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/")
+        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/") 
+            || document.selectFirst(".episodios, .list-episode, .eplister, #episodes-list, .famv-episodes") != null
 
         return if (isSeries) {
-            // First check if there is an episode list in the HTML
-            var episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a").mapNotNull { elem ->
+            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a").mapNotNull { elem ->
                 val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                 val epUrl = fixUrl(a?.attr("href") ?: return@mapNotNull null)
-                val epName = a.text().trim().ifEmpty { "Episode" }
+                val epName = a.text().trim().ifEmpty { 
+                    elem.selectFirst(".numerando, .epl-num, .eps")?.text()?.trim() ?: "Episode"
+                }
                 
                 newEpisode(epUrl) {
                     this.name = epName
-                }
-            }
-            
-            // Fallback: If no episodes found, try to look for Season/Episode structure in breadcrumbs or other elements
-            if (episodes.isEmpty()) {
-                document.select(".tv-episodes a").mapNotNull { a ->
-                    val epUrl = fixUrl(a.attr("href"))
-                    newEpisode(epUrl) {
-                        this.name = a.text().trim()
-                    }
                 }
             }
 
@@ -175,7 +167,7 @@ class FilmApikProvider : MainAPI() {
         val response = request(data)
         val html = response.text
 
-        // 1. Parse from window.famvServers JSON (Most reliable for new theme)
+        // 1. Parse from window.famvServers JSON
         val serversRegex = Regex("""window\.famvServers\s*=\s*(\[.*?\]);""")
         val serversJson = serversRegex.find(html)?.groupValues?.get(1)
         if (serversJson != null) {
@@ -188,8 +180,16 @@ class FilmApikProvider : MainAPI() {
             }
         }
 
-        // 2. Fallback to iframes in the document
+        // 2. Direct extraction from player list
         val document = response.document
+        document.select("#player-list li a, .player-option").forEach { a ->
+            val url = a.attr("data-url").ifBlank { a.attr("href") }
+            if (url.isNotBlank() && (url.startsWith("http") || url.startsWith("//"))) {
+                loadExtractor(fixUrl(url), subtitleCallback, callback)
+            }
+        }
+
+        // 3. Fallback to iframes
         document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
@@ -198,12 +198,21 @@ class FilmApikProvider : MainAPI() {
             }
         }
         
-        // 3. Check for specific player scripts or data attributes
-        document.select(".famv-server-btn").forEach { btn ->
-            val url = btn.attr("data-url")
-            if (url.isNotBlank()) loadExtractor(fixUrl(url), subtitleCallback, callback)
-        }
-
         return true
+    }
+
+    private suspend fun loadExtractor(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val fixedUrl = fixUrl(url)
+        // Filemoon mirror support
+        if (fixedUrl.contains("byseqekaho.com") || fixedUrl.contains("filemoon")) {
+            val filemoonUrl = fixedUrl.replace("byseqekaho.com", "filemoon.sx")
+            com.lagradost.cloudstream3.utils.loadExtractor(filemoonUrl, subtitleCallback, callback)
+        } else {
+            com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
+        }
     }
 }

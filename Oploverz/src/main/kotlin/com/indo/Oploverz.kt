@@ -26,7 +26,6 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // Hanya dua kategori: Update Terbaru dan AZ List (satu entri)
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Update Terbaru",
         "$mainUrl/az-list/" to "AZ List"
@@ -34,7 +33,6 @@ class Oploverz : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when {
-            // Update Terbaru
             request.data.contains("/page/") -> {
                 val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
                 val document = app.get(url).document
@@ -46,30 +44,23 @@ class Oploverz : MainAPI() {
                         ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
                     val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
                     val statusText = el.selectFirst("div.status")?.text()?.trim()
-                    val status = getStatus(statusText)
                     val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
                     val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
                     newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
                         this.posterUrl = poster
-                        addSub(epNum)
-                        this.status = status
+                        this.sub = listOfNotNull(epNum?.toString(), statusText).joinToString(" - ")
                     }
                 }.distinctBy { it.url }
                 newHomePageResponse(request.name, home)
             }
-            // AZ List – tampilkan indeks huruf
             request.data.contains("/az-list/") -> {
-                // Ambil daftar huruf dari halaman utama AZ List
                 val doc = app.get("$mainUrl/az-list/").document
                 val letters = doc.select("a[href*='?show=']").map { a ->
                     val href = a.attr("href")
                     val showParam = Regex("\\?show=([^&]*)").find(href)?.groupValues?.getOrNull(1) ?: ""
                     val label = a.text().trim().ifBlank { showParam }
-                    // Buat SearchResponse untuk setiap huruf
-                    newAnimeSearchResponse(label, "$mainUrl/az-list/?show=$showParam", TvType.Anime) {
-                        // Tidak ada poster, status, dll.
-                    }
+                    newAnimeSearchResponse(label, "$mainUrl/az-list/?show=$showParam", TvType.Anime) { }
                 }.distinctBy { it.url }
                 newHomePageResponse(request.name, letters)
             }
@@ -92,21 +83,19 @@ class Oploverz : MainAPI() {
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
             val statusText = el.selectFirst("div.status")?.text()?.trim()
-            val status = getStatus(statusText)
+            val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
+            val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
             newAnimeSearchResponse(title, href, TvType.Anime) {
                 this.posterUrl = poster
-                this.status = status
+                this.sub = listOfNotNull(epNum?.toString(), statusText).joinToString(" - ")
             }
         }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Jika URL adalah halaman AZ List (daftar anime per huruf)
         if (url.contains("/az-list/")) {
             return loadAzList(url)
         }
-
-        // Jika URL adalah halaman anime biasa
         return loadAnimeDetail(url)
     }
 
@@ -121,20 +110,14 @@ class Oploverz : MainAPI() {
             val name = el.selectFirst("div.tt")?.ownText()?.trim()
                 ?: el.selectFirst("h2")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
-            // Buat episode palsu yang mewakili anime
-            newEpisode(href) {
-                this.name = name
-                // kita tidak set episode number
-            }
+            newEpisode(href) { this.name = name }
         }.distinctBy { it.url }
 
-        // Ambil poster dari anime pertama (opsional)
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
 
         return newAnimeLoadResponse(title, url, TvType.Anime) {
             this.posterUrl = firstPoster
             addEpisodes(DubStatus.Subbed, episodes)
-            // Set status dan lainnya tidak relevan
         }
     }
 
@@ -154,7 +137,6 @@ class Oploverz : MainAPI() {
         val year = document.selectFirst("div.spe span:contains(Released)")
             ?.text()?.let { Regex("\\b(20\\d{2})\\b").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
 
-        // Episode list dari halaman series
         val episodes = document.select("div.eplister ul li, ul#episodelist li").asIterable().mapNotNull { li ->
             val a = li.selectFirst("a") ?: return@mapNotNull null
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -181,7 +163,6 @@ class Oploverz : MainAPI() {
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
         val document = app.get(data).document
 
-        // Iframe dari player-embed
         document.select("div#pembed iframe, div.player-embed iframe, div.video-content iframe")
             .asIterable()
             .forEach { iframe ->
@@ -189,7 +170,6 @@ class Oploverz : MainAPI() {
                 if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
             }
 
-        // Mirror option values (base64 encoded iframes)
         document.select("select.mirror option").asIterable().forEach { option ->
             val encoded = option.attr("value").ifBlank { null } ?: return@forEach
             val decoded = try { String(Base64.getDecoder().decode(encoded)) } catch (e: Exception) { null } ?: return@forEach
@@ -197,7 +177,6 @@ class Oploverz : MainAPI() {
             if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
         }
 
-        // Gofile download link — pakai built-in Gofile extractor (API v2)
         document.select("a[href*=gofile.io]").asIterable().forEach { a ->
             val href = a.attr("href").ifBlank { null } ?: return@forEach
             loadExtractor(href, data, subtitleCallback, callback)
@@ -215,10 +194,7 @@ class Oploverz : MainAPI() {
     }
 
     private suspend fun handleBloggerUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        // Try built-in Blogger extractor (may produce links for old-style pages)
         loadExtractor(url, referer, subtitleCallback, callback)
-
-        // Manual parsing of the Blogger page (fallback for old-style pages)
         try {
             val doc = app.get(url).document
             doc.select("script").asIterable().forEach { script ->

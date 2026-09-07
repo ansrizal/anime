@@ -10,7 +10,7 @@ class FilmApikProvider : MainAPI() {
     override var name = "FilmApik"
     override val hasMainPage = true
     override var lang = "id"
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     private val turnstileInterceptor = TurnstileInterceptor("cf_clearance")
 
@@ -97,7 +97,7 @@ class FilmApikProvider : MainAPI() {
             }
         )
 
-        val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/")
+        val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/tv-series/")
         val quality = this.selectFirst(".badge-quality")?.text()?.trim()
 
         return if (isSeries) {
@@ -130,18 +130,30 @@ class FilmApikProvider : MainAPI() {
         val description = document.selectFirst("meta[property='og:description']")?.attr("content")
             ?: document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
-        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/")
+        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/")
 
         return if (isSeries) {
-            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a").mapNotNull { elem ->
+            // First check if there is an episode list in the HTML
+            var episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a").mapNotNull { elem ->
                 val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                 val epUrl = fixUrl(a?.attr("href") ?: return@mapNotNull null)
-                val epName = a.text().trim()
+                val epName = a.text().trim().ifEmpty { "Episode" }
                 
                 newEpisode(epUrl) {
                     this.name = epName
                 }
             }
+            
+            // Fallback: If no episodes found, try to look for Season/Episode structure in breadcrumbs or other elements
+            if (episodes.isEmpty()) {
+                document.select(".tv-episodes a").mapNotNull { a ->
+                    val epUrl = fixUrl(a.attr("href"))
+                    newEpisode(epUrl) {
+                        this.name = a.text().trim()
+                    }
+                }
+            }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
@@ -161,29 +173,37 @@ class FilmApikProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = request(data)
-        val document = response.document
         val html = response.text
 
-        // Parse from window.famvServers JSON
+        // 1. Parse from window.famvServers JSON (Most reliable for new theme)
         val serversRegex = Regex("""window\.famvServers\s*=\s*(\[.*?\]);""")
         val serversJson = serversRegex.find(html)?.groupValues?.get(1)
         if (serversJson != null) {
             val urlRegex = Regex(""""url"\s*:\s*"(.*?)"""")
             urlRegex.findAll(serversJson).forEach { match ->
                 val url = match.groupValues[1].replace("\\/", "/")
-                loadExtractor(url, subtitleCallback, callback)
+                if (url.isNotBlank()) {
+                    loadExtractor(url, subtitleCallback, callback)
+                }
             }
         }
 
-        // Fallback to iframes
+        // 2. Fallback to iframes in the document
+        val document = response.document
         document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
+            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com") && !src.contains("google.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
         
+        // 3. Check for specific player scripts or data attributes
+        document.select(".famv-server-btn").forEach { btn ->
+            val url = btn.attr("data-url")
+            if (url.isNotBlank()) loadExtractor(fixUrl(url), subtitleCallback, callback)
+        }
+
         return true
     }
 }

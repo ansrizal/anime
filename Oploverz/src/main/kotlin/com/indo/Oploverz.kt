@@ -43,6 +43,7 @@ class Oploverz : MainAPI() {
                 else "$base/$cleanPath/page/$page/"
             }
         }
+    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"

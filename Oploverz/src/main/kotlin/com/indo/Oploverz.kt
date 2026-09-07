@@ -26,72 +26,55 @@ class Oploverz : MainAPI() {
         }
     }
 
+    // Hanya dua kategori: Update Terbaru dan AZ List (satu entri)
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Update Terbaru",
-        // AZ List dengan parameter huruf
-        "$mainUrl/az-list/?show=." to "AZ List #",
-        "$mainUrl/az-list/?show=0-9" to "AZ List 0-9",
-        "$mainUrl/az-list/?show=A" to "AZ List A",
-        "$mainUrl/az-list/?show=B" to "AZ List B",
-        "$mainUrl/az-list/?show=C" to "AZ List C",
-        "$mainUrl/az-list/?show=D" to "AZ List D",
-        "$mainUrl/az-list/?show=E" to "AZ List E",
-        "$mainUrl/az-list/?show=F" to "AZ List F",
-        "$mainUrl/az-list/?show=G" to "AZ List G",
-        "$mainUrl/az-list/?show=H" to "AZ List H",
-        "$mainUrl/az-list/?show=I" to "AZ List I",
-        "$mainUrl/az-list/?show=J" to "AZ List J",
-        "$mainUrl/az-list/?show=K" to "AZ List K",
-        "$mainUrl/az-list/?show=L" to "AZ List L",
-        "$mainUrl/az-list/?show=M" to "AZ List M",
-        "$mainUrl/az-list/?show=N" to "AZ List N",
-        "$mainUrl/az-list/?show=O" to "AZ List O",
-        "$mainUrl/az-list/?show=P" to "AZ List P",
-        "$mainUrl/az-list/?show=Q" to "AZ List Q",
-        "$mainUrl/az-list/?show=R" to "AZ List R",
-        "$mainUrl/az-list/?show=S" to "AZ List S",
-        "$mainUrl/az-list/?show=T" to "AZ List T",
-        "$mainUrl/az-list/?show=U" to "AZ List U",
-        "$mainUrl/az-list/?show=V" to "AZ List V",
-        "$mainUrl/az-list/?show=W" to "AZ List W",
-        "$mainUrl/az-list/?show=X" to "AZ List X",
-        "$mainUrl/az-list/?show=Y" to "AZ List Y",
-        "$mainUrl/az-list/?show=Z" to "AZ List Z"
+        "$mainUrl/az-list/" to "AZ List"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Untuk AZ List, URL sudah lengkap dengan parameter show, tidak perlu tambahan page
-        val url = if (request.data.contains("/az-list/")) {
-            request.data
-        } else {
-            // Untuk Update Terbaru
-            if (page <= 1) "$mainUrl/" else "${request.data}$page/"
-        }
-        val document = app.get(url).document
-        val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
-            val a = el.selectFirst("a[href]") ?: return@mapNotNull null
-            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val title = el.selectFirst("div.tt")?.ownText()?.trim()
-                ?: el.selectFirst("h2")?.text()?.trim()
-                ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
-            val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-            
-            // Ambil status dari elemen div.status
-            val statusText = el.selectFirst("div.status")?.text()?.trim()
-            val status = getStatus(statusText)
-            
-            val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
-            val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
-            
-            newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
-                this.posterUrl = poster
-                addSub(epNum)
-                // Tambahkan status ke response
-                this.status = status
+        return when {
+            // Update Terbaru
+            request.data.contains("/page/") -> {
+                val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+                val document = app.get(url).document
+                val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
+                    val a = el.selectFirst("a[href]") ?: return@mapNotNull null
+                    val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+                    val title = el.selectFirst("div.tt")?.ownText()?.trim()
+                        ?: el.selectFirst("h2")?.text()?.trim()
+                        ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
+                    val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
+                    val statusText = el.selectFirst("div.status")?.text()?.trim()
+                    val status = getStatus(statusText)
+                    val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
+                    val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
+                    newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
+                        this.posterUrl = poster
+                        addSub(epNum)
+                        this.status = status
+                    }
+                }.distinctBy { it.url }
+                newHomePageResponse(request.name, home)
             }
-        }.distinctBy { it.url }
-        return newHomePageResponse(request.name, home)
+            // AZ List – tampilkan indeks huruf
+            request.data.contains("/az-list/") -> {
+                // Ambil daftar huruf dari halaman utama AZ List
+                val doc = app.get("$mainUrl/az-list/").document
+                val letters = doc.select("a[href*='?show=']").map { a ->
+                    val href = a.attr("href")
+                    val showParam = Regex("\\?show=([^&]*)").find(href)?.groupValues?.getOrNull(1) ?: ""
+                    val label = a.text().trim().ifBlank { showParam }
+                    // Buat SearchResponse untuk setiap huruf
+                    newAnimeSearchResponse(label, "$mainUrl/az-list/?show=$showParam", TvType.Anime) {
+                        // Tidak ada poster, status, dll.
+                    }
+                }.distinctBy { it.url }
+                newHomePageResponse(request.name, letters)
+            }
+            else -> newHomePageResponse(request.name, emptyList())
+        }
     }
 
     private fun episodeUrlToAnimeUrl(episodeUrl: String): String {
@@ -108,12 +91,9 @@ class Oploverz : MainAPI() {
             val title = el.selectFirst("div.tt h4, h4, .tt")?.text()?.trim()
                 ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
             val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
-            
-            // Ambil status dari elemen div.status
             val statusText = el.selectFirst("div.status")?.text()?.trim()
             val status = getStatus(statusText)
-            
-            newAnimeSearchResponse(title, href, TvType.Anime) { 
+            newAnimeSearchResponse(title, href, TvType.Anime) {
                 this.posterUrl = poster
                 this.status = status
             }
@@ -121,6 +101,44 @@ class Oploverz : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // Jika URL adalah halaman AZ List (daftar anime per huruf)
+        if (url.contains("/az-list/")) {
+            return loadAzList(url)
+        }
+
+        // Jika URL adalah halaman anime biasa
+        return loadAnimeDetail(url)
+    }
+
+    private suspend fun loadAzList(url: String): LoadResponse {
+        val document = app.get(url).document
+        val showParam = Regex("\\?show=([^&]*)").find(url)?.groupValues?.getOrNull(1) ?: "Semua"
+        val title = "AZ List - $showParam"
+
+        val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
+            val a = el.selectFirst("a[href]") ?: return@mapNotNull null
+            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+            val name = el.selectFirst("div.tt")?.ownText()?.trim()
+                ?: el.selectFirst("h2")?.text()?.trim()
+                ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
+            // Buat episode palsu yang mewakili anime
+            newEpisode(href) {
+                this.name = name
+                // kita tidak set episode number
+            }
+        }.distinctBy { it.url }
+
+        // Ambil poster dari anime pertama (opsional)
+        val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
+
+        return newAnimeLoadResponse(title, url, TvType.Anime) {
+            this.posterUrl = firstPoster
+            addEpisodes(DubStatus.Subbed, episodes)
+            // Set status dan lainnya tidak relevan
+        }
+    }
+
+    private suspend fun loadAnimeDetail(url: String): LoadResponse {
         val document = app.get(url).document
 
         val title = document.selectFirst("h1.entry-title, h1")?.text()?.trim()

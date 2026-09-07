@@ -31,6 +31,19 @@ class Oploverz : MainAPI() {
         "az-list/" to "List Anime"
     )
 
+    private fun buildPageUrl(path: String, page: Int): String {
+        val base = mainUrl.removeSuffix("/")
+        val cleanPath = path.trim('/')
+
+        return when {
+            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page"
+            page <= 1 -> "$base/$cleanPath"
+            else -> {
+                if (cleanPath.contains("?")) "$base/$cleanPath&page=$page"
+                else "$base/$cleanPath/page/$page/"
+            }
+        }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
         val document = app.get(url).document

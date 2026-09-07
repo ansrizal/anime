@@ -35,7 +35,7 @@ class SokujaProvider : MainAPI() {
     )
 
     private suspend fun request(url: String): NiceResponse {
-        return app.get(url, headers = defaultHeaders, timeout = 30)
+        return app.get(url, headers = defaultHeaders, timeout = 0)
     }
 
     private fun fixImageUrl(url: String?): String? {

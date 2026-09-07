@@ -29,18 +29,12 @@ class AnimeIndo : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val isMovie = request.data.contains("/movie/")
-
-        val url = if (isMovie) {
-            if (page == 1) "$mainUrl/movie/" else "$mainUrl/movie/page/$page/"
-        } else {
-            if (page == 1) "$mainUrl/" else "$mainUrl/page/$page/"
-        }
-        val document = app.get(url).document
-
-        val home = if (isMovie) {
-            // Movie page: table.otable > tr > td.vithumb (poster) + td.videsc (info)
-            document.select("table.otable").asIterable().mapNotNull { table ->
+    val url = request.data
+    return when {
+        url.contains("/movie/") -> {
+            // Halaman Movie (tidak berubah)
+            val document = app.get(url).document
+            val home = document.select("table.otable").asIterable().mapNotNull { table ->
                 val link = table.selectFirst("td.vithumb a[href]") ?: return@mapNotNull null
                 val href = link.attr("href").ifBlank { null } ?: return@mapNotNull null
                 val poster = link.selectFirst("img")?.attr("src")?.ifBlank { null }?.let { fixUrl(it) }
@@ -51,9 +45,22 @@ class AnimeIndo : MainAPI() {
                     this.posterUrl = poster
                 }
             }.distinctBy { it.url }
-        } else {
-            // Episode page: div.menu a[href] > div.list-anime
-            document.select("div.menu a[href]").asIterable().mapNotNull { a ->
+            newHomePageResponse(request.name, home)
+        }
+        url.contains("/anime-list/") -> {
+            // Halaman daftar semua anime
+            val document = app.get(url).document
+            val list = document.select("div.anime-list li a[href^=/anime/]").mapNotNull { a ->
+                val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+                val title = a.text().trim().ifBlank { null } ?: return@mapNotNull null
+                newAnimeSearchResponse(title, fixUrl(href), TvType.Anime)
+            }.distinctBy { it.url }
+            newHomePageResponse(request.name, list)
+        }
+        else -> {
+            // Halaman episode terbaru (tidak berubah)
+            val document = app.get(url).document
+            val home = document.select("div.menu a[href]").asIterable().mapNotNull { a ->
                 val inner = a.selectFirst("div.list-anime") ?: return@mapNotNull null
                 val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
 
@@ -73,10 +80,10 @@ class AnimeIndo : MainAPI() {
                     addSub(epNum)
                 }
             }.distinctBy { it.url }
+            newHomePageResponse(request.name, home)
         }
-
-        return newHomePageResponse(request.name, home)
     }
+}
 
     // Convert URL episode ke URL anime
     // /jigokuraku-2nd-season-episode-10/ → /anime/jigokuraku-2nd-season/

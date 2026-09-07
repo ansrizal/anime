@@ -97,7 +97,7 @@ class FilmApikProvider : MainAPI() {
             }
         )
 
-        val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/tv-series/")
+        val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/") || href.contains("/tv-series/") || href.contains("/episodes/")
         val quality = this.selectFirst(".badge-quality")?.text()?.trim()
 
         return if (isSeries) {
@@ -130,11 +130,11 @@ class FilmApikProvider : MainAPI() {
         val description = document.selectFirst("meta[property='og:description']")?.attr("content")
             ?: document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
-        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/") 
-            || document.selectFirst(".episodios, .list-episode, .eplister, #episodes-list, .famv-episodes") != null
+        val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/") || url.contains("/episodes/")
+            || document.selectFirst(".episodios, .list-episode, .eplister, #episodes-list, .famv-episodes, .famv-season-list") != null
 
         return if (isSeries) {
-            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a").mapNotNull { elem ->
+            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a, .famv-episode-btn").mapNotNull { elem ->
                 val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                 val epUrl = fixUrl(a?.attr("href") ?: return@mapNotNull null)
                 val epName = a.text().trim().ifEmpty { 
@@ -144,7 +144,7 @@ class FilmApikProvider : MainAPI() {
                 newEpisode(epUrl) {
                     this.name = epName
                 }
-            }
+            }.distinctBy { it.data }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
@@ -182,10 +182,10 @@ class FilmApikProvider : MainAPI() {
 
         // 2. Direct extraction from player list
         val document = response.document
-        document.select("#player-list li a, .player-option").forEach { a ->
+        document.select("#player-list li a, .player-option, .famv-server-btn").forEach { a ->
             val url = a.attr("data-url").ifBlank { a.attr("href") }
             if (url.isNotBlank() && (url.startsWith("http") || url.startsWith("//"))) {
-                loadExtractor(fixUrl(url), subtitleCallback, callback)
+                loadExtractor(url, subtitleCallback, callback)
             }
         }
 
@@ -211,6 +211,12 @@ class FilmApikProvider : MainAPI() {
         if (fixedUrl.contains("byseqekaho.com") || fixedUrl.contains("filemoon")) {
             val filemoonUrl = fixedUrl.replace("byseqekaho.com", "filemoon.sx")
             com.lagradost.cloudstream3.utils.loadExtractor(filemoonUrl, subtitleCallback, callback)
+        } else if (fixedUrl.contains("abyssplayer.com")) {
+            // AbyssPlayer is often a Hydrax mirror
+            val hydraxUrl = fixedUrl.replace("abyssplayer.com", "hydrax.net")
+            com.lagradost.cloudstream3.utils.loadExtractor(hydraxUrl, subtitleCallback, callback)
+            // Also try direct
+            com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
         } else {
             com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
         }

@@ -38,8 +38,8 @@ class Oploverz : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when {
             request.data.contains("/page/") -> {
-                val targetUrl = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
-                val document = app.get(targetUrl).document
+                val pageUrl = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+                val document = app.get(pageUrl).document
                 val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
                     val a = el.selectFirst("a[href]") ?: return@mapNotNull null
                     val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -98,7 +98,7 @@ class Oploverz : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    // === load() dengan parameter "link" untuk menghindari konflik nama ===
+    // ===== load() dengan parameter "link" =====
     override suspend fun load(link: String): LoadResponse {
         return if (link.contains("/az-list/")) {
             loadAzList(link)
@@ -107,7 +107,7 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // === Fungsi untuk AZ List (daftar anime per huruf) ===
+    // ===== AZ List – daftar anime per huruf =====
     private suspend fun loadAzList(azLink: String): LoadResponse {
         val document = app.get(azLink).document
         val showParam = Regex("\\?show=([^&]*)").find(azLink)?.groupValues?.getOrNull(1) ?: "Semua"
@@ -132,7 +132,7 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // === Fungsi untuk halaman detail anime ===
+    // ===== Detail anime =====
     private suspend fun loadAnimeDetail(detailLink: String): LoadResponse {
         val document = app.get(detailLink).document
 

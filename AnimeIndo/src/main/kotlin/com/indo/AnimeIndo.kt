@@ -57,11 +57,10 @@ class AnimeIndo : MainAPI() {
             val poster = inner.selectFirst("img")?.let { img ->
                 img.attr("data-original").ifBlank { null } ?: img.attr("src").takeUnless { it.contains("loading") }
             }
-            val epNum = inner.selectFirst("span.eps")?.text()?.trim()?.toIntOrNull()
             val animeUrl = episodeToAnimeUrl(href)
             newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
                 this.posterUrl = poster
-                this.status = epNum?.let { "Episode $it" }  // <- perbaikan: menggunakan status
+                // Tidak menambahkan properti tambahan karena tidak tersedia di versi ini
             }
         }.distinctBy { it.url }
     }

@@ -24,7 +24,8 @@ class AnimeIndo : MainAPI() {
     //           </div></a>
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Episode Terbaru",
-        "$mainUrl/movie/page/" to "Movie"
+        "$mainUrl/movie/page/" to "Movie",
+        "$mainUrl/anime-list/" to "Daftar Anime"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

@@ -98,16 +98,16 @@ class Oploverz : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    // ===== load() dengan parameter "link" =====
-    override suspend fun load(link: String): LoadResponse {
-        return if (link.contains("/az-list/")) {
-            loadAzList(link)
+    // === load() – parameter "inputLink" ===
+    override suspend fun load(inputLink: String): LoadResponse {
+        return if (inputLink.contains("/az-list/")) {
+            loadAzList(inputLink)
         } else {
-            loadAnimeDetail(link)
+            loadAnimeDetail(inputLink)
         }
     }
 
-    // ===== AZ List – daftar anime per huruf =====
+    // === AZ List – daftar anime per huruf ===
     private suspend fun loadAzList(azListLink: String): LoadResponse {
         val document = app.get(azListLink).document
         val showParam = Regex("\\?show=([^&]*)").find(azListLink)?.groupValues?.getOrNull(1) ?: "Semua"
@@ -132,7 +132,7 @@ class Oploverz : MainAPI() {
         }
     }
 
-    // ===== Detail anime =====
+    // === Detail anime ===
     private suspend fun loadAnimeDetail(detailLink: String): LoadResponse {
         val document = app.get(detailLink).document
 

@@ -38,8 +38,8 @@ class Oploverz : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when {
             request.data.contains("/page/") -> {
-                val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
-                val document = app.get(url).document
+                val fullUrl = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+                val document = app.get(fullUrl).document
                 val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
                     val a = el.selectFirst("a[href]") ?: return@mapNotNull null
                     val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -98,11 +98,11 @@ class Oploverz : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    override suspend fun load(url: String): LoadResponse {
-        return if (url.contains("/az-list/")) {
-            loadAzList(url)
+    override suspend fun load(animeUrl: String): LoadResponse {
+        return if (animeUrl.contains("/az-list/")) {
+            loadAzList(animeUrl)
         } else {
-            loadAnimeDetail(url)
+            loadAnimeDetail(animeUrl)
         }
     }
 

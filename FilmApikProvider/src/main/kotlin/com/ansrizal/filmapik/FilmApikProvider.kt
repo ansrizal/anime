@@ -131,10 +131,12 @@ class FilmApikProvider : MainAPI() {
             ?: document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
         val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/") || url.contains("/tv-series/") || url.contains("/episodes/")
-            || document.selectFirst(".episodios, .list-episode, .eplister, #episodes-list, .famv-episodes, .famv-season-list") != null
+            || document.selectFirst(".episodios, .list-episode, .eplister, #episodes-list, .famv-episodes, .famv-season-list, .famv-episode-btn") != null
+
+        val isAnime = url.contains("anime") || document.select(".badge-year, .prose").text().contains("anime", true)
 
         return if (isSeries) {
-            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a, .famv-episode-btn").mapNotNull { elem ->
+            val episodes = document.select(".episodios li, .list-episode li, .eplister li, #episodes-list a, .famv-episodes a, .famv-episode-btn, a[href*='/episodes/']").mapNotNull { elem ->
                 val a = if (elem.tagName() == "a") elem else elem.selectFirst("a")
                 val epUrl = fixUrl(a?.attr("href") ?: return@mapNotNull null)
                 val epName = a.text().trim().ifEmpty { 
@@ -143,10 +145,11 @@ class FilmApikProvider : MainAPI() {
                 
                 newEpisode(epUrl) {
                     this.name = epName
+                    this.episode = Regex("""\d+""").findAll(epName).lastOrNull()?.value?.toIntOrNull()
                 }
-            }.distinctBy { it.data }
+            }.distinctBy { it.data }.sortedBy { it.episode }
 
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            newTvSeriesLoadResponse(title, url, if (isAnime) TvType.Anime else TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
             }
@@ -168,7 +171,7 @@ class FilmApikProvider : MainAPI() {
         val html = response.text
 
         // 1. Parse from window.famvServers JSON
-        val serversRegex = Regex("""window\.famvServers\s*=\s*(\[.*?\]);""")
+        val serversRegex = Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
         val serversJson = serversRegex.find(html)?.groupValues?.get(1)
         if (serversJson != null) {
             val urlRegex = Regex(""""url"\s*:\s*"(.*?)"""")
@@ -180,12 +183,12 @@ class FilmApikProvider : MainAPI() {
             }
         }
 
-        // 2. Direct extraction from player list
+        // 2. Direct extraction from player elements
         val document = response.document
         document.select("#player-list li a, .player-option, .famv-server-btn").forEach { a ->
             val url = a.attr("data-url").ifBlank { a.attr("href") }
             if (url.isNotBlank() && (url.startsWith("http") || url.startsWith("//"))) {
-                loadExtractor(url, subtitleCallback, callback)
+                loadExtractor(fixUrl(url), subtitleCallback, callback)
             }
         }
 
@@ -207,18 +210,20 @@ class FilmApikProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         val fixedUrl = fixUrl(url)
-        // Filemoon mirror support
-        if (fixedUrl.contains("byseqekaho.com") || fixedUrl.contains("filemoon")) {
-            val filemoonUrl = fixedUrl.replace("byseqekaho.com", "filemoon.sx")
-            com.lagradost.cloudstream3.utils.loadExtractor(filemoonUrl, subtitleCallback, callback)
-        } else if (fixedUrl.contains("abyssplayer.com")) {
-            // AbyssPlayer is often a Hydrax mirror
-            val hydraxUrl = fixedUrl.replace("abyssplayer.com", "hydrax.net")
-            com.lagradost.cloudstream3.utils.loadExtractor(hydraxUrl, subtitleCallback, callback)
-            // Also try direct
-            com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
-        } else {
-            com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
+        
+        // Handle mirrors/wrappers used by FilmApik
+        val targetUrl = when {
+            fixedUrl.contains("byseqekaho.com") || fixedUrl.contains("filemoon") -> 
+                fixedUrl.replace("byseqekaho.com", "filemoon.sx")
+            fixedUrl.contains("abyssplayer.com") -> 
+                fixedUrl.replace("abyssplayer.com", "hydrax.net")
+            fixedUrl.contains("fa.efek.stream") || fixedUrl.contains("v2.efek.stream") -> {
+                // efek.stream is often a direct HLS or needs its own logic, for now try as is
+                fixedUrl
+            }
+            else -> fixedUrl
         }
+        
+        com.lagradost.cloudstream3.utils.loadExtractor(targetUrl, subtitleCallback, callback)
     }
 }

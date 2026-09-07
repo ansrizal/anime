@@ -27,11 +27,18 @@ class Oploverz : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Update Terbaru"
+        "$mainUrl/page/" to "Update Terbaru",
+        "$mainUrl/az-list/page/" to "AZ List"   // <-- Tambahan kategori AZ List
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+        // Penanganan khusus untuk AZ List agar halaman pertama menggunakan /az-list/
+        val url = if (page <= 1) {
+            if (request.data.contains("/az-list/")) "$mainUrl/az-list/"
+            else "$mainUrl/"
+        } else {
+            "${request.data}$page/"
+        }
         val document = app.get(url).document
         val home = document.select("div.bsx").asIterable().mapNotNull { el ->
             val a = el.selectFirst("a[href]") ?: return@mapNotNull null

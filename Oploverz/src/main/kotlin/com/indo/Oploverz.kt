@@ -27,49 +27,28 @@ class Oploverz : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Update Terbaru",
-        "az-list/" to "List Anime"
+        "$mainUrl/page/" to "Update Terbaru"
     )
 
-    private fun buildPageUrl(path: String, page: Int): String {
-        val base = mainUrl.removeSuffix("/")
-        val cleanPath = path.trim('/')
-
-        return when {
-            path.isEmpty() -> if (page <= 1) base else "$base/?page=$page"
-            page <= 1 -> "$base/$cleanPath"
-            else -> {
-                if (cleanPath.contains("?")) "$base/$cleanPath&page=$page"
-                else "$base/$cleanPath/page/$page/"
-            }
-        }
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val path = request.data
-        val url = buildPageUrl(path, page)
-        val isMovie = path.contains("type=movie")
-
-        val res = request(url)
-        val document = res.document
-
-        val potentialItems = if (path.isEmpty()) {
-            val updateSection = document.getElementById("S:1") ?: document.selectFirst("#update-terbaru")
-            updateSection?.select("a.group.block") ?: document.select("a.group.block")
-        } else {
-            document.select("a.group.block, div.bsx, div.listupd article, div.utao, div.uta, div.animposx, div.bs")
-        }
-
-        val homeItems = potentialItems.mapNotNull { it.toSearchResult(isMovie) }
-            .groupBy { it.url }
-            .map { (_, results) ->
-                results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
+        val url = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+        val document = app.get(url).document
+        val home = document.select("div.bsx").asIterable().mapNotNull { el ->
+            val a = el.selectFirst("a[href]") ?: return@mapNotNull null
+            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+            val title = el.selectFirst("div.tt")?.ownText()?.trim()
+                ?: el.selectFirst("h2")?.text()?.trim()
+                ?: a.attr("title").ifBlank { null } ?: return@mapNotNull null
+            val poster = el.selectFirst("img")?.attr("src")?.ifBlank { null }
+            val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
+            val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
+            newAnimeSearchResponse(title, animeUrl, TvType.Anime) {
+                this.posterUrl = poster
+                addSub(epNum)
             }
-
-        return newHomePageResponse(
-            HomePageList(name = request.name, list = homeItems),
-            hasNext = homeItems.isNotEmpty()
-        )
+        }.distinctBy { it.url }
+        return newHomePageResponse(request.name, home)
     }
 
     private fun episodeUrlToAnimeUrl(episodeUrl: String): String {

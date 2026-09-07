@@ -25,7 +25,7 @@ class Oploverz : MainAPI() {
             }
         }
 
-        // Mengambil status teks mentah dari elemen
+        // Ambil teks status dari elemen
         fun getStatusText(el: org.jsoup.nodes.Element?): String? {
             return el?.selectFirst("div.status")?.text()?.trim()
         }
@@ -52,7 +52,6 @@ class Oploverz : MainAPI() {
                     val epText = el.selectFirst("span.epx")?.text()?.trim() ?: ""
                     val epNum = Regex("(\\d+)").find(epText)?.groupValues?.getOrNull(1)?.toIntOrNull()
                     val animeUrl = if (epNum != null) episodeUrlToAnimeUrl(href) else href
-                    // Tambahkan status ke judul
                     val titleWithStatus = if (!statusText.isNullOrBlank()) "$rawTitle ($statusText)" else rawTitle
                     newAnimeSearchResponse(titleWithStatus, animeUrl, TvType.Anime) {
                         this.posterUrl = poster
@@ -62,6 +61,7 @@ class Oploverz : MainAPI() {
                 newHomePageResponse(request.name, home)
             }
             request.data.contains("/az-list/") -> {
+                // Tampilkan indeks huruf
                 val doc = app.get("$mainUrl/az-list/").document
                 val letters = doc.select("a[href*='?show=']").map { a ->
                     val href = a.attr("href")
@@ -101,15 +101,17 @@ class Oploverz : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        if (url.contains("/az-list/")) {
-            return loadAzList(url)
+        return if (url.contains("/az-list/")) {
+            loadAzList(url)
+        } else {
+            loadAnimeDetail(url)
         }
-        return loadAnimeDetail(url)
     }
 
-    private suspend fun loadAzList(url: String): LoadResponse {
-        val document = app.get(url).document
-        val showParam = Regex("\\?show=([^&]*)").find(url)?.groupValues?.getOrNull(1) ?: "Semua"
+    // Fungsi untuk menampilkan daftar anime per huruf (AZ List)
+    private suspend fun loadAzList(azUrl: String): LoadResponse {
+        val document = app.get(azUrl).document
+        val showParam = Regex("\\?show=([^&]*)").find(azUrl)?.groupValues?.getOrNull(1) ?: "Semua"
         val title = "AZ List - $showParam"
 
         val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
@@ -125,12 +127,13 @@ class Oploverz : MainAPI() {
 
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
 
-        return newAnimeLoadResponse(title, url, TvType.Anime) {
+        return newAnimeLoadResponse(title, azUrl, TvType.Anime) {
             this.posterUrl = firstPoster
             addEpisodes(DubStatus.Subbed, episodes)
         }
     }
 
+    // Fungsi untuk halaman detail anime
     private suspend fun loadAnimeDetail(url: String): LoadResponse {
         val document = app.get(url).document
 

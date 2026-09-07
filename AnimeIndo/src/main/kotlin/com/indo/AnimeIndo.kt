@@ -30,18 +30,15 @@ class AnimeIndo : MainAPI() {
     private fun getPosterUrl(element: Element?): String? {
         if (element == null) return null
         val img = element.selectFirst("img") ?: return null
-        // Coba atribut yang umum digunakan untuk lazy loading
         var src = img.attr("data-original")
             .ifBlank { img.attr("data-src") }
             .ifBlank { img.attr("src") }
         if (src.isBlank()) return null
-        // Abaikan gambar placeholder/loading
         if (src.contains("loading", ignoreCase = true) || 
             src.contains("placeholder", ignoreCase = true) ||
             src.contains("blank", ignoreCase = true)) {
             return null
         }
-        // Ubah ke URL absolut
         return if (src.startsWith("http")) src else fixUrl(src)
     }
 
@@ -98,14 +95,12 @@ class AnimeIndo : MainAPI() {
 
     // Parser untuk daftar anime (anime-list) - tidak ada gambar di halaman ini
     private fun parseAnimeList(document: Document): List<SearchResponse> {
-        // Di halaman ini hanya ada teks, tidak ada gambar.
-        // Kita hanya tampilkan judul tanpa poster.
         return document.select("div.anime-list a[href], table.otable a[href], div.list-anime a[href]")
             .asIterable().mapNotNull { a ->
                 val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
                 val title = a.text().trim().ifBlank { null } ?: return@mapNotNull null
                 newAnimeSearchResponse(title, fixUrl(href), TvType.Anime) {
-                    // posterUrl = null (tidak ada gambar)
+                    // Tidak ada poster karena web tidak menampilkan gambar di halaman ini
                 }
             }.distinctBy { it.url }
     }
@@ -117,7 +112,7 @@ class AnimeIndo : MainAPI() {
         return "$mainUrl/anime/$animeSlug/"
     }
 
-    // ---------- SEARCH ---------- (diperbaiki agar gambar muncul)
+    // ---------- SEARCH ---------- (diperbaiki untuk menampilkan gambar)
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrls = listOf(
             "$mainUrl/search.php?q=$query",
@@ -128,26 +123,23 @@ class AnimeIndo : MainAPI() {
         for (url in searchUrls) {
             try {
                 document = app.get(url).document
-                // Periksa apakah ada hasil
-                if (document.select("div.result, div.list-anime, div.anime-item, a[href*=/anime/]").isNotEmpty()) {
+                if (document.select("table.otable").isNotEmpty()) {
                     break
                 }
             } catch (_: Exception) { }
         }
         document ?: return emptyList()
 
-        // Cari elemen yang berisi link ke anime dan memiliki gambar
-        // Selektor mencakup struktur hasil pencarian yang umum
-        val items = document.select("div.result a[href], div.list-anime a[href], div.menu a[href], a[href*=/anime/]")
-        return items.asIterable().mapNotNull { a ->
-            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            // Cari container yang berisi gambar dan teks
-            val container = a.selectFirst("div.list-anime, div.thumb, div.result") ?: a
-            // Judul bisa dari berbagai elemen
-            val title = container.selectFirst("p, h2, h3, .title, .anime-title, td.videsc a")?.text()?.trim()?.ifBlank { null }
-                ?: a.text().trim().ifBlank { null }
-                ?: return@mapNotNull null
-            val poster = getPosterUrl(container)
+        return document.select("table.otable").asIterable().mapNotNull { table ->
+            val link = table.selectFirst("td.vithumb a[href]") ?: return@mapNotNull null
+            val href = link.attr("href").ifBlank { null } ?: return@mapNotNull null
+            // Ambil gambar dari td.vithumb
+            val poster = link.selectFirst("img")?.let { img ->
+                val src = img.attr("src").ifBlank { null } ?: return@let null
+                if (src.contains("loading", ignoreCase = true)) null else fixUrl(src)
+            }
+            val desc = table.selectFirst("td.videsc") ?: return@mapNotNull null
+            val title = desc.selectFirst("a[href]")?.text()?.trim()?.ifBlank { null } ?: return@mapNotNull null
             newAnimeSearchResponse(title, fixUrl(href), TvType.Anime) {
                 this.posterUrl = poster
             }

@@ -38,8 +38,8 @@ class Oploverz : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         return when {
             request.data.contains("/page/") -> {
-                val pageUrl = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
-                val document = app.get(pageUrl).document
+                val pageLink = if (page <= 1) "$mainUrl/" else "${request.data}$page/"
+                val document = app.get(pageLink).document
                 val home = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
                     val a = el.selectFirst("a[href]") ?: return@mapNotNull null
                     val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -108,9 +108,9 @@ class Oploverz : MainAPI() {
     }
 
     // ===== AZ List – daftar anime per huruf =====
-    private suspend fun loadAzList(azLink: String): LoadResponse {
-        val document = app.get(azLink).document
-        val showParam = Regex("\\?show=([^&]*)").find(azLink)?.groupValues?.getOrNull(1) ?: "Semua"
+    private suspend fun loadAzList(azListLink: String): LoadResponse {
+        val document = app.get(azListLink).document
+        val showParam = Regex("\\?show=([^&]*)").find(azListLink)?.groupValues?.getOrNull(1) ?: "Semua"
         val title = "AZ List - $showParam"
 
         val episodes = document.select("div.bsx, article.bs").asIterable().mapNotNull { el ->
@@ -126,7 +126,7 @@ class Oploverz : MainAPI() {
 
         val firstPoster = document.selectFirst("div.bsx img, article.bs img")?.attr("src")
 
-        return newAnimeLoadResponse(title, azLink, TvType.Anime) {
+        return newAnimeLoadResponse(title, azListLink, TvType.Anime) {
             this.posterUrl = firstPoster
             addEpisodes(DubStatus.Subbed, episodes)
         }
@@ -179,14 +179,14 @@ class Oploverz : MainAPI() {
             .asIterable()
             .forEach { iframe ->
                 val src = iframe.attr("src").ifBlank { null } ?: return@forEach
-                if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
+                if (src.startsWith("http")) handleExtractorLink(src, data, subtitleCallback, callback)
             }
 
         document.select("select.mirror option").asIterable().forEach { option ->
             val encoded = option.attr("value").ifBlank { null } ?: return@forEach
             val decoded = try { String(Base64.getDecoder().decode(encoded)) } catch (e: Exception) { null } ?: return@forEach
             val src = Regex("src\\s*=\\s*\"([^\"]+)\"").find(decoded)?.groupValues?.getOrNull(1) ?: return@forEach
-            if (src.startsWith("http")) handleUrl(src, data, subtitleCallback, callback)
+            if (src.startsWith("http")) handleExtractorLink(src, data, subtitleCallback, callback)
         }
 
         document.select("a[href*=gofile.io]").asIterable().forEach { a ->
@@ -197,18 +197,18 @@ class Oploverz : MainAPI() {
         return true
     }
 
-    private suspend fun handleUrl(extractorUrl: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        if (extractorUrl.contains("blogger.com")) {
-            handleBloggerUrl(extractorUrl, referer, subtitleCallback, callback)
+    private suspend fun handleExtractorLink(extractorLink: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        if (extractorLink.contains("blogger.com")) {
+            handleBloggerLink(extractorLink, referer, subtitleCallback, callback)
         } else {
-            loadExtractor(extractorUrl, referer, subtitleCallback, callback)
+            loadExtractor(extractorLink, referer, subtitleCallback, callback)
         }
     }
 
-    private suspend fun handleBloggerUrl(bloggerUrl: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
-        loadExtractor(bloggerUrl, referer, subtitleCallback, callback)
+    private suspend fun handleBloggerLink(bloggerLink: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        loadExtractor(bloggerLink, referer, subtitleCallback, callback)
         try {
-            val doc = app.get(bloggerUrl).document
+            val doc = app.get(bloggerLink).document
             doc.select("script").asIterable().forEach { script ->
                 val text = script.data()
                 val streamsStart = text.indexOf("\"streams\":[")

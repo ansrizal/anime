@@ -50,21 +50,21 @@ class AnimeIndo : MainAPI() {
 
     // Parser untuk episode terbaru
     private fun parseEpisodes(document: Document): List<SearchResponse> {
-        return document.select("div.menu a[href]").asIterable().mapNotNull { a ->
-            val inner = a.selectFirst("div.list-anime") ?: return@mapNotNull null
-            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-            val title = inner.selectFirst("p")?.text()?.trim()?.ifBlank { null } ?: return@mapNotNull null
-            val poster = inner.selectFirst("img")?.let { img ->
-                img.attr("data-original").ifBlank { null } ?: img.attr("src").takeUnless { it.contains("loading") }
-            }
-            val epNum = inner.selectFirst("span.eps")?.text()?.trim()?.toIntOrNull()
-            val animeUrl = episodeToAnimeUrl(href)
-            newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
-                this.posterUrl = poster
-                addSub(epNum)
-            }
-        }.distinctBy { it.url }
-    }
+    return document.select("div.menu a[href]").asIterable().mapNotNull { a ->
+        val inner = a.selectFirst("div.list-anime") ?: return@mapNotNull null
+        val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+        val title = inner.selectFirst("p")?.text()?.trim()?.ifBlank { null } ?: return@mapNotNull null
+        val poster = inner.selectFirst("img")?.let { img ->
+            img.attr("data-original").ifBlank { null } ?: img.attr("src").takeUnless { it.contains("loading") }
+        }
+        val epNum = inner.selectFirst("span.eps")?.text()?.trim()?.toIntOrNull()
+        val animeUrl = episodeToAnimeUrl(href)
+        newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
+            this.posterUrl = poster
+            this.subtitle = epNum?.let { "Episode $it" } // ✅ perbaikan
+        }
+    }.distinctBy { it.url }
+}
 
     // Parser untuk movie
     private fun parseMovies(document: Document): List<SearchResponse> {

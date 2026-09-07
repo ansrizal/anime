@@ -210,20 +210,6 @@ class FilmApikProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         val fixedUrl = fixUrl(url)
-        
-        // Handle mirrors/wrappers used by FilmApik
-        val targetUrl = when {
-            fixedUrl.contains("byseqekaho.com") || fixedUrl.contains("filemoon") -> 
-                fixedUrl.replace("byseqekaho.com", "filemoon.sx")
-            fixedUrl.contains("abyssplayer.com") -> 
-                fixedUrl.replace("abyssplayer.com", "hydrax.net")
-            fixedUrl.contains("fa.efek.stream") || fixedUrl.contains("v2.efek.stream") -> {
-                // efek.stream is often a direct HLS or needs its own logic, for now try as is
-                fixedUrl
-            }
-            else -> fixedUrl
-        }
-        
-        com.lagradost.cloudstream3.utils.loadExtractor(targetUrl, subtitleCallback, callback)
+        com.lagradost.cloudstream3.utils.loadExtractor(fixedUrl, subtitleCallback, callback)
     }
 }

@@ -11,5 +11,10 @@ class FilmApikPlugin : Plugin() {
     override fun load(context: Context) {
         // Register FilmApik Provider into CloudStream 3 provider registry
         registerMainAPI(FilmApikProvider())
+        registerExtractorAPI(Filemoonfa())
+        registerExtractorAPI(Streamp2p())
+        registerExtractorAPI(Abyssplayer())
+        registerExtractorAPI(EfekStream())
+        registerExtractorAPI(EfekStreamV2())
     }
 }

@@ -86,10 +86,15 @@ class FilmApikProvider : MainAPI() {
         if (href == mainUrl || href == "$mainUrl/" || href.contains("/category/") || href.contains("/release-year/")) return null
 
         val img = this.selectFirst("img")
+        val srcset = img?.attr("srcset") ?: img?.attr("data-srcset")
         val posterUrl = fixUrlNull(
-            img?.attr("abs:data-src")
-            ?: img?.attr("abs:src")
-            ?: img?.attr("src")
+            if (!srcset.isNullOrBlank()) {
+                srcset.split(",").last().trim().split(" ").first()
+            } else {
+                img?.attr("abs:data-src")
+                    ?: img?.attr("abs:src")
+                    ?: img?.attr("src")
+            }
         )
 
         val isSeries = href.contains("/tvshows/") || href.contains("/series/") || href.contains("/tv/")
@@ -122,7 +127,8 @@ class FilmApikProvider : MainAPI() {
 
         val title = document.selectFirst("h1.entry-title, h1, .title, .name")?.text()?.trim() ?: ""
         val poster = fixUrlNull(document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("div.thumb img, img.wp-post-image, .poster img")?.attr("src"))
-        val description = document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
+        val description = document.selectFirst("meta[property='og:description']")?.attr("content")
+            ?: document.selectFirst("div.entry-content, div.synopsis, [itemprop=description], .description, .prose")?.text()?.trim()
 
         val isSeries = url.contains("/tvshows/") || url.contains("/series/") || url.contains("/tv/")
 
@@ -154,25 +160,30 @@ class FilmApikProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = request(data).document
+        val response = request(data)
+        val document = response.document
+        val html = response.text
 
+        // Parse from window.famvServers JSON
+        val serversRegex = Regex("""window\.famvServers\s*=\s*(\[.*?\]);""")
+        val serversJson = serversRegex.find(html)?.groupValues?.get(1)
+        if (serversJson != null) {
+            val urlRegex = Regex(""""url"\s*:\s*"(.*?)"""")
+            urlRegex.findAll(serversJson).forEach { match ->
+                val url = match.groupValues[1].replace("\\/", "/")
+                loadExtractor(url, subtitleCallback, callback)
+            }
+        }
+
+        // Fallback to iframes
         document.select("iframe").asIterable().forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank()) {
+            if (src.isNotBlank() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
         
-        // Try to find player data in script tags
-        document.select("script").forEach { script ->
-            val content = script.data()
-            if (content.contains("iframe src=")) {
-                val src = Regex("""iframe src=["'](.*?)["']""").find(content)?.groupValues?.get(1)
-                if (src != null) loadExtractor(fixUrl(src), subtitleCallback, callback)
-            }
-        }
-
         return true
     }
 }

@@ -27,7 +27,8 @@ class Oploverz : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Update Terbaru"
+        "$mainUrl/page/" to "Update Terbaru",
+        "$mainUrl/az-list/" to "List Anime"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

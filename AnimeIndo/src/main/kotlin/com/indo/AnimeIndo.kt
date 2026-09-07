@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.nodes.Document // pastikan import
+import org.jsoup.nodes.Document
 
 class AnimeIndo : MainAPI() {
     override var mainUrl = "https://anime-indo.lol"
@@ -50,21 +50,21 @@ class AnimeIndo : MainAPI() {
 
     // Parser untuk episode terbaru
     private fun parseEpisodes(document: Document): List<SearchResponse> {
-    return document.select("div.menu a[href]").asIterable().mapNotNull { a ->
-        val inner = a.selectFirst("div.list-anime") ?: return@mapNotNull null
-        val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
-        val title = inner.selectFirst("p")?.text()?.trim()?.ifBlank { null } ?: return@mapNotNull null
-        val poster = inner.selectFirst("img")?.let { img ->
-            img.attr("data-original").ifBlank { null } ?: img.attr("src").takeUnless { it.contains("loading") }
-        }
-        val epNum = inner.selectFirst("span.eps")?.text()?.trim()?.toIntOrNull()
-        val animeUrl = episodeToAnimeUrl(href)
-        newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
-            this.posterUrl = poster
-            this.subtitle = epNum?.let { "Episode $it" } // ✅ perbaikan
-        }
-    }.distinctBy { it.url }
-}
+        return document.select("div.menu a[href]").asIterable().mapNotNull { a ->
+            val inner = a.selectFirst("div.list-anime") ?: return@mapNotNull null
+            val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
+            val title = inner.selectFirst("p")?.text()?.trim()?.ifBlank { null } ?: return@mapNotNull null
+            val poster = inner.selectFirst("img")?.let { img ->
+                img.attr("data-original").ifBlank { null } ?: img.attr("src").takeUnless { it.contains("loading") }
+            }
+            val epNum = inner.selectFirst("span.eps")?.text()?.trim()?.toIntOrNull()
+            val animeUrl = episodeToAnimeUrl(href)
+            newAnimeSearchResponse(title, fixUrl(animeUrl), TvType.Anime) {
+                this.posterUrl = poster
+                this.subtitle = epNum?.let { "Episode $it" }
+            }
+        }.distinctBy { it.url }
+    }
 
     // Parser untuk movie
     private fun parseMovies(document: Document): List<SearchResponse> {
@@ -80,7 +80,7 @@ class AnimeIndo : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    // Parser untuk daftar anime (anime-list)  // <-- FIX
+    // Parser untuk daftar anime (anime-list)
     private fun parseAnimeList(document: Document): List<SearchResponse> {
         return document.select("div.anime-list a[href], table.otable a[href]").asIterable().mapNotNull { a ->
             val href = a.attr("href").ifBlank { null } ?: return@mapNotNull null
@@ -104,7 +104,7 @@ class AnimeIndo : MainAPI() {
         return "$mainUrl/anime/$animeSlug/"
     }
 
-    // ---------- SEARCH ----------  // <-- FIX
+    // ---------- SEARCH ----------
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrls = listOf(
             "$mainUrl/search.php?q=$query",
@@ -179,7 +179,7 @@ class AnimeIndo : MainAPI() {
             engName = title
             posterUrl = tracker?.image ?: poster
             backgroundPosterUrl = tracker?.cover
-            addEpisodes(DubStatus.Sub, episodes)
+            addEpisodes(DubStatus.Subbed, episodes)
             plot = description
             this.tags = genres
             addMalId(tracker?.malId)

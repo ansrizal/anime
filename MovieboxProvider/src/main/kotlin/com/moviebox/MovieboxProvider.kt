@@ -97,6 +97,7 @@ class MovieboxProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
 
+        // 1. Scraping HTML
         try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "$mainUrl/web/searchResult?keyword=$encoded"
@@ -129,23 +130,25 @@ class MovieboxProvider : MainAPI() {
                 val ratingStr = ratingRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
                 val rating = ratingStr.toDoubleOrNull()
 
-                // Buat SearchResponse
+                // Konversi rating ke Score? (gunakan Score.from10)
+                val score = if (rating != null) Score.from10(rating.toInt()) else null
+
                 val response = newMovieSearchResponse(
                     title,
                     subjectId,
-                    TvType.Movie, // sementara semua dianggap movie
+                    TvType.Movie,
                     false
                 ) {
                     this.posterUrl = poster
-                    this.score = rating?.toFloat() // ← perbaikan: gunakan score
+                    this.score = score
                 }
                 results.add(response)
             }
         } catch (_: Exception) {
-            // scraping gagal
+            // scraping gagal, lanjut ke fallback
         }
 
-        // Jika scraping tidak menghasilkan apa-apa, coba API
+        // 2. Fallback API jika scraping tidak menghasilkan
         if (results.isEmpty()) {
             try {
                 val headers = mapOf(
@@ -191,8 +194,6 @@ class MovieboxProvider : MainAPI() {
 
         return results
     }
-
-    // ============================ (fungsi load, loadLinks, data class tetap sama) ============================
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")

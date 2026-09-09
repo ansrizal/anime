@@ -57,6 +57,7 @@ class MovieboxProvider : MainAPI() {
         "1006,Rating" to "Animation Rating"
     )
 
+    // ============ BAGIAN MAIN PAGE (KODE ANDA YANG BERHASIL) ============
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -94,9 +95,13 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
-    // ===================== PERBAIKAN SEARCH (Hanya API) =====================
+    // ============ BAGIAN PENCARIAN (KODE SAYA YANG HAMPIR BERHASIL) ============
     override suspend fun search(query: String): List<SearchResponse> {
-        // Siapkan header lengkap
+        // 1. Ambil cookie dari halaman utama
+        val homeResponse = app.get(mainUrl)
+        val cookie = homeResponse.headers["Set-Cookie"]
+
+        // 2. Siapkan header lengkap
         val headers = mutableMapOf(
             "Content-Type" to "application/json",
             "Accept" to "application/json, text/plain, */*",
@@ -105,8 +110,11 @@ class MovieboxProvider : MainAPI() {
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "X-Requested-With" to "XMLHttpRequest"
         )
+        if (cookie != null) {
+            headers["Cookie"] = cookie
+        }
 
-        // Coba dengan mainAPIUrl (POST)
+        // 3. Coba dengan mainAPIUrl (POST) dengan subjectType
         try {
             val body = mapOf(
                 "keyword" to query,
@@ -127,7 +135,7 @@ class MovieboxProvider : MainAPI() {
             }
         } catch (_: Exception) { /* fallback */ }
 
-        // Coba tanpa subjectType (POST)
+        // 4. Coba tanpa subjectType (POST)
         try {
             val body = mapOf(
                 "keyword" to query,
@@ -147,7 +155,7 @@ class MovieboxProvider : MainAPI() {
             }
         } catch (_: Exception) { /* fallback */ }
 
-        // Coba dengan GET
+        // 5. Coba dengan GET
         try {
             val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
             val response = app.get(url, headers = headers)
@@ -161,11 +169,11 @@ class MovieboxProvider : MainAPI() {
         return emptyList()
     }
 
-    // ===================== PERBAIKAN LOAD (Ganti ke mainAPIUrl) =====================
+    // ============ BAGIAN DETAIL FILM (PERBAIKAN KE mainAPIUrl) ============
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
         
-        // Gunakan mainAPIUrl (API yang sama dengan halaman utama yang berfungsi)
+        // Menggunakan mainAPIUrl yang sama dengan homepage agar tidak kosong
         val document = app.get("$mainAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
             .parsedSafe<MediaDetail>()?.data
             
@@ -189,7 +197,6 @@ class MovieboxProvider : MainAPI() {
             )
         }?.distinctBy { it.actor }
 
-        // Ganti $mainUrl menjadi $mainAPIUrl agar rekomendasi tidak kosong
         val recommendations =
             app.get("$mainAPIUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
                 .parsedSafe<Media>()?.data?.items?.map {
@@ -243,7 +250,7 @@ class MovieboxProvider : MainAPI() {
         }
     }
 
-    // ===================== PERBAIKAN LOAD LINKS (Ganti ke mainAPIUrl) =====================
+    // ============ BAGIAN PLAYER VIDEO (PERBAIKAN KE mainAPIUrl) ============
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -253,7 +260,7 @@ class MovieboxProvider : MainAPI() {
 
         val media = parseJson<LoadData>(data)
         
-        // Perbaiki referer agar sesuai API utama
+        // Ganti referer ke mainAPIUrl agar sesuai dengan server yang aktif
         val referer = "$mainAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
 
         val streams = app.get(
@@ -293,6 +300,7 @@ class MovieboxProvider : MainAPI() {
         return true
     }
 
+    // ============ DATA CLASS (TETAP SAMA) ============
     data class LoadData(
         val id: String? = null,
         val season: Int? = null,

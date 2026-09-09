@@ -93,19 +93,14 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "0",
-                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException()
+        val url = "$mainAPIUrl/wefeed-h5api-bff/web/search?keyword=$query&page=1&perPage=20"
+        return app.get(url).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
+            ?: throw ErrorLoadingException("Search failed or returned no results")
     }
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
+        val document = app.get("$mainAPIUrl/wefeed-h5api-bff/web/subject/detail?subjectId=$id")
             .parsedSafe<MediaDetail>()?.data
         val subject = document?.subject
         val title = subject?.title ?: ""
@@ -191,7 +186,7 @@ class MovieboxProvider : MainAPI() {
         val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
 
         val streams = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+            "$mainAPIUrl/wefeed-h5api-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
             referer = referer
         ).parsedSafe<Media>()?.data?.streams
 
@@ -213,7 +208,7 @@ class MovieboxProvider : MainAPI() {
         val format = streams?.first()?.format
 
         app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+            "$mainAPIUrl/wefeed-h5api-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
             referer = referer
         ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
             subtitleCallback.invoke(

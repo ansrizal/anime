@@ -13,12 +13,11 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import java.net.URLEncoder
 
 class MovieboxProvider : MainAPI() {
     override var mainUrl = "https://moviebox.ph"
     private val mainAPIUrl = "https://h5-api.aoneroom.com"
-    
+    private val secondAPIUrl = "https://filmboom.top"
     override val instantLinkLoading = true
     override var name = "MovieBox"
     override val hasMainPage = true
@@ -54,18 +53,15 @@ class MovieboxProvider : MainAPI() {
         "1006,ForYou" to "Animation ForYou",
         "1006,Hottest" to "Animation Hottest",
         "1006,Latest" to "Animation Latest",
-        "1006,Rating" to "Animation Rating"
-    )
+        "1006,Rating" to "Animation Rating")
 
-    // ============ BAGIAN MAIN PAGE (KODE ANDA YANG BERHASIL) ============
     override suspend fun getMainPage(
         page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+        request: MainPageRequest): HomePageResponse {
 
         val home = mutableListOf<SearchResponse>()
 
-        if (!request.data.contains(",")) {
+        if(!request.data.contains(",")) {
             val url = "$mainAPIUrl/wefeed-h5api-bff/ranking-list/content?id=${request.data}&page=$page&perPage=12"
 
             val index = app.get(url).parsedSafe<Media>()?.data?.subjectList?.map {
@@ -90,93 +86,27 @@ class MovieboxProvider : MainAPI() {
             home.addAll(index)
         }
 
+
         return newHomePageResponse(request.name, home)
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
-    // ============ BAGIAN PENCARIAN (KODE SAYA YANG HAMPIR BERHASIL) ============
     override suspend fun search(query: String): List<SearchResponse> {
-        // 1. Ambil cookie dari halaman utama
-        val homeResponse = app.get(mainUrl)
-        val cookie = homeResponse.headers["Set-Cookie"]
-
-        // 2. Siapkan header lengkap
-        val headers = mutableMapOf(
-            "Content-Type" to "application/json",
-            "Accept" to "application/json, text/plain, */*",
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "X-Requested-With" to "XMLHttpRequest"
-        )
-        if (cookie != null) {
-            headers["Cookie"] = cookie
-        }
-
-        // 3. Coba dengan mainAPIUrl (POST) dengan subjectType
-        try {
-            val body = mapOf(
+        return app.post(
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
                 "keyword" to query,
                 "page" to "1",
-                "perPage" to "20",
-                "subjectType" to "0"
-            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-
-            val response = app.post(
-                "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
-                requestBody = body,
-                headers = headers
-            )
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) { /* fallback */ }
-
-        // 4. Coba tanpa subjectType (POST)
-        try {
-            val body = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "20"
-            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-
-            val response = app.post(
-                "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
-                requestBody = body,
-                headers = headers
-            )
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) { /* fallback */ }
-
-        // 5. Coba dengan GET
-        try {
-            val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
-            val response = app.get(url, headers = headers)
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) { /* fallback */ }
-
-        return emptyList()
+                "perPage" to "0",
+                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
+            ?: throw ErrorLoadingException()
     }
 
-    // ============ BAGIAN DETAIL FILM (PERBAIKAN KE mainAPIUrl) ============
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        
-        // Menggunakan mainAPIUrl yang sama dengan homepage agar tidak kosong
-        val document = app.get("$mainAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
+        val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
             .parsedSafe<MediaDetail>()?.data
-            
         val subject = document?.subject
         val title = subject?.title ?: ""
         val poster = subject?.cover?.url
@@ -198,7 +128,7 @@ class MovieboxProvider : MainAPI() {
         }?.distinctBy { it.actor }
 
         val recommendations =
-            app.get("$mainAPIUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
+            app.get("$mainUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
                 .parsedSafe<Media>()?.data?.items?.map {
                     it.toSearchResponse(this)
                 }
@@ -250,7 +180,6 @@ class MovieboxProvider : MainAPI() {
         }
     }
 
-    // ============ BAGIAN PLAYER VIDEO (PERBAIKAN KE mainAPIUrl) ============
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -259,12 +188,10 @@ class MovieboxProvider : MainAPI() {
     ): Boolean {
 
         val media = parseJson<LoadData>(data)
-        
-        // Ganti referer ke mainAPIUrl agar sesuai dengan server yang aktif
-        val referer = "$mainAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
+        val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
 
         val streams = app.get(
-            "$mainAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
             referer = referer
         ).parsedSafe<Media>()?.data?.streams
 
@@ -276,7 +203,7 @@ class MovieboxProvider : MainAPI() {
                     source.url ?: return@map,
                     INFER_TYPE
                 ) {
-                    this.referer = "$mainAPIUrl/"
+                    this.referer = "$secondAPIUrl/"
                     this.quality = getQualityFromName(source.resolutions)
                 }
             )
@@ -286,7 +213,7 @@ class MovieboxProvider : MainAPI() {
         val format = streams?.first()?.format
 
         app.get(
-            "$mainAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
             referer = referer
         ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
             subtitleCallback.invoke(
@@ -300,60 +227,49 @@ class MovieboxProvider : MainAPI() {
         return true
     }
 
-    // ============ DATA CLASS (TETAP SAMA) ============
     data class LoadData(
         val id: String? = null,
         val season: Int? = null,
         val episode: Int? = null,
-        val detailPath: String? = null
-    )
+        val detailPath: String? = null)
 
     data class Media(
-        @JsonProperty("data") val data: Data? = null
-    ) {
+        @JsonProperty("data") val data: Data? = null) {
         data class Data(
             @JsonProperty("subjectList") val subjectList: ArrayList<Items>? = arrayListOf(),
             @JsonProperty("items") val items: ArrayList<Items>? = arrayListOf(),
             @JsonProperty("streams") val streams: ArrayList<Streams>? = arrayListOf(),
-            @JsonProperty("captions") val captions: ArrayList<Captions>? = arrayListOf()
-        ) {
+            @JsonProperty("captions") val captions: ArrayList<Captions>? = arrayListOf()) {
             data class Streams(
                 @JsonProperty("id") val id: String? = null,
                 @JsonProperty("format") val format: String? = null,
                 @JsonProperty("url") val url: String? = null,
-                @JsonProperty("resolutions") val resolutions: String? = null
-            )
+                @JsonProperty("resolutions") val resolutions: String? = null)
 
             data class Captions(
                 @JsonProperty("lan") val lan: String? = null,
                 @JsonProperty("lanName") val lanName: String? = null,
-                @JsonProperty("url") val url: String? = null
-            )
+                @JsonProperty("url") val url: String? = null)
         }
     }
 
     data class MediaDetail(
-        @JsonProperty("data") val data: Data? = null
-    ) {
+        @JsonProperty("data") val data: Data? = null) {
         data class Data(
             @JsonProperty("subject") val subject: Items? = null,
             @JsonProperty("stars") val stars: ArrayList<Stars>? = arrayListOf(),
-            @JsonProperty("resource") val resource: Resource? = null
-        ) {
+            @JsonProperty("resource") val resource: Resource? = null) {
             data class Stars(
                 @JsonProperty("name") val name: String? = null,
                 @JsonProperty("character") val character: String? = null,
-                @JsonProperty("avatarUrl") val avatarUrl: String? = null
-            )
+                @JsonProperty("avatarUrl") val avatarUrl: String? = null)
 
             data class Resource(
-                @JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf()
-            ) {
+                @JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf()) {
                 data class Seasons(
                     @JsonProperty("se") val se: Int? = null,
                     @JsonProperty("maxEp") val maxEp: Int? = null,
-                    @JsonProperty("allEp") val allEp: String? = null
-                )
+                    @JsonProperty("allEp") val allEp: String? = null)
             }
         }
     }
@@ -370,8 +286,7 @@ class MovieboxProvider : MainAPI() {
         @JsonProperty("imdbRatingValue") val imdbRatingValue: String? = null,
         @JsonProperty("countryName") val countryName: String? = null,
         @JsonProperty("trailer") val trailer: Trailer? = null,
-        @JsonProperty("detailPath") val detailPath: String? = null
-    ) {
+        @JsonProperty("detailPath") val detailPath: String? = null) {
 
         fun toSearchResponse(provider: MovieboxProvider): SearchResponse {
             return provider.newMovieSearchResponse(
@@ -385,15 +300,13 @@ class MovieboxProvider : MainAPI() {
         }
 
         data class Cover(
-            @JsonProperty("url") val url: String? = null
-        )
+            @JsonProperty("url") val url: String? = null)
 
         data class Trailer(
-            @JsonProperty("videoAddress") val videoAddress: VideoAddress? = null
-        ) {
+            @JsonProperty("videoAddress") val videoAddress: VideoAddress? = null) {
             data class VideoAddress(
-                @JsonProperty("url") val url: String? = null
-            )
+                @JsonProperty("url") val url: String? = null)
         }
     }
+
 }

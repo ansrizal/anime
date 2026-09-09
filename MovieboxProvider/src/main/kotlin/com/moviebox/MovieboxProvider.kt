@@ -95,7 +95,7 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // 1. Scraping HTML halaman pencarian
+        // ---------- STRATEGI 1: Scraping HTML ----------
         try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val htmlUrl = "$mainUrl/web/searchResult?keyword=$encoded"
@@ -108,7 +108,7 @@ class MovieboxProvider : MainAPI() {
             )
             val html = htmlResponse.text
 
-            // Ekstrak __NUXT_DATA__ tanpa regex (lebih handal)
+            // Ekstrak __NUXT_DATA__ dengan indeks
             val scriptStart = "<script id=\"__NUXT_DATA__\" type=\"application/json\">"
             val scriptEnd = "</script>"
             val startPos = html.indexOf(scriptStart)
@@ -116,15 +116,20 @@ class MovieboxProvider : MainAPI() {
                 val endPos = html.indexOf(scriptEnd, startPos + scriptStart.length)
                 if (endPos != -1) {
                     val jsonString = html.substring(startPos + scriptStart.length, endPos).trim()
-                    val parsed = parseJson<Map<String, Any>>(jsonString)
-                    val itemsList = extractItemsRecursively(parsed)
-                    if (itemsList.isNotEmpty()) {
-                        return itemsList.mapNotNull { item ->
+
+                    // Parse JSON
+                    val jsonMap = parseJson<Map<String, Any>>(jsonString)
+                    // Cari items di data
+                    val data = jsonMap["data"] as? Map<*, *>
+                    val items = data?.get("items") as? List<*>
+                    if (items != null && items.isNotEmpty()) {
+                        return items.mapNotNull { item ->
                             try {
-                                val title = item["title"] as? String ?: ""
-                                val subjectId = item["subjectId"] as? String ?: ""
-                                val subjectType = (item["subjectType"] as? Number)?.toInt() ?: 1
-                                val cover = (item["cover"] as? Map<*, *>)?.get("url") as? String
+                                val map = item as Map<*, *>
+                                val title = map["title"] as? String ?: ""
+                                val subjectId = map["subjectId"] as? String ?: ""
+                                val subjectType = (map["subjectType"] as? Number)?.toInt() ?: 1
+                                val cover = (map["cover"] as? Map<*, *>)?.get("url") as? String
                                 newMovieSearchResponse(
                                     title,
                                     subjectId,
@@ -139,10 +144,10 @@ class MovieboxProvider : MainAPI() {
                 }
             }
         } catch (_: Exception) {
-            // Fallback ke API
+            // Gagal scraping, lanjut ke API
         }
 
-        // 2. Fallback: API POST
+        // ---------- STRATEGI 2: API (POST) dengan header lengkap ----------
         try {
             val headers = mapOf(
                 "Content-Type" to "application/json",
@@ -157,6 +162,7 @@ class MovieboxProvider : MainAPI() {
                 "perPage" to "20",
                 "subjectType" to "0"
             ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
             val response = app.post(
                 "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
                 requestBody = body,
@@ -167,9 +173,9 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (_: Exception) { /* lanjut */ }
+        } catch (_: Exception) { /* fallback */ }
 
-        // 3. Fallback: GET
+        // ---------- STRATEGI 3: GET ----------
         try {
             val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
             val headers = mapOf(
@@ -182,36 +188,34 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (_: Exception) { /* lanjut */ }
+        } catch (_: Exception) { /* fallback */ }
+
+        // ---------- STRATEGI 4: Coba secondAPIUrl ----------
+        try {
+            val headers = mapOf(
+                "Content-Type" to "application/json",
+                "Referer" to mainUrl,
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            val body = mapOf(
+                "keyword" to query,
+                "page" to "1",
+                "perPage" to "20",
+                "subjectType" to "0"
+            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+            val response = app.post(
+                "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
+                requestBody = body,
+                headers = headers
+            )
+            val parsed = response.parsedSafe<Media>()
+            val items = parsed?.data?.items
+            if (!items.isNullOrEmpty()) {
+                return items.map { it.toSearchResponse(this) }
+            }
+        } catch (_: Exception) { /* fallback */ }
 
         return emptyList()
-    }
-
-    // Rekursif mencari array "items" dalam Map
-    @Suppress("UNCHECKED_CAST")
-    private fun extractItemsRecursively(obj: Any?): List<Map<*, *>> {
-        if (obj == null) return emptyList()
-        return when (obj) {
-            is Map<*, *> -> {
-                (obj["items"] as? List<*>)?.let {
-                    val result = it.mapNotNull { item -> item as? Map<*, *> }
-                    if (result.isNotEmpty()) return result
-                }
-                for (value in obj.values) {
-                    val found = extractItemsRecursively(value)
-                    if (found.isNotEmpty()) return found
-                }
-                emptyList()
-            }
-            is List<*> -> {
-                for (item in obj) {
-                    val found = extractItemsRecursively(item)
-                    if (found.isNotEmpty()) return found
-                }
-                emptyList()
-            }
-            else -> emptyList()
-        }
     }
 
     override suspend fun load(url: String): LoadResponse {

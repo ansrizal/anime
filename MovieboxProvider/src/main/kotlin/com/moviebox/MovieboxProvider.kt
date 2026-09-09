@@ -94,8 +94,7 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         return app.post(
-            "$secondAPIUrl/web/searchResult?keyword=", requestBody = mapOf(
-                "keyword" to query,
+            "$mainUrl/web/searchResult?keyword=${query.replace(" ", "+")}", requestBody = mapOf(
                 "page" to "1",
                 "perPage" to "20",
                 "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())

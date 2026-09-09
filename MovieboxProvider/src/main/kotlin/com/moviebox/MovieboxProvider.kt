@@ -89,8 +89,6 @@ class MovieboxProvider : MainAPI() {
 
         return newHomePageResponse(request.name, home)
     }
-   
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
 override suspend fun search(query: String): List<SearchResponse> {
     val url = "$mainAPIUrl/wefeed-h5api-bff/subject-api/search" +
@@ -292,7 +290,7 @@ override suspend fun search(query: String): List<SearchResponse> {
             return provider.newMovieSearchResponse(
                 title ?: "",
                 subjectId ?: "",
-                if (subjectType == 1) TvType.Movie else TvType.TvSeries,
+                if (subjectType == 0) TvType.Movie else TvType.TvSeries,
                 false
             ) {
                 this.posterUrl = cover?.url

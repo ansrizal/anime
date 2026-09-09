@@ -95,9 +95,9 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // 1. Ambil cookie dari halaman utama untuk mempertahankan session
+        // 1. Ambil cookie dari halaman utama
         val homeResponse = app.get(mainUrl)
-        val cookie = homeResponse.headers["Set-Cookie"] // atau homeResponse.cookies jika tersedia
+        val cookie = homeResponse.headers["Set-Cookie"]
 
         // 2. Siapkan header lengkap
         val headers = mutableMapOf(
@@ -112,7 +112,7 @@ class MovieboxProvider : MainAPI() {
             headers["Cookie"] = cookie
         }
 
-        // 3. Coba dengan mainAPIUrl (POST)
+        // 3. Coba dengan mainAPIUrl (POST) - subjectType=0
         try {
             val body = mapOf(
                 "keyword" to query,
@@ -131,9 +131,7 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (_: Exception) { /* fallback */ }
 
         // 4. Coba tanpa subjectType
         try {
@@ -153,9 +151,7 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (_: Exception) { /* fallback */ }
 
         // 5. Coba dengan secondAPIUrl (POST)
         try {
@@ -176,9 +172,7 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (_: Exception) { /* fallback */ }
 
         // 6. Coba dengan GET (mainAPIUrl)
         try {
@@ -189,18 +183,19 @@ class MovieboxProvider : MainAPI() {
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (e: Exception) {
-            // Fallback
-        }
+        } catch (_: Exception) { /* fallback */ }
 
-        // 7. Terakhir: Scraping HTML (mirip browser)
+        // 7. Terakhir: Scraping HTML
         try {
             val htmlUrl = "$mainUrl/web/searchResult?keyword=${URLEncoder.encode(query, "UTF-8")}"
             val htmlResponse = app.get(htmlUrl)
             val html = htmlResponse.text
 
-            // Ekstrak data dari __NUXT_DATA__
-            val regex = Regex("""<script id="__NUXT_DATA__" type="application/json">(.*?)</script>""", RegexOption.DOTALL)
+            // Regex dengan DOT_MATCHES_ALL (setara dengan DOTALL di Java)
+            val regex = Regex(
+                """<script id="__NUXT_DATA__" type="application/json">(.*?)</script>""",
+                RegexOption.DOT_MATCHES_ALL
+            )
             val match = regex.find(html)
             if (match != null) {
                 val jsonString = match.groupValues[1]
@@ -211,7 +206,7 @@ class MovieboxProvider : MainAPI() {
                         try {
                             val title = itemMap["title"] as? String ?: ""
                             val subjectId = itemMap["subjectId"] as? String ?: ""
-                            val subjectType = itemMap["subjectType"] as? Int ?: 1
+                            val subjectType = (itemMap["subjectType"] as? Number)?.toInt() ?: 1
                             val cover = (itemMap["cover"] as? Map<*, *>)?.get("url") as? String
 
                             this.newMovieSearchResponse(
@@ -222,13 +217,13 @@ class MovieboxProvider : MainAPI() {
                             ) {
                                 this.posterUrl = cover
                             }
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                             null
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Gagal total
         }
 
@@ -237,16 +232,18 @@ class MovieboxProvider : MainAPI() {
 
     // Fungsi pembantu untuk mencari array "items" di dalam JSON secara rekursif
     private fun findItemsRecursively(json: String): List<Map<*, *>> {
-        try {
+        return try {
             val parsed = parseJson<Any>(json)
-            return extractItems(parsed)
-        } catch (e: Exception) {
-            return emptyList()
+            extractItems(parsed)
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
-    private fun extractItems(obj: Any): List<Map<*, *>> {
-        when (obj) {
+    @Suppress("UNCHECKED_CAST")
+    private fun extractItems(obj: Any?): List<Map<*, *>> {
+        if (obj == null) return emptyList()
+        return when (obj) {
             is Map<*, *> -> {
                 // Cek apakah ada key "items" yang berisi List
                 val items = obj["items"]
@@ -259,15 +256,17 @@ class MovieboxProvider : MainAPI() {
                     val found = extractItems(value)
                     if (found.isNotEmpty()) return found
                 }
+                emptyList()
             }
             is List<*> -> {
                 for (item in obj) {
                     val found = extractItems(item)
                     if (found.isNotEmpty()) return found
                 }
+                emptyList()
             }
+            else -> emptyList()
         }
-        return emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {

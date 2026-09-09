@@ -86,21 +86,33 @@ class MovieboxProvider : MainAPI() {
             home.addAll(index)
         }
 
-
         return newHomePageResponse(request.name, home)
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "20",
-                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException()
+        val body = mapOf(
+            "keyword" to query,
+            "page" to "1",
+            "perPage" to "20",
+            "subjectType" to "0"
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
+        val headers = mapOf(
+            "Content-Type" to "application/json",
+            "Referer" to mainUrl,
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
+        val response = app.post(
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
+            requestBody = body,
+            headers = headers
+        )
+
+        val parsed = response.parsedSafe<Media>()
+        return parsed?.data?.items?.map { it.toSearchResponse(this) } ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -308,5 +320,4 @@ class MovieboxProvider : MainAPI() {
                 @JsonProperty("url") val url: String? = null)
         }
     }
-
 }

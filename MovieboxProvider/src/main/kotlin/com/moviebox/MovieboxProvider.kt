@@ -13,6 +13,7 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URLEncoder
 
 class MovieboxProvider : MainAPI() {
     override var mainUrl = "https://moviebox.ph"
@@ -92,27 +93,92 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val body = mapOf(
+        // Header standar yang diperlukan
+        val headers = mapOf(
+            "Content-Type" to "application/json",
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to mainUrl,
+            "Origin" to mainUrl,
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
+        // Opsi 1: POST ke mainAPIUrl dengan subjectType=0
+        var url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search"
+        var body = mapOf(
             "keyword" to query,
             "page" to "1",
             "perPage" to "20",
             "subjectType" to "0"
         ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-        val headers = mapOf(
-            "Content-Type" to "application/json",
-            "Referer" to mainUrl,
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        try {
+            var response = app.post(url, requestBody = body, headers = headers)
+            var parsed = response.parsedSafe<Media>()
+            var items = parsed?.data?.items ?: emptyList()
+            if (items.isNotEmpty()) return items.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            // lanjut
+        }
 
-        val response = app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
-            requestBody = body,
-            headers = headers
-        )
+        // Opsi 2: POST ke mainAPIUrl tanpa subjectType
+        body = mapOf(
+            "keyword" to query,
+            "page" to "1",
+            "perPage" to "20"
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-        val parsed = response.parsedSafe<Media>()
-        return parsed?.data?.items?.map { it.toSearchResponse(this) } ?: emptyList()
+        try {
+            var response = app.post(url, requestBody = body, headers = headers)
+            var parsed = response.parsedSafe<Media>()
+            var items = parsed?.data?.items ?: emptyList()
+            if (items.isNotEmpty()) return items.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            // lanjut
+        }
+
+        // Opsi 3: POST ke secondAPIUrl dengan subjectType=0
+        url = "$secondAPIUrl/wefeed-h5-bff/web/subject/search"
+        body = mapOf(
+            "keyword" to query,
+            "page" to "1",
+            "perPage" to "20",
+            "subjectType" to "0"
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
+        try {
+            var response = app.post(url, requestBody = body, headers = headers)
+            var parsed = response.parsedSafe<Media>()
+            var items = parsed?.data?.items ?: emptyList()
+            if (items.isNotEmpty()) return items.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            // lanjut
+        }
+
+        // Opsi 4: GET ke mainAPIUrl dengan query parameter
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=$encodedQuery&page=1&perPage=20&subjectType=0"
+        try {
+            val response = app.get(url, headers = headers)
+            val parsed = response.parsedSafe<Media>()
+            val items = parsed?.data?.items ?: emptyList()
+            if (items.isNotEmpty()) return items.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            // lanjut
+        }
+
+        // Opsi 5: GET ke secondAPIUrl
+        url = "$secondAPIUrl/wefeed-h5-bff/web/subject/search?keyword=$encodedQuery&page=1&perPage=20&subjectType=0"
+        try {
+            val response = app.get(url, headers = headers)
+            val parsed = response.parsedSafe<Media>()
+            val items = parsed?.data?.items ?: emptyList()
+            if (items.isNotEmpty()) return items.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            // lanjut
+        }
+
+        // Jika semua gagal, kembalikan kosong
+        return emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse {

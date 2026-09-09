@@ -108,7 +108,7 @@ class MovieboxProvider : MainAPI() {
                 )
             ).text
 
-            // Cari kartu film
+            // Cari elemen <a class="card ...">
             val cardRegex = Regex("""<a\s+href="/moviedetail/([^"]+)"[^>]*class="[^"]*card[^"]*"[^>]*>.*?</a>""", RegexOption.DOT_MATCHES_ALL)
             val cardMatches = cardRegex.findAll(html)
 
@@ -116,37 +116,36 @@ class MovieboxProvider : MainAPI() {
                 val cardHtml = match.value
                 val subjectId = match.groupValues[1]
 
-                // Judul
+                // Ekstrak judul
                 val titleRegex = Regex("""<h2\s+class="[^"]*card-title[^"]*"[^>]*>(.*?)</h2>""")
                 val title = titleRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
 
-                // Poster
+                // Ekstrak poster
                 val imgRegex = Regex("""<img\s+[^>]*src="([^"]+)"[^>]*>""")
                 val poster = imgRegex.find(cardHtml)?.groupValues?.get(1) ?: ""
 
-                // Rating (opsional)
+                // Ekstrak rating
                 val ratingRegex = Regex("""<span\s+class="[^"]*rate[^"]*"[^>]*>(.*?)</span>""")
                 val ratingStr = ratingRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
-                val ratingValue = ratingStr.toDoubleOrNull()
+                val rating = ratingStr.toDoubleOrNull()
 
+                // Buat SearchResponse
                 val response = newMovieSearchResponse(
                     title,
                     subjectId,
-                    TvType.Movie,
+                    TvType.Movie, // sementara semua dianggap movie
                     false
                 ) {
                     this.posterUrl = poster
-                    if (ratingValue != null) {
-                        this.rating = ratingValue.toFloat()
-                    }
+                    this.score = rating?.toFloat() // ← perbaikan: gunakan score
                 }
                 results.add(response)
             }
         } catch (_: Exception) {
-            // fallback ke API
+            // scraping gagal
         }
 
-        // Jika scraping gagal atau tidak ada hasil, coba API
+        // Jika scraping tidak menghasilkan apa-apa, coba API
         if (results.isEmpty()) {
             try {
                 val headers = mapOf(
@@ -173,7 +172,7 @@ class MovieboxProvider : MainAPI() {
                 if (!items.isNullOrEmpty()) {
                     return items.map { it.toSearchResponse(this) }
                 }
-            } catch (_: Exception) { }
+            } catch (_: Exception) { /* fallback */ }
 
             try {
                 val getUrl = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
@@ -187,13 +186,14 @@ class MovieboxProvider : MainAPI() {
                 if (!items.isNullOrEmpty()) {
                     return items.map { it.toSearchResponse(this) }
                 }
-            } catch (_: Exception) { }
+            } catch (_: Exception) { /* fallback */ }
         }
 
         return results
     }
 
-    // Fungsi-fungsi lain (load, loadLinks, data class) tetap sama
+    // ============================ (fungsi load, loadLinks, data class tetap sama) ============================
+
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
         val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")

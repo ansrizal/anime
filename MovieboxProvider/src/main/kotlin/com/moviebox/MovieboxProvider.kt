@@ -95,8 +95,10 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // ---------- STRATEGI UTAMA: Scraping HTML dengan Regex ----------
+        val results = mutableListOf<SearchResponse>()
+
         try {
+            // 1. Ambil halaman pencarian
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "$mainUrl/web/searchResult?keyword=$encoded"
             val html = app.get(
@@ -107,94 +109,94 @@ class MovieboxProvider : MainAPI() {
                 )
             ).text
 
-            val results = mutableListOf<SearchResponse>()
-
-            // Cari semua link ke detail film
-            val cardLinkPattern = Regex("""<a\s+href="/moviedetail/([^"]+)"[^>]*class="[^"]*card[^"]*"[^>]*>""")
-            val cardMatches = cardLinkPattern.findAll(html)
+            // 2. Cari semua elemen kartu film (tag <a class="card ...")
+            val cardRegex = Regex("""<a\s+href="/moviedetail/([^"]+)"[^>]*class="[^"]*card[^"]*"[^>]*>.*?</a>""", RegexOption.DOT_MATCHES_ALL)
+            val cardMatches = cardRegex.findAll(html)
 
             for (match in cardMatches) {
-                val id = match.groupValues[1]
-                val start = match.range.first
-                val end = html.indexOf("</a>", start) + 4
-                val cardHtml = html.substring(start, end)
+                val cardHtml = match.value
+                val subjectId = match.groupValues[1]
 
-                // Ekstrak judul
-                val titlePattern = Regex("""<h2\s+class="[^"]*card-title[^"]*">(.*?)</h2>""")
-                val titleMatch = titlePattern.find(cardHtml)
-                val title = titleMatch?.groupValues?.get(1)?.trim() ?: ""
+                // Ekstrak judul dari <h2 class="card-title ...">
+                val titleRegex = Regex("""<h2\s+class="[^"]*card-title[^"]*"[^>]*>(.*?)</h2>""")
+                val title = titleRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
 
-                // Ekstrak poster
-                val posterPattern = Regex("""<img\s+[^>]*src="([^"]+)"[^>]*>""")
-                val posterMatch = posterPattern.find(cardHtml)
-                val poster = posterMatch?.groupValues?.get(1) ?: ""
+                // Ekstrak URL poster dari <img> di dalam kartu
+                val imgRegex = Regex("""<img\s+[^>]*src="([^"]+)"[^>]*>""")
+                val poster = imgRegex.find(cardHtml)?.groupValues?.get(1) ?: ""
 
-                // Ekstrak rating
-                val ratingPattern = Regex("""<span\s+class="[^"]*rate[^"]*">(.*?)</span>""")
-                val ratingMatch = ratingPattern.find(cardHtml)
-                val rating = ratingMatch?.groupValues?.get(1)?.toDoubleOrNull()
+                // Ekstrak rating dari <span class="rate ...">
+                val ratingRegex = Regex("""<span\s+class="[^"]*rate[^"]*"[^>]*>(.*?)</span>""")
+                val ratingStr = ratingRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
+                val rating = ratingStr.toDoubleOrNull()
 
-                // Tentukan tipe (sementara semua movie, nanti bisa ditingkatkan)
-                val response = newMovieSearchResponse(title, id, TvType.Movie, false) {
+                // Buat SearchResponse (sementara semua dianggap Movie, nanti bisa ditingkatkan)
+                val response = newMovieSearchResponse(
+                    title,
+                    subjectId,
+                    TvType.Movie,
+                    false
+                ) {
                     this.posterUrl = poster
                     this.rating = rating?.toFloat()
                 }
                 results.add(response)
             }
-
-            if (results.isNotEmpty()) {
-                return results
-            }
-        } catch (_: Exception) {
-            // Gagal scraping, lanjut ke fallback
+        } catch (e: Exception) {
+            // Jika scraping gagal, fallback ke API
         }
 
-        // ---------- FALLBACK 1: API POST dengan header lengkap ----------
-        try {
-            val headers = mapOf(
-                "Content-Type" to "application/json",
-                "Accept" to "application/json, text/plain, */*",
-                "Referer" to mainUrl,
-                "Origin" to mainUrl,
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            val body = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "20",
-                "subjectType" to "0"
-            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        // Jika scraping tidak menghasilkan apa-apa, coba API
+        if (results.isEmpty()) {
+            try {
+                val headers = mapOf(
+                    "Content-Type" to "application/json",
+                    "Accept" to "application/json, text/plain, */*",
+                    "Referer" to mainUrl,
+                    "Origin" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                val body = mapOf(
+                    "keyword" to query,
+                    "page" to "1",
+                    "perPage" to "20",
+                    "subjectType" to "0"
+                ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-            val response = app.post(
-                "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
-                requestBody = body,
-                headers = headers
-            )
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) { /* fallback */ }
+                val response = app.post(
+                    "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
+                    requestBody = body,
+                    headers = headers
+                )
+                val parsed = response.parsedSafe<Media>()
+                val items = parsed?.data?.items
+                if (!items.isNullOrEmpty()) {
+                    return items.map { it.toSearchResponse(this) }
+                }
+            } catch (_: Exception) { /* fallback */ }
 
-        // ---------- FALLBACK 2: GET ----------
-        try {
-            val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
-            val headers = mapOf(
-                "Referer" to mainUrl,
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            val response = app.get(url, headers = headers)
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) { /* fallback */ }
+            // API GET terakhir
+            try {
+                val getUrl = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
+                val headers = mapOf(
+                    "Referer" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                val response = app.get(getUrl, headers = headers)
+                val parsed = response.parsedSafe<Media>()
+                val items = parsed?.data?.items
+                if (!items.isNullOrEmpty()) {
+                    return items.map { it.toSearchResponse(this) }
+                }
+            } catch (_: Exception) { /* fallback */ }
+        }
 
-        return emptyList()
+        return results
     }
 
+    // ------------------------------------------------------------------------
+    // Fungsi load, loadLinks, dan data class di bawah ini TIDAK DIUBAH
+    // ------------------------------------------------------------------------
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
         val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")

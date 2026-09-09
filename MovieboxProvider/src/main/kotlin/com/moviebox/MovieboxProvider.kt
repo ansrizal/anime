@@ -94,10 +94,10 @@ class MovieboxProvider : MainAPI() {
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
+    // ===================== SEARCH =====================
     override suspend fun search(query: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
 
-        // 1. Scraping HTML
         try {
             val encoded = URLEncoder.encode(query, "UTF-8")
             val url = "$mainUrl/web/searchResult?keyword=$encoded"
@@ -109,7 +109,7 @@ class MovieboxProvider : MainAPI() {
                 )
             ).text
 
-            // Cari elemen <a class="card ...">
+            // Cari semua kartu film
             val cardRegex = Regex("""<a\s+href="/moviedetail/([^"]+)"[^>]*class="[^"]*card[^"]*"[^>]*>.*?</a>""", RegexOption.DOT_MATCHES_ALL)
             val cardMatches = cardRegex.findAll(html)
 
@@ -117,38 +117,33 @@ class MovieboxProvider : MainAPI() {
                 val cardHtml = match.value
                 val subjectId = match.groupValues[1]
 
-                // Ekstrak judul
+                // Judul
                 val titleRegex = Regex("""<h2\s+class="[^"]*card-title[^"]*"[^>]*>(.*?)</h2>""")
                 val title = titleRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
 
-                // Ekstrak poster
+                // Poster - ambil src dari img di dalam card
                 val imgRegex = Regex("""<img\s+[^>]*src="([^"]+)"[^>]*>""")
-                val poster = imgRegex.find(cardHtml)?.groupValues?.get(1) ?: ""
+                val poster = imgRegex.find(cardHtml)?.groupValues?.get(1)?.let {
+                    if (it.startsWith("http")) it else "$mainUrl$it"
+                } ?: ""
 
-                // Ekstrak rating
+                // Rating
                 val ratingRegex = Regex("""<span\s+class="[^"]*rate[^"]*"[^>]*>(.*?)</span>""")
                 val ratingStr = ratingRegex.find(cardHtml)?.groupValues?.get(1)?.trim() ?: ""
                 val rating = ratingStr.toDoubleOrNull()
+                val score = if (rating != null) Score.from10((rating * 10).toInt()) else null
 
-                // Konversi rating ke Score? (gunakan Score.from10)
-                val score = if (rating != null) Score.from10(rating.toInt()) else null
-
-                val response = newMovieSearchResponse(
-                    title,
-                    subjectId,
-                    TvType.Movie,
-                    false
-                ) {
+                val response = newMovieSearchResponse(title, subjectId, TvType.Movie, false) {
                     this.posterUrl = poster
                     this.score = score
                 }
                 results.add(response)
             }
         } catch (_: Exception) {
-            // scraping gagal, lanjut ke fallback
+            // fallback ke API
         }
 
-        // 2. Fallback API jika scraping tidak menghasilkan
+        // Jika scraping gagal, coba API (sama seperti sebelumnya)
         if (results.isEmpty()) {
             try {
                 val headers = mapOf(
@@ -195,15 +190,82 @@ class MovieboxProvider : MainAPI() {
         return results
     }
 
+    // ===================== LOAD (DETAIL) =====================
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
+
+        // Coba scraping HTML detail
+        try {
+            val detailUrl = "$mainUrl/moviedetail/$id"
+            val html = app.get(
+                detailUrl,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer" to mainUrl
+                )
+            ).text
+
+            // Ekstrak judul
+            val titleRegex = Regex("""<h1[^>]*>(.*?)</h1>""")
+            val title = titleRegex.find(html)?.groupValues?.get(1)?.trim() ?: ""
+
+            // Poster
+            val posterRegex = Regex("""<img[^>]*class="[^"]*poster[^"]*"[^>]*src="([^"]+)"[^>]*>""")
+            val poster = posterRegex.find(html)?.groupValues?.get(1)?.let {
+                if (it.startsWith("http")) it else "$mainUrl$it"
+            } ?: ""
+
+            // Plot
+            val plotRegex = Regex("""<div[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)</div>""")
+            val plot = plotRegex.find(html)?.groupValues?.get(1)?.trim() ?: "Plot Tidak Ditemukan"
+
+            // Rating
+            val ratingRegex = Regex("""<span[^>]*class="[^"]*imdb[^"]*"[^>]*>(.*?)</span>""")
+            val ratingStr = ratingRegex.find(html)?.groupValues?.get(1)?.trim() ?: ""
+            val rating = ratingStr.toDoubleOrNull()
+
+            // Cari trailer (jika ada)
+            val trailerRegex = Regex("""<a[^>]*href="([^"]+)"[^>]*>.*?trailer.*?</a>""", RegexOption.IGNORE_CASE)
+            val trailer = trailerRegex.find(html)?.groupValues?.get(1)
+
+            // Cari episode (jika series)
+            val episodeRegex = Regex("""<a[^>]*href="[^"]*episode=(\d+)"[^>]*>.*?</a>""")
+            val episodes = episodeRegex.findAll(html).map { it.groupValues[1].toInt() }.toList()
+
+            return if (episodes.isNotEmpty()) {
+                // Series
+                val episodeList = episodes.map { ep ->
+                    newEpisode(LoadData(id, season = 1, episode = ep, detailPath = id).toJson()) {
+                        this.season = 1
+                        this.episode = ep
+                    }
+                }
+                newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodeList) {
+                    this.posterUrl = poster
+                    this.plot = plot
+                    this.score = if (rating != null) Score.from10((rating * 10).toInt()) else null
+                    if (trailer != null) addTrailer(trailer, addRaw = true)
+                }
+            } else {
+                // Movie
+                newMovieLoadResponse(title, url, TvType.Movie, LoadData(id, detailPath = id).toJson()) {
+                    this.posterUrl = poster
+                    this.plot = plot
+                    this.score = if (rating != null) Score.from10((rating * 10).toInt()) else null
+                    if (trailer != null) addTrailer(trailer, addRaw = true)
+                }
+            }
+        } catch (_: Exception) {
+            // Fallback ke API
+        }
+
+        // Jika scraping gagal, coba API seperti sebelumnya (saya singkatkan untuk menghemat)
         val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
             .parsedSafe<MediaDetail>()?.data
         val subject = document?.subject
         val title = subject?.title ?: ""
         val poster = subject?.cover?.url
         val tags = subject?.genre?.split(",")?.map { it.trim() }
-
         val year = subject?.releaseDate?.substringBefore("-")?.toIntOrNull()
         val tvType = if (subject?.subjectType == 2) TvType.TvSeries else TvType.Movie
         val description = subject?.description
@@ -272,53 +334,113 @@ class MovieboxProvider : MainAPI() {
         }
     }
 
+    // ===================== LOAD LINKS =====================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val media = parseJson<LoadData>(data)
-        val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
+        val id = media.id ?: return false
 
-        val streams = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
-            referer = referer
-        ).parsedSafe<Media>()?.data?.streams
+        // Coba scraping HTML untuk mencari link video
+        try {
+            val detailUrl = "$mainUrl/moviedetail/$id"
+            val html = app.get(
+                detailUrl,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer" to mainUrl
+                )
+            ).text
 
-        streams?.reversed()?.distinctBy { it.url }?.map { source ->
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    source.url ?: return@map,
-                    INFER_TYPE
-                ) {
-                    this.referer = "$secondAPIUrl/"
-                    this.quality = getQualityFromName(source.resolutions)
+            // Cari semua link video (biasanya di <video> atau <source>)
+            val videoRegex = Regex("""<source[^>]*src="([^"]+)"[^>]*type="video/[^"]*"[^>]*>""")
+            val videoMatches = videoRegex.findAll(html)
+            for (match in videoMatches) {
+                val url = match.groupValues[1]
+                if (url.isNotEmpty()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            this.name,
+                            url,
+                            INFER_TYPE
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
                 }
-            )
+            }
+
+            // Jika tidak ada <source>, coba cari di <video> src
+            val videoSrcRegex = Regex("""<video[^>]*src="([^"]+)"[^>]*>""")
+            val videoSrcMatches = videoSrcRegex.findAll(html)
+            for (match in videoSrcMatches) {
+                val url = match.groupValues[1]
+                if (url.isNotEmpty()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            this.name,
+                            this.name,
+                            url,
+                            INFER_TYPE
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            // fallback ke API
         }
 
-        val id = streams?.first()?.id
-        val format = streams?.first()?.format
+        // Fallback: API seperti sebelumnya
+        try {
+            val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
+            val streams = app.get(
+                "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+                referer = referer
+            ).parsedSafe<Media>()?.data?.streams
 
-        app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
-            referer = referer
-        ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
-            subtitleCallback.invoke(
-                newSubtitleFile(
-                    subtitle.lanName ?: "",
-                    subtitle.url ?: return@map
+            streams?.reversed()?.distinctBy { it.url }?.map { source ->
+                callback.invoke(
+                    newExtractorLink(
+                        this.name,
+                        this.name,
+                        source.url ?: return@map,
+                        INFER_TYPE
+                    ) {
+                        this.referer = "$secondAPIUrl/"
+                        this.quality = getQualityFromName(source.resolutions)
+                    }
                 )
-            )
+            }
+
+            val id = streams?.first()?.id
+            val format = streams?.first()?.format
+            app.get(
+                "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+                referer = referer
+            ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
+                subtitleCallback.invoke(
+                    newSubtitleFile(
+                        subtitle.lanName ?: "",
+                        subtitle.url ?: return@map
+                    )
+                )
+            }
+        } catch (_: Exception) {
+            // ignore
         }
 
         return true
     }
 
+    // Data classes tetap sama
     data class LoadData(
         val id: String? = null,
         val season: Int? = null,
@@ -341,7 +463,6 @@ class MovieboxProvider : MainAPI() {
                 @JsonProperty("url") val url: String? = null,
                 @JsonProperty("resolutions") val resolutions: String? = null
             )
-
             data class Captions(
                 @JsonProperty("lan") val lan: String? = null,
                 @JsonProperty("lanName") val lanName: String? = null,
@@ -363,7 +484,6 @@ class MovieboxProvider : MainAPI() {
                 @JsonProperty("character") val character: String? = null,
                 @JsonProperty("avatarUrl") val avatarUrl: String? = null
             )
-
             data class Resource(
                 @JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf()
             ) {
@@ -390,7 +510,6 @@ class MovieboxProvider : MainAPI() {
         @JsonProperty("trailer") val trailer: Trailer? = null,
         @JsonProperty("detailPath") val detailPath: String? = null
     ) {
-
         fun toSearchResponse(provider: MovieboxProvider): SearchResponse {
             return provider.newMovieSearchResponse(
                 title ?: "",
@@ -401,17 +520,9 @@ class MovieboxProvider : MainAPI() {
                 this.posterUrl = cover?.url
             }
         }
-
-        data class Cover(
-            @JsonProperty("url") val url: String? = null
-        )
-
-        data class Trailer(
-            @JsonProperty("videoAddress") val videoAddress: VideoAddress? = null
-        ) {
-            data class VideoAddress(
-                @JsonProperty("url") val url: String? = null
-            )
+        data class Cover(@JsonProperty("url") val url: String? = null)
+        data class Trailer(@JsonProperty("videoAddress") val videoAddress: VideoAddress? = null) {
+            data class VideoAddress(@JsonProperty("url") val url: String? = null)
         }
     }
 }

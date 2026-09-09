@@ -93,14 +93,24 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "0",
-                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException()
+        // Jika query kosong, langsung kembalikan daftar kosong
+        if (query.isBlank()) return emptyList()
+
+        return try {
+            app.post(
+                "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
+                requestBody = mapOf(
+                    "keyword" to query,
+                    "page" to "1",
+                    "perPage" to "20",      // diubah dari 0 menjadi 20
+                    "subjectType" to "0"
+                ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull()),
+                headers = mapOf("Referer" to mainUrl) // tambahkan referer
+            ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) } ?: emptyList()
+        } catch (e: Exception) {
+            // Jika terjadi error, kembalikan kosong agar tidak memunculkan error di UI
+            emptyList()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {

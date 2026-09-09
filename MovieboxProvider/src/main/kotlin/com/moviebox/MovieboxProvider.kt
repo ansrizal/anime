@@ -108,109 +108,104 @@ class MovieboxProvider : MainAPI() {
             )
             val html = htmlResponse.text
 
-            // Cari script __NUXT_DATA__
-            val scriptPattern = Regex("""<script id="__NUXT_DATA__" type="application/json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
-            val match = scriptPattern.find(html)
-            if (match != null) {
-                val jsonString = match.groupValues[1].trim()
-                // Parse JSON ke Map
-                val jsonData = parseJson<Map<String, Any>>(jsonString)
-                // Cari array "items" secara rekursif
-                val itemsList = extractItemsFromJson(jsonData)
-                if (itemsList.isNotEmpty()) {
-                    return itemsList.mapNotNull { item ->
-                        try {
-                            val title = item["title"] as? String ?: ""
-                            val subjectId = item["subjectId"] as? String ?: ""
-                            val subjectType = (item["subjectType"] as? Number)?.toInt() ?: 1
-                            val cover = (item["cover"] as? Map<*, *>)?.get("url") as? String
-                            newMovieSearchResponse(
-                                title,
-                                subjectId,
-                                if (subjectType == 1) TvType.Movie else TvType.TvSeries,
-                                false
-                            ) {
-                                this.posterUrl = cover
-                            }
-                        } catch (_: Exception) {
-                            null
+            // Ekstrak __NUXT_DATA__ tanpa regex (lebih handal)
+            val scriptStart = "<script id=\"__NUXT_DATA__\" type=\"application/json\">"
+            val scriptEnd = "</script>"
+            val startPos = html.indexOf(scriptStart)
+            if (startPos != -1) {
+                val endPos = html.indexOf(scriptEnd, startPos + scriptStart.length)
+                if (endPos != -1) {
+                    val jsonString = html.substring(startPos + scriptStart.length, endPos).trim()
+                    val parsed = parseJson<Map<String, Any>>(jsonString)
+                    val itemsList = extractItemsRecursively(parsed)
+                    if (itemsList.isNotEmpty()) {
+                        return itemsList.mapNotNull { item ->
+                            try {
+                                val title = item["title"] as? String ?: ""
+                                val subjectId = item["subjectId"] as? String ?: ""
+                                val subjectType = (item["subjectType"] as? Number)?.toInt() ?: 1
+                                val cover = (item["cover"] as? Map<*, *>)?.get("url") as? String
+                                newMovieSearchResponse(
+                                    title,
+                                    subjectId,
+                                    if (subjectType == 1) TvType.Movie else TvType.TvSeries,
+                                    false
+                                ) {
+                                    this.posterUrl = cover
+                                }
+                            } catch (_: Exception) { null }
                         }
                     }
                 }
             }
         } catch (_: Exception) {
-            // Gagal scraping, lanjut ke fallback API
+            // Fallback ke API
         }
 
-        // 2. Fallback: Coba API dengan header lengkap
-        val headers = mapOf(
-            "Content-Type" to "application/json",
-            "Accept" to "application/json, text/plain, */*",
-            "Referer" to mainUrl,
-            "Origin" to mainUrl,
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-
-        // Coba beberapa endpoint dan parameter
-        val endpoints = listOf(
-            "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search"
-        )
-        val bodyVariants = listOf(
-            mapOf("keyword" to query, "page" to "1", "perPage" to "20", "subjectType" to "0"),
-            mapOf("keyword" to query, "page" to "1", "perPage" to "20"),
-            mapOf("keyword" to query, "page" to "1", "perPage" to "20", "subjectType" to "-1")
-        )
-
-        for (url in endpoints) {
-            for (bodyMap in bodyVariants) {
-                try {
-                    val body = bodyMap.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-                    val response = app.post(url, requestBody = body, headers = headers)
-                    val parsed = response.parsedSafe<Media>()
-                    val items = parsed?.data?.items
-                    if (!items.isNullOrEmpty()) {
-                        return items.map { it.toSearchResponse(this) }
-                    }
-                } catch (_: Exception) { continue }
+        // 2. Fallback: API POST
+        try {
+            val headers = mapOf(
+                "Content-Type" to "application/json",
+                "Accept" to "application/json, text/plain, */*",
+                "Referer" to mainUrl,
+                "Origin" to mainUrl,
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            val body = mapOf(
+                "keyword" to query,
+                "page" to "1",
+                "perPage" to "20",
+                "subjectType" to "0"
+            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+            val response = app.post(
+                "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
+                requestBody = body,
+                headers = headers
+            )
+            val parsed = response.parsedSafe<Media>()
+            val items = parsed?.data?.items
+            if (!items.isNullOrEmpty()) {
+                return items.map { it.toSearchResponse(this) }
             }
-        }
+        } catch (_: Exception) { /* lanjut */ }
 
-        // Terakhir coba GET
+        // 3. Fallback: GET
         try {
             val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
+            val headers = mapOf(
+                "Referer" to mainUrl,
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
             val response = app.get(url, headers = headers)
             val parsed = response.parsedSafe<Media>()
             val items = parsed?.data?.items
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (_: Exception) { /* ignore */ }
+        } catch (_: Exception) { /* lanjut */ }
 
         return emptyList()
     }
 
-    // Fungsi rekursif untuk mengekstrak array "items" dari Map
-    private fun extractItemsFromJson(obj: Any?): List<Map<*, *>> {
+    // Rekursif mencari array "items" dalam Map
+    @Suppress("UNCHECKED_CAST")
+    private fun extractItemsRecursively(obj: Any?): List<Map<*, *>> {
         if (obj == null) return emptyList()
         return when (obj) {
             is Map<*, *> -> {
-                // Cek langsung key "items"
-                val items = obj["items"]
-                if (items is List<*>) {
-                    val result = items.mapNotNull { it as? Map<*, *> }
+                (obj["items"] as? List<*>)?.let {
+                    val result = it.mapNotNull { item -> item as? Map<*, *> }
                     if (result.isNotEmpty()) return result
                 }
-                // Cari di semua value
                 for (value in obj.values) {
-                    val found = extractItemsFromJson(value)
+                    val found = extractItemsRecursively(value)
                     if (found.isNotEmpty()) return found
                 }
                 emptyList()
             }
             is List<*> -> {
                 for (item in obj) {
-                    val found = extractItemsFromJson(item)
+                    val found = extractItemsRecursively(item)
                     if (found.isNotEmpty()) return found
                 }
                 emptyList()

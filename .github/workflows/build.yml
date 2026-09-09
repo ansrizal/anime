@@ -37,7 +37,6 @@ jobs:
           DUBBINDO_USERNAME: ${{ secrets.DUBBINDO_USERNAME }}
         run: |
           chmod +x gradlew
-          ./gradlew clean
           ./gradlew make makePluginsJson --no-daemon
 
       - name: Prepare Deployment Folder

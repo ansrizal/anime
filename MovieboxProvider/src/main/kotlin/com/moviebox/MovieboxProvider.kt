@@ -89,9 +89,7 @@ class MovieboxProvider : MainAPI() {
 
         return newHomePageResponse(request.name, home)
     }
-    
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-
+   
     override suspend fun search(query: String): List<SearchResponse> {
         return app.post(
             "$mainUrl/web/searchResult?keyword=${query.replace(" ", "+")}", requestBody = mapOf(

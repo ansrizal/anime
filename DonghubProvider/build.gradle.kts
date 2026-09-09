@@ -4,7 +4,7 @@ plugins {
     id("com.lagradost.cloudstream3.gradle")
 }
 
-val cloudstreamApiVersion = "-SNAPSHOT"
+val cloudstreamApiVersion = "v4.8.0"
 
 cloudstream {
     setRepo("https://github.com/ansrizal/anime")
@@ -58,7 +58,7 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 dependencies {
-    val cloudstreamApiVersion = "-SNAPSHOT"
+    val cloudstreamApiVersion = "v4.8.0"
 
     // CloudStream Core SDK library dependency
     compileOnly("com.github.recloudstream.cloudstream:library:$cloudstreamApiVersion")

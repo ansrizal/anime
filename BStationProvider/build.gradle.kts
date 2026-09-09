@@ -41,7 +41,7 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 dependencies {
-    val cloudstreamApiVersion = "-SNAPSHOT"
+    val cloudstreamApiVersion = "v4.8.0"
     compileOnly("com.github.recloudstream.cloudstream:library:$cloudstreamApiVersion")
     implementation("com.github.Blatzar:NiceHttp:0.4.11")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

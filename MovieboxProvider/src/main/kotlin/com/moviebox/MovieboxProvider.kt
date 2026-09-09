@@ -95,112 +95,113 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // 1. Coba scraping HTML
+        // 1. Scraping HTML halaman pencarian
         try {
-            val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val htmlUrl = "$mainUrl/web/searchResult?keyword=$encodedQuery"
-            val response = app.get(
+            val encoded = URLEncoder.encode(query, "UTF-8")
+            val htmlUrl = "$mainUrl/web/searchResult?keyword=$encoded"
+            val htmlResponse = app.get(
                 htmlUrl,
                 headers = mapOf(
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Referer" to mainUrl
                 )
             )
-            val html = response.text
+            val html = htmlResponse.text
 
-            // Ekstrak data dari __NUXT_DATA__ menggunakan substring (lebih aman daripada regex)
-            val startTag = """<script id="__NUXT_DATA__" type="application/json">"""
-            val endTag = "</script>"
-            val startIdx = html.indexOf(startTag)
-            if (startIdx != -1) {
-                val endIdx = html.indexOf(endTag, startIdx + startTag.length)
-                if (endIdx != -1) {
-                    val jsonData = html.substring(startIdx + startTag.length, endIdx)
-                    val parsed = parseJson<Map<String, Any>>(jsonData)
-                    val items = extractItemsFromJson(parsed)
-                    if (items.isNotEmpty()) {
-                        return items.mapNotNull { item ->
-                            try {
-                                val title = item["title"] as? String ?: ""
-                                val subjectId = item["subjectId"] as? String ?: ""
-                                val subjectType = (item["subjectType"] as? Number)?.toInt() ?: 1
-                                val cover = (item["cover"] as? Map<*, *>)?.get("url") as? String
-                                newMovieSearchResponse(
-                                    title,
-                                    subjectId,
-                                    if (subjectType == 1) TvType.Movie else TvType.TvSeries,
-                                    false
-                                ) {
-                                    this.posterUrl = cover
-                                }
-                            } catch (_: Exception) {
-                                null
+            // Cari script __NUXT_DATA__
+            val scriptPattern = Regex("""<script id="__NUXT_DATA__" type="application/json">(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
+            val match = scriptPattern.find(html)
+            if (match != null) {
+                val jsonString = match.groupValues[1].trim()
+                // Parse JSON ke Map
+                val jsonData = parseJson<Map<String, Any>>(jsonString)
+                // Cari array "items" secara rekursif
+                val itemsList = extractItemsFromJson(jsonData)
+                if (itemsList.isNotEmpty()) {
+                    return itemsList.mapNotNull { item ->
+                        try {
+                            val title = item["title"] as? String ?: ""
+                            val subjectId = item["subjectId"] as? String ?: ""
+                            val subjectType = (item["subjectType"] as? Number)?.toInt() ?: 1
+                            val cover = (item["cover"] as? Map<*, *>)?.get("url") as? String
+                            newMovieSearchResponse(
+                                title,
+                                subjectId,
+                                if (subjectType == 1) TvType.Movie else TvType.TvSeries,
+                                false
+                            ) {
+                                this.posterUrl = cover
                             }
+                        } catch (_: Exception) {
+                            null
                         }
                     }
                 }
             }
         } catch (_: Exception) {
-            // Jika scraping gagal, lanjut ke API
+            // Gagal scraping, lanjut ke fallback API
         }
 
-        // 2. Fallback: coba API (GET)
+        // 2. Fallback: Coba API dengan header lengkap
+        val headers = mapOf(
+            "Content-Type" to "application/json",
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to mainUrl,
+            "Origin" to mainUrl,
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+
+        // Coba beberapa endpoint dan parameter
+        val endpoints = listOf(
+            "$mainAPIUrl/wefeed-h5-bff/web/subject/search",
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/search"
+        )
+        val bodyVariants = listOf(
+            mapOf("keyword" to query, "page" to "1", "perPage" to "20", "subjectType" to "0"),
+            mapOf("keyword" to query, "page" to "1", "perPage" to "20"),
+            mapOf("keyword" to query, "page" to "1", "perPage" to "20", "subjectType" to "-1")
+        )
+
+        for (url in endpoints) {
+            for (bodyMap in bodyVariants) {
+                try {
+                    val body = bodyMap.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+                    val response = app.post(url, requestBody = body, headers = headers)
+                    val parsed = response.parsedSafe<Media>()
+                    val items = parsed?.data?.items
+                    if (!items.isNullOrEmpty()) {
+                        return items.map { it.toSearchResponse(this) }
+                    }
+                } catch (_: Exception) { continue }
+            }
+        }
+
+        // Terakhir coba GET
         try {
-            val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer" to mainUrl
-            )
-            val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20"
+            val url = "$mainAPIUrl/wefeed-h5-bff/web/subject/search?keyword=${URLEncoder.encode(query, "UTF-8")}&page=1&perPage=20&subjectType=0"
             val response = app.get(url, headers = headers)
             val parsed = response.parsedSafe<Media>()
             val items = parsed?.data?.items
             if (!items.isNullOrEmpty()) {
                 return items.map { it.toSearchResponse(this) }
             }
-        } catch (_: Exception) {
-            // Fallback kedua: coba POST
-        }
-
-        // 3. Fallback terakhir: POST ke secondAPIUrl
-        try {
-            val headers = mapOf(
-                "Content-Type" to "application/json",
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer" to mainUrl
-            )
-            val body = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "20",
-                "subjectType" to "0"
-            ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-            val response = app.post(
-                "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
-                requestBody = body,
-                headers = headers
-            )
-            val parsed = response.parsedSafe<Media>()
-            val items = parsed?.data?.items
-            if (!items.isNullOrEmpty()) {
-                return items.map { it.toSearchResponse(this) }
-            }
-        } catch (_: Exception) {
-            // Gagal total
-        }
+        } catch (_: Exception) { /* ignore */ }
 
         return emptyList()
     }
 
-    // Fungsi untuk mengekstrak "items" dari JSON secara rekursif
+    // Fungsi rekursif untuk mengekstrak array "items" dari Map
     private fun extractItemsFromJson(obj: Any?): List<Map<*, *>> {
         if (obj == null) return emptyList()
         return when (obj) {
             is Map<*, *> -> {
+                // Cek langsung key "items"
                 val items = obj["items"]
                 if (items is List<*>) {
                     val result = items.mapNotNull { it as? Map<*, *> }
                     if (result.isNotEmpty()) return result
                 }
+                // Cari di semua value
                 for (value in obj.values) {
                     val found = extractItemsFromJson(value)
                     if (found.isNotEmpty()) return found

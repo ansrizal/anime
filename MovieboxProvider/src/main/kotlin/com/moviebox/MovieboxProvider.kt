@@ -90,6 +90,18 @@ class MovieboxProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchUrl = "$mainUrl/web/searchResult?keyword={query.replace(" ", "+")}"
+        val document = request(searchUrl).document
+        val items = document.select("a.group.block, div.bsx, div.listupd article, div.utao, div.uta, div.luf, article.bs, div.animposx, div.bs, div.animepost")
+
+        return items.mapNotNull { it.toSearchResult() }
+            .groupBy { it.url }
+            .map { (_, results) ->
+                results.firstOrNull { !it.posterUrl.isNullOrBlank() } ?: results.first()
+            }
+    }
+
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {

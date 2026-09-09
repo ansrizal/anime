@@ -89,13 +89,7 @@ class MovieboxProvider : MainAPI() {
 
         return newHomePageResponse(request.name, home)
     }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/web/searchResult?keyword={query.replace(" ", "+")}"
-        val document = request(searchUrl).document
-        val items = document.select("a.group.block, div.bsx, div.listupd article, div.utao, div.uta, div.luf, article.bs, div.animposx, div.bs, div.animepost")
-    }
-
+    
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -103,7 +97,7 @@ class MovieboxProvider : MainAPI() {
             "$secondAPIUrl/web/searchResult?keyword=", requestBody = mapOf(
                 "keyword" to query,
                 "page" to "1",
-                "perPage" to "0",
+                "perPage" to "20",
                 "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
         ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
             ?: throw ErrorLoadingException()

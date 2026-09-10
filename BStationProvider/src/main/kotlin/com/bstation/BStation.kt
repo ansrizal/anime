@@ -12,9 +12,6 @@ import kotlin.concurrent.thread
 
 // ============================================================
 //  DASH LOCAL SERVER
-//  Serve manifest MPD via http://127.0.0.1:port/...
-//  agar CronetDataSource CloudStream bisa membacanya
-//  (Cronet tidak mendukung skema data:)
 // ============================================================
 object DashServer {
     private var serverSocket: ServerSocket? = null
@@ -272,19 +269,19 @@ class BStation : MainAPI() {
                             "s_locale=id_ID&platform=web&season_id=$sid" +
                             "&$pageParam=$page"
 
-                    val raw = try {
-                        app.get(u, headers = apiHeaders).text
+                    val response = try {
+                        app.get(u, headers = apiHeaders)
                     } catch (e: Exception) {
                         println("$TAG: [$tag] $pageParam=$page err: ${e.message}")
                         break
                     }
 
                     if (!rawLogged) {
-                        println("$TAG: [RAW] $pageParam=$page: ${raw.take(2500)}")
+                        println("$TAG: [RAW] $pageParam=$page: ${response.text.take(2500)}")
                         rawLogged = true
                     }
 
-                    val resp = raw.parsedSafe<SeriesApiResponse>()
+                    val resp = response.parsedSafe<SeriesApiResponse>()
                     val sections = resp?.data?.sectionsList ?: resp?.data?.sections
                     if (sections.isNullOrEmpty()) {
                         println("$TAG: [$tag] $pageParam=$page: sections null/kosong")

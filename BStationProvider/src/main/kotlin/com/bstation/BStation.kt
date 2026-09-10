@@ -12,9 +12,7 @@ class BStation : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(
-        TvType.Movie, TvType.TvSeries, TvType.Anime,
-    )
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     private val apiUrl = "https://api.bilibili.tv"
     private val apiHeaders = mapOf(
@@ -24,9 +22,6 @@ class BStation : MainAPI() {
         "Origin" to mainUrl
     )
 
-    // ============================================================
-    //  POSTER CLEANER
-    // ============================================================
     private fun String?.cleanImage(): String? {
         if (this.isNullOrBlank() || this.startsWith("data:")) return null
         var u = this.substringBefore("@").substringBefore("?").substringBefore(" ").trim()
@@ -44,15 +39,11 @@ class BStation : MainAPI() {
             img.attr("data-src").cleanImage()?.let { return it }
         }
         this.select("source").forEach { src ->
-            val c = src.attr("srcset").substringBefore(",").substringBefore(" ")
-            c.cleanImage()?.let { return it }
+            src.attr("srcset").substringBefore(",").substringBefore(" ").cleanImage()?.let { return it }
         }
         return null
     }
 
-    // ============================================================
-    //  CARD PARSER
-    // ============================================================
     private fun Element.toSearchResult(): SearchResponse? {
         val a = if (this.tagName() == "a") this
         else this.selectFirst("a[href*=/play/], a[href*=/video/]") ?: return null
@@ -70,21 +61,15 @@ class BStation : MainAPI() {
             ?: a.selectFirst(".bstar-video-card__title-text")?.text()?.ifBlank { null }
             ?: this.selectFirst(".bstar-video-card__title-text")?.text()?.ifBlank { null }
             ?: this.selectFirst(".card-title")?.text()?.ifBlank { null }
-            ?: a.text().trim().ifBlank { null }
-            ?: return null
+            ?: a.text().trim().ifBlank { null } ?: return null
         if (title.length < 2) return null
 
         val poster = a.extractPoster() ?: this.extractPoster()
         val type = if (fullUrl.contains("/play/")) TvType.Anime else TvType.Movie
 
-        return newAnimeSearchResponse(title, fullUrl, type) {
-            this.posterUrl = poster
-        }
+        return newAnimeSearchResponse(title, fullUrl, type) { this.posterUrl = poster }
     }
 
-    // ============================================================
-    //  MAIN PAGE
-    // ============================================================
     override val mainPage = mainPageOf(
         "$mainUrl/id/" to "Populer",
         "$mainUrl/id/anime" to "Anime",
@@ -99,9 +84,7 @@ class BStation : MainAPI() {
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
         ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
-        if (items.isNotEmpty()) {
-            home.add(HomePageList(request.name, items))
-        }
+        if (items.isNotEmpty()) home.add(HomePageList(request.name, items))
         return newHomePageResponse(home, false)
     }
 
@@ -115,7 +98,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD — API /v2/ogv/play/series (semua episode)
+    //  LOAD — Pakai API, dapat SEMUA episode
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
@@ -127,18 +110,16 @@ class BStation : MainAPI() {
             ?: "Unknown"
 
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content").cleanImage()
-
         val description = document.selectFirst(".bstar-meta__desc")?.text()?.ifBlank { null }
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.ifBlank { null }
 
-        // Extract season_id from URL /play/{season_id} atau /play/{season_id}/{ep_id}
         val seasonMatch = Regex("""/play/(\d+)""").find(url)
             ?: return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster; this.plot = description
             }
         val seasonId = seasonMatch.groupValues[1]
 
-        // ==== API call: GET ALL EPISODES ====
+        // ==== API: GET ALL EPISODES ====
         val episodes = mutableListOf<Episode>()
         try {
             val apiSeriesUrl = "$apiUrl/intl/gateway/web/v2/ogv/play/series" +
@@ -162,9 +143,9 @@ class BStation : MainAPI() {
                     })
                 }
             }
-        } catch (_: Exception) { /* fallback ke DOM */ }
+        } catch (_: Exception) { }
 
-        // Fallback: parse dari DOM kalau API gagal
+        // Fallback: parse DOM
         if (episodes.isEmpty()) {
             document.select("a.ep-item").forEach { el ->
                 val href = el.attr("href").substringBefore("?")
@@ -181,7 +162,6 @@ class BStation : MainAPI() {
         }
 
         if (episodes.isEmpty()) {
-            // Single video tanpa episode → Movie
             val aidMatch = Regex("""/video/(\d+)""").find(url)
             val data = if (aidMatch != null) "ugc:${aidMatch.groupValues[1]}" else url
             return newMovieLoadResponse(title, url, TvType.Movie, data) {
@@ -196,7 +176,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD LINKS — DASH manifest atau FLV fallback
+    //  LOAD LINKS — Auto probe multiple servers & formats
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -204,34 +184,42 @@ class BStation : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val epId = when {
-            data.startsWith("pgc:") -> data.removePrefix("pgc:")
-            else -> data
-        }
+        val epId = if (data.startsWith("pgc:")) data.removePrefix("pgc:") else data
         if (epId.isBlank()) return false
 
-        // Step 1: coba fnval=1 (MP4/FLV muxed) — paling mudah
         var any = false
-        try {
-            val flvUrl = "$apiUrl/intl/gateway/web/playurl" +
-                    "?s_locale=id_ID&platform=web&ep_id=$epId&tk=&qn=64&type=0&device=wap&tf=0&fnval=1"
-            val flvResp = app.get(flvUrl, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
 
-            flvResp?.data?.playurl?.durl?.forEach { d ->
-                val u = d.url?.ifBlank { null } ?: return@forEach
-                callback.invoke(newExtractorLink(name, "$name (MP4)", u, ExtractorLinkType.VIDEO) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.P720.value
-                })
-                any = true
-            }
-        } catch (_: Exception) { }
+        // ---------- SERVER 1: FLV/MP4 muxed (fnval=1) ----------
+        // Coba beberapa qn — kalau muxed MP4 tersedia, ini paling reliable
+        for (qn in listOf("80", "64", "32", "16")) {
+            if (any) break
+            try {
+                val url = "$apiUrl/intl/gateway/web/playurl" +
+                        "?s_locale=id_ID&platform=web&ep_id=$epId&tk=" +
+                        "&qn=$qn&type=0&device=wap&tf=0&fnval=1&fourk=1&high_quality=1"
+                val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+                val durl = resp?.data?.playurl?.durl
+                if (!durl.isNullOrEmpty()) {
+                    durl.forEach { d ->
+                        val u = d.url?.ifBlank { null } ?: return@forEach
+                        callback.invoke(
+                            newExtractorLink(name, "$name ${qn}p (MP4)", u, ExtractorLinkType.VIDEO) {
+                                this.referer = "$mainUrl/"
+                                this.quality = qualityFromBili(qn.toInt())
+                            }
+                        )
+                        any = true
+                    }
+                }
+            } catch (_: Exception) { }
+        }
 
-        // Step 2: DASH manifest
+        // ---------- SERVER 2: DASH (MPD data URI) ----------
         if (!any) {
             try {
                 val dashUrl = "$apiUrl/intl/gateway/web/playurl" +
-                        "?s_locale=id_ID&platform=web&ep_id=$epId&tk=&qn=64&type=0&device=wap&tf=0"
+                        "?s_locale=id_ID&platform=web&ep_id=$epId&tk=" +
+                        "&qn=80&type=0&device=wap&tf=0&fourk=1&high_quality=1"
                 val resp = app.get(dashUrl, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
                 val playData = resp?.data?.playurl
 
@@ -240,47 +228,49 @@ class BStation : MainAPI() {
                     val audios = playData.audioResource ?: emptyList()
                     val durationSec = (playData.duration ?: 0L) / 1000
 
-                    videos.forEach { vItem ->
+                    // Sort video by quality desc, prioritize yang punya URL
+                    val validVideos = videos
+                        .filter { !it.videoResource?.url.isNullOrBlank() }
+                        .sortedByDescending { it.streamInfo?.quality ?: 0 }
+
+                    validVideos.forEach { vItem ->
                         val vRes = vItem.videoResource ?: return@forEach
-                        val vUrl = vRes.url?.ifBlank { null } ?: return@forEach
+                        val vUrl = vRes.url ?: return@forEach
                         val vQual = vItem.streamInfo?.quality ?: vRes.quality ?: 0
                         val vLabel = vItem.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                        // Match audio by audio_quality
+                        // Cari audio dengan quality matching
                         val audioItem = audios.firstOrNull { it.quality == vItem.audioQuality }
-                            ?: audios.firstOrNull()
-                        val audioUrl = audioItem?.url?.ifBlank { null }
+                            ?: audios.firstOrNull { !it.url.isNullOrBlank() }
+                        val audioUrl = audioItem?.url
 
-                        if (audioUrl == null) {
-                            // Video-only (mungkin tanpa suara)
-                            callback.invoke(newExtractorLink(name, "$name $vLabel", vUrl, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                                this.quality = qualityFromBili(vQual)
-                            })
-                        } else {
-                            // Build DASH manifest (video + audio)
-                            val mpd = buildDashManifest(
-                                videoUrl = vUrl,
-                                vW = vRes.width ?: 1280,
-                                vH = vRes.height ?: 720,
-                                vBw = vRes.bandwidth ?: 0,
-                                vCodecs = vRes.codecs ?: "avc1.64001E",
-                                vInitRange = vRes.segmentBase?.range ?: "",
-                                vIndexRange = vRes.segmentBase?.indexRange ?: "",
-                                audioUrl = audioUrl,
-                                aBw = audioItem?.bandwidth ?: 0,
-                                aCodecs = audioItem?.codecs ?: "mp4a.40.2",
-                                aInitRange = audioItem?.segmentBase?.range ?: "",
-                                aIndexRange = audioItem?.segmentBase?.indexRange ?: "",
-                                durationSec = durationSec
+                        if (audioUrl.isNullOrBlank()) {
+                            // Fallback: video-only
+                            callback.invoke(
+                                newExtractorLink(name, "$name $vLabel (no audio)", vUrl, ExtractorLinkType.VIDEO) {
+                                    this.referer = "$mainUrl/"
+                                    this.quality = qualityFromBili(vQual)
+                                }
                             )
-                            val b64 = Base64.encodeToString(mpd.toByteArray(), Base64.NO_WRAP)
-                            val dataUri = "data:application/dash+xml;base64,$b64"
-
-                            callback.invoke(newExtractorLink(name, "$name $vLabel", dataUri, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                                this.quality = qualityFromBili(vQual)
-                            })
+                        } else {
+                            // Build MPD dengan audio + video
+                            val mpd = buildMpd(
+                                vUrl, vRes.width ?: 1280, vRes.height ?: 720,
+                                vRes.bandwidth ?: 1_000_000, vRes.codecs ?: "avc1.64001E",
+                                vRes.segmentBase?.range ?: "", vRes.segmentBase?.indexRange ?: "",
+                                audioUrl, audioItem.bandwidth ?: 128_000,
+                                audioItem.codecs ?: "mp4a.40.2",
+                                audioItem.segmentBase?.range ?: "", audioItem.segmentBase?.indexRange ?: "",
+                                durationSec
+                            )
+                            val dataUri = "data:application/dash+xml;base64," +
+                                    Base64.encodeToString(mpd.toByteArray(), Base64.NO_WRAP)
+                            callback.invoke(
+                                newExtractorLink(name, "$name $vLabel (DASH)", dataUri, ExtractorLinkType.VIDEO) {
+                                    this.referer = "$mainUrl/"
+                                    this.quality = qualityFromBili(vQual)
+                                }
+                            )
                         }
                         any = true
                     }
@@ -288,7 +278,44 @@ class BStation : MainAPI() {
             } catch (_: Exception) { }
         }
 
-        // Step 3: Subtitle
+        // ---------- SERVER 3: Alternative platform=android ----------
+        if (!any) {
+            try {
+                val url = "$apiUrl/intl/gateway/web/playurl" +
+                        "?s_locale=id_ID&platform=android&ep_id=$epId&qn=32&fnval=1&device=android"
+                val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+                resp?.data?.playurl?.durl?.forEach { d ->
+                    val u = d.url?.ifBlank { null } ?: return@forEach
+                    callback.invoke(
+                        newExtractorLink(name, "$name (android)", u, ExtractorLinkType.VIDEO) {
+                            this.referer = "$mainUrl/"
+                            this.quality = Qualities.P480.value
+                        }
+                    )
+                    any = true
+                }
+            } catch (_: Exception) { }
+        }
+
+        // ---------- SERVER 4: Domain utama (fallback) ----------
+        if (!any) {
+            try {
+                val url = "$mainUrl/intl/gateway/web/playurl" +
+                        "?s_locale=id_ID&platform=web&ep_id=$epId&qn=32&fnval=1&device=wap"
+                val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+                resp?.data?.playurl?.durl?.forEach { d ->
+                    val u = d.url?.ifBlank { null } ?: return@forEach
+                    callback.invoke(
+                        newExtractorLink(name, "$name (alt)", u, ExtractorLinkType.VIDEO) {
+                            this.referer = "$mainUrl/"
+                        }
+                    )
+                    any = true
+                }
+            } catch (_: Exception) { }
+        }
+
+        // ---------- Subtitle ----------
         try {
             val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle" +
                     "?s_locale=id_ID&platform=web&episode_id=$epId"
@@ -314,32 +341,32 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  BUILD DASH MANIFEST (data URI)
+    //  BUILD DASH MPD MANIFEST
     // ============================================================
-    private fun buildDashManifest(
-        videoUrl: String, vW: Int, vH: Int, vBw: Int, vCodecs: String,
-        vInitRange: String, vIndexRange: String,
-        audioUrl: String, aBw: Int, aCodecs: String,
-        aInitRange: String, aIndexRange: String,
+    private fun buildMpd(
+        vUrl: String, vW: Int, vH: Int, vBw: Int, vCodecs: String,
+        vInit: String, vIndex: String,
+        aUrl: String, aBw: Int, aCodecs: String,
+        aInit: String, aIndex: String,
         durationSec: Long
     ): String {
-        val dur = if (durationSec > 0) "PT${durationSec}S" else "PT1H"
+        val dur = if (durationSec > 0) "PT${durationSec}S" else "PT24M"
         return """<?xml version="1.0" encoding="UTF-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" mediaPresentationDuration="$dur" minBufferTime="PT2S">
-  <Period start="PT0S">
-    <AdaptationSet contentType="video" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">
+  <Period id="0" start="PT0S">
+    <AdaptationSet id="1" contentType="video" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" par="16:9">
       <Representation id="v" bandwidth="$vBw" width="$vW" height="$vH" codecs="$vCodecs" scanType="progressive">
-        <BaseURL>$videoUrl</BaseURL>
-        <SegmentBase indexRange="$vIndexRange">
-          <Initialization range="$vInitRange"/>
+        <BaseURL>$vUrl</BaseURL>
+        <SegmentBase indexRange="$vIndex" timescale="1000">
+          <Initialization range="$vInit"/>
         </SegmentBase>
       </Representation>
     </AdaptationSet>
-    <AdaptationSet contentType="audio" mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1">
-      <Representation id="a" bandwidth="$aBw" codecs="$aCodecs">
-        <BaseURL>$audioUrl</BaseURL>
-        <SegmentBase indexRange="$aIndexRange">
-          <Initialization range="$aInitRange"/>
+    <AdaptationSet id="2" contentType="audio" mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1" lang="und">
+      <Representation id="a" bandwidth="$aBw" codecs="$aCodecs" audioSamplingRate="44100">
+        <BaseURL>$aUrl</BaseURL>
+        <SegmentBase indexRange="$aIndex" timescale="1000">
+          <Initialization range="$aInit"/>
         </SegmentBase>
       </Representation>
     </AdaptationSet>
@@ -351,12 +378,9 @@ class BStation : MainAPI() {
     //  DATA CLASSES
     // ============================================================
     data class SeriesApiResponse(@JsonProperty("data") val data: SeriesApiData?)
-    data class SeriesApiData(
-        @JsonProperty("sectionsList") val sections: List<SeriesApiSection>?
-    )
+    data class SeriesApiData(@JsonProperty("sectionsList") val sections: List<SeriesApiSection>?)
     data class SeriesApiSection(
         @JsonProperty("title") val title: String?,
-        @JsonProperty("ep_list_title") val epListTitle: String?,
         @JsonProperty("episodes") val episodes: List<SeriesApiEpisode>?
     )
     data class SeriesApiEpisode(
@@ -364,8 +388,7 @@ class BStation : MainAPI() {
         @JsonProperty("episode_id") val episodeId: Long?,
         @JsonProperty("short_title_display") val shortTitleDisplay: String?,
         @JsonProperty("long_title_display") val longTitleDisplay: String?,
-        @JsonProperty("title_display") val titleDisplay: String?,
-        @JsonProperty("publish_time") val publishTime: String?
+        @JsonProperty("title_display") val titleDisplay: String?
     )
 
     data class PlayUrlResponse(@JsonProperty("data") val data: PlayUrlData?)
@@ -388,7 +411,6 @@ class BStation : MainAPI() {
         @JsonProperty("audio_quality") val audioQuality: Int?
     )
     data class VideoResource(
-        @JsonProperty("id") val id: String?,
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("bandwidth") val bandwidth: Int?,
         @JsonProperty("codecs") val codecs: String?,
@@ -396,8 +418,7 @@ class BStation : MainAPI() {
         @JsonProperty("backup_url") val backupUrl: List<String>?,
         @JsonProperty("segment_base") val segmentBase: SegmentBase?,
         @JsonProperty("width") val width: Int?,
-        @JsonProperty("height") val height: Int?,
-        @JsonProperty("mime_type") val mimeType: String?
+        @JsonProperty("height") val height: Int?
     )
     data class SegmentBase(
         @JsonProperty("range") val range: String?,
@@ -405,18 +426,15 @@ class BStation : MainAPI() {
     )
     data class StreamInfo(
         @JsonProperty("quality") val quality: Int?,
-        @JsonProperty("desc_text") val descText: String?,
         @JsonProperty("desc_words") val descWords: String?
     )
     data class AudioResource(
-        @JsonProperty("id") val id: String?,
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("bandwidth") val bandwidth: Int?,
         @JsonProperty("codecs") val codecs: String?,
         @JsonProperty("url") val url: String?,
         @JsonProperty("backup_url") val backupUrl: List<String>?,
-        @JsonProperty("segment_base") val segmentBase: SegmentBase?,
-        @JsonProperty("mime_type") val mimeType: String?
+        @JsonProperty("segment_base") val segmentBase: SegmentBase?
     )
 
     data class SubtitleApiResponse(@JsonProperty("data") val data: SubtitleApiData?)

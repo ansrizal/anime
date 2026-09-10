@@ -46,7 +46,6 @@ object DashServer {
         val id = UUID.randomUUID().toString().replace("-", "")
         synchronized(manifests) {
             manifests[id] = mpd
-            // Batasi jumlah manifest tersimpan agar tidak menumpuk
             while (manifests.size > 10) {
                 val k = manifests.keys.firstOrNull() ?: break
                 manifests.remove(k)
@@ -61,7 +60,6 @@ object DashServer {
                 sock.soTimeout = 5000
                 val reader = sock.getInputStream().bufferedReader()
                 val requestLine = reader.readLine() ?: return
-                // Buang sisa header
                 while (true) {
                     val line = reader.readLine() ?: break
                     if (line.isEmpty()) break
@@ -111,7 +109,6 @@ class BStation : MainAPI() {
     private val PREFIX_PGC = "PGCEP_"
     private val PREFIX_UGC = "UGC_"
 
-    // Regex untuk cari prefix di posisi manapun
     private val pgcRegex = Regex("""PGCEP_(\d+)""")
     private val ugcRegex = Regex("""UGC_(\d+)""")
 
@@ -213,7 +210,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD
+    //  LOAD (dengan deteksi episode berhalaman + multi-season)
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
         println("$TAG: [LOAD] URL = $url")
@@ -248,61 +245,135 @@ class BStation : MainAPI() {
 
         // ==== PGC series ====
         val seasonMatch = Regex("""/play/(\d+)""").find(url) ?: return null
-        val seasonId = seasonMatch.groupValues[1]
-        println("$TAG: [LOAD] → PGC seasonId=$seasonId")
+        val primarySeasonId = seasonMatch.groupValues[1]
+        println("$TAG: [LOAD] → primary seasonId=$primarySeasonId")
 
+        val seenIds = mutableSetOf<String>()
         val episodes = mutableListOf<Episode>()
-        try {
-            val apiSeriesUrl = "$apiUrl/intl/gateway/web/v2/ogv/play/series" +
-                    "?s_locale=id_ID&platform=web&season_id=$seasonId"
-            println("$TAG: [PGC-LOAD] Fetch series -> $apiSeriesUrl")
-            val resp = app.get(apiSeriesUrl, headers = apiHeaders)
-                .parsedSafe<SeriesApiResponse>()
 
-            resp?.data?.sections?.forEach { section ->
-                section.episodes?.forEach { ep ->
-                    val id = ep.episodeId ?: return@forEach
-                    val displayTitle = ep.titleDisplay
-                        ?: ep.longTitleDisplay
-                        ?: ep.shortTitleDisplay
-                        ?: "Episode"
-                    val epNum = Regex("""E(\d+)""").find(displayTitle)
-                        ?.groupValues?.get(1)?.toIntOrNull()
-                    episodes.add(newEpisode("$PREFIX_PGC$id") {
-                        this.name = displayTitle
-                        this.episode = epNum
-                        this.posterUrl = ep.cover.cleanImage() ?: poster
-                    })
+        fun addEp(id: String, name: String, num: Int?, cover: String?) {
+            if (!seenIds.add(id)) return
+            episodes.add(newEpisode("$PREFIX_PGC$id") {
+                this.name = name
+                this.episode = num
+                this.posterUrl = cover
+            })
+        }
+
+        var rawLogged = false
+
+        suspend fun fetchSeason(sid: String, tag: String) {
+            var successWithParam: String? = null
+            for (pageParam in listOf("page", "pn")) {
+                var page = 1
+                var anyAdded = false
+                while (page <= 100) {
+                    val u = "$apiUrl/intl/gateway/web/v2/ogv/play/series?" +
+                            "s_locale=id_ID&platform=web&season_id=$sid" +
+                            "&$pageParam=$page"
+
+                    val raw = try {
+                        app.get(u, headers = apiHeaders).text
+                    } catch (e: Exception) {
+                        println("$TAG: [$tag] $pageParam=$page err: ${e.message}")
+                        break
+                    }
+
+                    if (!rawLogged) {
+                        println("$TAG: [RAW] $pageParam=$page: ${raw.take(2500)}")
+                        rawLogged = true
+                    }
+
+                    val resp = raw.parsedSafe<SeriesApiResponse>()
+                    val sections = resp?.data?.sectionsList ?: resp?.data?.sections
+                    if (sections.isNullOrEmpty()) {
+                        println("$TAG: [$tag] $pageParam=$page: sections null/kosong")
+                        break
+                    }
+
+                    val before = episodes.size
+                    sections.forEach { s ->
+                        s.episodes?.forEach { ep ->
+                            val id = ep.episodeId?.toString() ?: return@forEach
+                            val t = ep.titleDisplay ?: ep.longTitleDisplay
+                                ?: ep.shortTitleDisplay ?: "Episode"
+                            val n = Regex("""E(\d+)""").find(t)
+                                ?.groupValues?.get(1)?.toIntOrNull()
+                            addEp(id, t, n, ep.cover.cleanImage() ?: poster)
+                        }
+                    }
+                    val added = episodes.size - before
+                    println("$TAG: [$tag] $pageParam=$page: added=$added total=${episodes.size}")
+
+                    val hasNext = resp?.data?.pagination?.hasNext
+                    if (added == 0) break
+                    anyAdded = true
+                    if (hasNext == false) break
+                    page++
+                }
+                if (anyAdded) {
+                    successWithParam = pageParam
+                    break
                 }
             }
-            println("$TAG: [PGC-LOAD] Total episodes dari API: ${episodes.size}")
-        } catch (e: Exception) {
-            println("$TAG: [PGC-LOAD] Error fetch series: ${e.message}")
-        }
-
-        if (episodes.isEmpty()) {
-            println("$TAG: [PGC-LOAD] Fallback scraping HTML")
-            val epElements = document.select("a.ep-item")
-            println("$TAG: [PGC-LOAD] Jumlah elemen a.ep-item = ${epElements.size}")
-            epElements.forEach { el ->
-                val href = el.attr("href").substringBefore("?")
-                val m = Regex("""/play/\d+/(\d+)""").find(href) ?: return@forEach
-                val epId = m.groupValues[1]
-                val shortTitle = el.text().trim()
-                val longTitle = el.attr("title")
-                val epNum = Regex("""E(\d+)""").find(shortTitle)?.groupValues?.get(1)?.toIntOrNull()
-                episodes.add(newEpisode("$PREFIX_PGC$epId") {
-                    this.name = if (longTitle.isNotBlank()) "$shortTitle - $longTitle" else shortTitle
-                    this.episode = epNum
-                })
-            }
-            println("$TAG: [PGC-LOAD] Total episodes dari HTML: ${episodes.size}")
-            episodes.firstOrNull()?.let { ep ->
-                println("$TAG: [PGC-LOAD] Contoh episode -> name='${ep.name}', data='${ep.data}'")
+            if (successWithParam == null) {
+                println("$TAG: [$tag] season=$sid: tidak ada episode didapat")
             }
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+        // 1. Fetch primary season dengan pagination
+        fetchSeason(primarySeasonId, "primary")
+
+        // 2. Merge HTML (fallback / tambahan)
+        val htmlBefore = episodes.size
+        document.select("a.ep-item").forEach { el ->
+            val href = el.attr("href").substringBefore("?")
+            val m = Regex("""/play/\d+/(\d+)""").find(href) ?: return@forEach
+            val epId = m.groupValues[1]
+            val shortTitle = el.text().trim()
+            val longTitle = el.attr("title")
+            val num = Regex("""E(\d+)""").find(shortTitle)
+                ?.groupValues?.get(1)?.toIntOrNull()
+            val name = if (longTitle.isNotBlank()) "$shortTitle - $longTitle" else shortTitle
+            addEp(epId, name, num, null)
+        }
+        println("$TAG: [LOAD] HTML added=${episodes.size - htmlBefore} total=${episodes.size}")
+
+        // 3. Deteksi season terkait dari HTML
+        val related = mutableSetOf<String>()
+        document.select("a[href]").forEach { el ->
+            val href = el.attr("href").substringBefore("?").trimEnd('/')
+            Regex("""/play/(\d+)$""").find(href)?.let {
+                val sid = it.groupValues[1]
+                if (sid != primarySeasonId) related.add(sid)
+            }
+        }
+        if (related.isNotEmpty()) {
+            println("$TAG: [LOAD] Related seasons: $related")
+            related.forEach { sid -> fetchSeason(sid, "related") }
+        }
+
+        // 4. Deteksi season dari field API (data.seasons)
+        try {
+            val u = "$apiUrl/intl/gateway/web/v2/ogv/play/series?" +
+                    "s_locale=id_ID&platform=web&season_id=$primarySeasonId"
+            val parsed = app.get(u, headers = apiHeaders).parsedSafe<SeriesApiResponse>()
+            parsed?.data?.seasons?.forEach { s ->
+                val sid = s.seasonId?.toString() ?: return@forEach
+                if (sid != primarySeasonId && sid !in related) {
+                    println("$TAG: [LOAD] API related season: $sid (${s.title})")
+                    fetchSeason(sid, "api-rel")
+                }
+            }
+        } catch (_: Exception) { }
+
+        println("$TAG: [LOAD] FINAL total=${episodes.size}")
+
+        val sorted = episodes.sortedWith(
+            compareBy({ it.episode ?: Int.MAX_VALUE }, { it.name })
+        )
+
+        return newTvSeriesLoadResponse(title, url, TvType.Anime, sorted) {
             this.posterUrl = poster
             this.plot = description
         }
@@ -321,7 +392,6 @@ class BStation : MainAPI() {
         println("$TAG: [loadLinks] DATA RAW = '$data'")
         println("$TAG: ################################")
 
-        // ==== Cari prefix di posisi MANAPUN dalam string ====
         val pgcMatch = pgcRegex.find(data)
         val ugcMatch = ugcRegex.find(data)
 
@@ -435,7 +505,6 @@ class BStation : MainAPI() {
                                 aIndexRange = audio.segmentBase?.indexRange ?: "",
                                 durSec = durationSec
                             )
-                            // Serve MPD via local HTTP server
                             val dataUri = DashServer.publish(mpd)
 
                             callback.invoke(
@@ -574,7 +643,6 @@ class BStation : MainAPI() {
                             aIndexRange = audio.segmentBase?.indexRange ?: "",
                             durSec = durationSec
                         )
-                        // Serve MPD via local HTTP server
                         val dataUri = DashServer.publish(mpd)
 
                         callback.invoke(
@@ -655,7 +723,22 @@ class BStation : MainAPI() {
     //  DATA CLASSES
     // ============================================================
     data class SeriesApiResponse(@JsonProperty("data") val data: SeriesApiData?)
-    data class SeriesApiData(@JsonProperty("sectionsList") val sections: List<SeriesApiSection>?)
+    data class SeriesApiData(
+        @JsonProperty("sectionsList") val sectionsList: List<SeriesApiSection>?,
+        @JsonProperty("sections") val sections: List<SeriesApiSection>?,
+        @JsonProperty("seasons") val seasons: List<RelatedSeason>?,
+        @JsonProperty("pagination") val pagination: PaginationInfo?
+    )
+    data class RelatedSeason(
+        @JsonProperty("season_id") val seasonId: Long?,
+        @JsonProperty("title") val title: String?
+    )
+    data class PaginationInfo(
+        @JsonProperty("page") val page: Int?,
+        @JsonProperty("page_size") val pageSize: Int?,
+        @JsonProperty("total") val total: Int?,
+        @JsonProperty("has_next") val hasNext: Boolean?
+    )
     data class SeriesApiSection(
         @JsonProperty("title") val title: String?,
         @JsonProperty("episodes") val episodes: List<SeriesApiEpisode>?

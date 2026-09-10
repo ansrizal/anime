@@ -1,11 +1,95 @@
 package com.bstation
 
-import android.util.Base64
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.UUID
+import kotlin.concurrent.thread
 
+// ============================================================
+//  DASH LOCAL SERVER
+//  Serve manifest MPD via http://127.0.0.1:port/...
+//  agar CronetDataSource CloudStream bisa membacanya
+//  (Cronet tidak mendukung skema data:)
+// ============================================================
+object DashServer {
+    private var serverSocket: ServerSocket? = null
+    private var port: Int = 0
+    private val manifests = LinkedHashMap<String, String>()
+
+    @Synchronized
+    fun ensureStarted(): Int {
+        val existing = serverSocket
+        if (existing != null && !existing.isClosed) return port
+        val ss = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        serverSocket = ss
+        port = ss.localPort
+        thread(name = "BStationDashServer", isDaemon = true) {
+            while (!ss.isClosed) {
+                try {
+                    val client = ss.accept()
+                    thread(isDaemon = true) { serve(client) }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+        }
+        return port
+    }
+
+    fun publish(mpd: String): String {
+        ensureStarted()
+        val id = UUID.randomUUID().toString().replace("-", "")
+        synchronized(manifests) {
+            manifests[id] = mpd
+            // Batasi jumlah manifest tersimpan agar tidak menumpuk
+            while (manifests.size > 10) {
+                val k = manifests.keys.firstOrNull() ?: break
+                manifests.remove(k)
+            }
+        }
+        return "http://127.0.0.1:$port/dash/$id.mpd"
+    }
+
+    private fun serve(client: Socket) {
+        try {
+            client.use { sock ->
+                sock.soTimeout = 5000
+                val reader = sock.getInputStream().bufferedReader()
+                val requestLine = reader.readLine() ?: return
+                // Buang sisa header
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty()) break
+                }
+                val path = requestLine.split(" ").getOrNull(1) ?: return
+                val id = path.substringAfterLast("/").substringBefore("?").substringBefore(".")
+                val body = synchronized(manifests) { manifests[id] }
+                val bytes = body?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
+                val status = if (body == null) "404 Not Found" else "200 OK"
+                val headers = "HTTP/1.1 $status\r\n" +
+                        "Content-Type: application/dash+xml\r\n" +
+                        "Content-Length: ${bytes.size}\r\n" +
+                        "Connection: close\r\n" +
+                        "Accept-Ranges: none\r\n" +
+                        "\r\n"
+                val out = sock.getOutputStream()
+                out.write(headers.toByteArray(Charsets.US_ASCII))
+                out.write(bytes)
+                out.flush()
+            }
+        } catch (_: Exception) {
+        }
+    }
+}
+
+// ============================================================
+//  MAIN API
+// ============================================================
 class BStation : MainAPI() {
     override var mainUrl = "https://www.bilibili.tv"
     override var name = "BStation"
@@ -225,7 +309,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD LINKS  ← FINAL FIX: pakai REGEX untuk cari prefix
+    //  LOAD LINKS
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -351,8 +435,8 @@ class BStation : MainAPI() {
                                 aIndexRange = audio.segmentBase?.indexRange ?: "",
                                 durSec = durationSec
                             )
-                            val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                            val dataUri = "data:application/dash+xml;base64,$b64"
+                            // Serve MPD via local HTTP server
+                            val dataUri = DashServer.publish(mpd)
 
                             callback.invoke(
                                 newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
@@ -490,8 +574,8 @@ class BStation : MainAPI() {
                             aIndexRange = audio.segmentBase?.indexRange ?: "",
                             durSec = durationSec
                         )
-                        val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                        val dataUri = "data:application/dash+xml;base64,$b64"
+                        // Serve MPD via local HTTP server
+                        val dataUri = DashServer.publish(mpd)
 
                         callback.invoke(
                             newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {

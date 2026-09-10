@@ -202,81 +202,123 @@ class BStation : MainAPI() {
     callback: (ExtractorLink) -> Unit
 ): Boolean {
     val epId = if (data.startsWith("pgc:")) data.removePrefix("pgc:") else data
-
-    // ==== Link 1: tampilkan data yang diterima ====
-    callback.invoke(
-        newExtractorLink(name, "INFO data='$data' ep='$epId'", "https://example.com/", ExtractorLinkType.VIDEO) {
-            this.referer = "$mainUrl/"
-        }
-    )
-
-    if (epId.isBlank()) return true
+    if (epId.isBlank()) return false
 
     try {
-        val url = "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=1"
-        val resp = app.get(url, headers = apiHeaders)
-        val text = resp.text
+        // Ambil playurl — fnval=0 = DASH
+        val url = "$apiUrl/intl/gateway/web/playurl" +
+                "?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=0"
+        val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+        val play = resp?.data?.playurl ?: return false
 
-        // ==== Link 2: tampilkan 60 char pertama response ====
-        callback.invoke(
-            newExtractorLink(name, "RESP[${text.length}]: ${text.take(60).replace("\n", " ")}",
-                "https://example.com/", ExtractorLinkType.VIDEO) {
-                this.referer = "$mainUrl/"
-            }
-        )
+        val videos = play.video ?: emptyList()
+        val audios = play.audioResource ?: emptyList()
+        val durationSec = (play.duration ?: 0L) / 1000
 
-        // Coba parse
-        val parsed = resp.parsedSafe<PlayUrlResponse>()
-        val play = parsed?.data?.playurl
+        // Filter video yang punya URL
+        val validVideos = videos
+            .filter { !it.videoResource?.url.isNullOrBlank() }
+            .sortedByDescending { it.streamInfo?.quality ?: 0 }
 
-        val durlCount = play?.durl?.size ?: -1
-        val videoCount = play?.video?.size ?: -1
+        if (validVideos.isEmpty()) return false
 
-        // ==== Link 3: tampilkan hasil parsing ====
-        callback.invoke(
-            newExtractorLink(name, "PARSE durl=$durlCount video=$videoCount",
-                "https://example.com/", ExtractorLinkType.VIDEO) {
-                this.referer = "$mainUrl/"
-            }
-        )
+        // Ambil 1 audio (yang pertama punya URL)
+        val audio = audios.firstOrNull { !it.url.isNullOrBlank() } ?: return false
+        val audioUrl = audio.url!!
 
-        // ==== Kalau ada durl, kirim sebagai link asli ====
-        play?.durl?.forEach { d ->
-            val link = d.url
-            if (!link.isNullOrBlank()) {
-                callback.invoke(
-                    newExtractorLink(name, "$name MP4", link, ExtractorLinkType.VIDEO) {
-                        this.referer = "$mainUrl/"
-                    }
-                )
-            }
+        // ==== Buat MPD manifest untuk setiap kualitas video ====
+        validVideos.forEach { v ->
+            val vRes = v.videoResource ?: return@forEach
+            val vUrl = vRes.url ?: return@forEach
+            val vQual = v.streamInfo?.quality ?: 32
+            val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
+
+            val mpdXml = buildMpd(
+                videoUrl = vUrl,
+                videoW = vRes.width ?: 852,
+                videoH = vRes.height ?: 480,
+                videoBandwidth = vRes.bandwidth ?: 245000,
+                videoCodecs = vRes.codecs ?: "avc1.64001F",
+                audioUrl = audioUrl,
+                audioBandwidth = audio.bandwidth ?: 67000,
+                audioCodecs = audio.codecs ?: "mp4a.40.2",
+                durationSec = durationSec
+            )
+
+            val b64 = android.util.Base64.encodeToString(
+                mpdXml.toByteArray(Charsets.UTF_8),
+                android.util.Base64.NO_WRAP
+            )
+            val dataUri = "data:application/dash+xml;base64,$b64"
+
+            callback.invoke(
+                newExtractorLink(name, "$name $vLabel", dataUri, ExtractorLinkType.DASH) {
+                    this.referer = "$mainUrl/"
+                }
+            )
         }
 
-        // ==== Kalau ada video, kirim semua ====
-        play?.video
-            ?.filter { !it.videoResource?.url.isNullOrBlank() }
-            ?.forEach { v ->
-                val vUrl = v.videoResource?.url ?: return@forEach
-                val q = v.streamInfo?.quality ?: 32
-                val label = v.streamInfo?.descWords?.ifBlank { null } ?: "${q}p"
-                callback.invoke(
-                    newExtractorLink(name, "$name $label", vUrl, ExtractorLinkType.VIDEO) {
-                        this.referer = "$mainUrl/"
-                    }
-                )
-            }
-
-        return true
     } catch (e: Exception) {
-        // ==== Link error kalau API gagal ====
-        callback.invoke(
-            newExtractorLink(name, "EXC: ${e.message?.take(80)}", "https://example.com/", ExtractorLinkType.VIDEO) {
-                this.referer = "$mainUrl/"
-            }
-        )
-        return true
+        // Fallback: tetap coba video-only kalau MPD gagal
+        try {
+            val url = "$apiUrl/intl/gateway/web/playurl" +
+                    "?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=0"
+            val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+            resp?.data?.playurl?.video
+                ?.filter { !it.videoResource?.url.isNullOrBlank() }
+                ?.forEach { v ->
+                    val vUrl = v.videoResource?.url ?: return@forEach
+                    val q = v.streamInfo?.quality ?: 32
+                    callback.invoke(
+                        newExtractorLink(name, "$name ${q}p", vUrl, ExtractorLinkType.VIDEO) {
+                            this.referer = "$mainUrl/"
+                        }
+                    )
+                }
+        } catch (_: Exception) { }
     }
+
+    // Subtitle
+    try {
+        val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&episode_id=$epId"
+        app.get(subUrl, headers = apiHeaders)
+            .parsedSafe<SubtitleApiResponse>()?.data?.subtitles
+            ?.forEach { sub ->
+                val u = sub.url?.ifBlank { null } ?: return@forEach
+                subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
+            }
+    } catch (_: Exception) { }
+
+    return true
 }
+
+// ============================================================
+//  BUILD MPD MANIFEST (DASH)
+// ============================================================
+private fun buildMpd(
+    videoUrl: String, videoW: Int, videoH: Int,
+    videoBandwidth: Int, videoCodecs: String,
+    audioUrl: String, audioBandwidth: Int, audioCodecs: String,
+    durationSec: Long
+): String {
+    val dur = if (durationSec > 0) "PT${durationSec}S" else "PT24M"
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" mediaPresentationDuration="$dur" minBufferTime="PT2S">
+  <Period id="0" start="PT0S">
+    <AdaptationSet id="1" contentType="video" mimeType="video/mp4" segmentAlignment="true" startWithSAP="1" par="16:9">
+      <Representation id="v" bandwidth="$videoBandwidth" width="$videoW" height="$videoH" codecs="$videoCodecs" scanType="progressive">
+        <BaseURL>$videoUrl</BaseURL>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="2" contentType="audio" mimeType="audio/mp4" segmentAlignment="true" startWithSAP="1" lang="und">
+      <Representation id="a" bandwidth="$audioBandwidth" codecs="$audioCodecs" audioSamplingRate="44100">
+        <BaseURL>$audioUrl</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"""
+}
+
     // ============================================================
     //  Quality mapper
     // ============================================================

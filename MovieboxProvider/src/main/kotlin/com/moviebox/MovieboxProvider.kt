@@ -90,17 +90,16 @@ class MovieboxProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-override suspend fun search(query: String): List<SearchResponse> {
-    val url = "$mainAPIUrl/wefeed-h5api-bff/subject-api/search" +
-            "?q=${java.net.URLEncoder.encode(query, "UTF-8")}" +
-            "&page=1&pageSize=20"
-
-    return app.get(url)
-        .parsedSafe<Media>()?.data?.items
-        ?.map { it.toSearchResponse(this) }
-        ?: emptyList()
-}
-
+    override suspend fun search(query: String): List<SearchResponse> {
+        return app.post(
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
+                "keyword" to query,
+                "page" to "1",
+                "perPage" to "24",
+                "subjectType" to "5").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
+            ?: throw ErrorLoadingException()
+    }
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
         val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")

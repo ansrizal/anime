@@ -1,11 +1,17 @@
 package com.bstation
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.nicehttp.RequestBodyTypes
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class BStation : MainAPI() {
     override var mainUrl = "https://www.bilibili.tv/id"
+    private val apiUrl = "https://api.bilibili.tv/intl/gateway/web"
     override var name = "BStation"
     override val hasMainPage = true
     override var lang = "id"
@@ -16,154 +22,72 @@ class BStation : MainAPI() {
         TvType.Anime,
     )
 
-    override val mainPage = mainPageOf(
-        "" to "Populer",
-        "anime" to "Anime",
-        "timeline" to "Jadwal Tayang",
-        "trending" to "Trending",
-        "short-drama" to "Dracin",
-        "?bstar_from=bstar-web.homepage.recommend.all" to "Direkomendasikan untukmu",
+    // Header yang meniru browser untuk menghindari blokir
+    private val apiHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer" to "https://www.bilibili.tv/",
+        "Accept" to "application/json, text/plain, */*",
+        "Origin" to "https://www.bilibili.tv"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        val url = if (request.data.isEmpty()) mainUrl else "$mainUrl/${request.data}"
-        val document = app.get(url).document
-        val home = mutableListOf<HomePageList>()
+    override val mainPage = mainPageOf(
+        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=0" to "Populer",
+        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=1" to "Anime",
+        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=2" to "Trending",
+    )
 
-        if (request.data == "anime") {
-            // Banner section
-            val banner = document.select("div.banner-warp div.banner-item").mapNotNull {
-                val a = it.selectFirst("a.video-play") ?: return@mapNotNull null
-                val href = fixUrl(a.attr("href"))
-                val title = it.selectFirst("div.banner-content picture img")?.attr("alt")?.ifEmpty { null }
-                    ?: it.selectFirst("div.banner-desc")?.text()?.take(20) ?: "Banner"
-                val posterUrl = it.selectFirst("div.banner-image")?.attr("style")?.let { style ->
-                    Regex("""url\((.*?)\)""").find(style)?.groupValues?.get(1)?.substringBefore("@")
-                }
-                newAnimeSearchResponse(title, href, TvType.Anime) {
-                    this.posterUrl = posterUrl
-                }
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Endpoint playlist mungkin perlu disesuaikan. Ini adalah contoh.
+        val url = request.data.replace("page=1", "page=$page")
+        val response = app.get(url, headers = apiHeaders).parsedSafe<BiliPlaylistResponse>()
+        
+        val items = response?.data?.playlist?.mapNotNull { item ->
+            newAnimeSearchResponse(
+                item.title ?: "",
+                item.aid.toString(), // Simpan aid sebagai URL internal
+                TvType.Anime
+            ) {
+                this.posterUrl = item.cover
             }
-            if (banner.isNotEmpty()) {
-                home.add(HomePageList("Unggulan", banner, isHorizontalImages = true))
-            }
+        } ?: emptyList()
 
-            // Trending & Recommended in Anime page
-            document.select("div.trending, div.recommended").forEach { section ->
-                val title = section.selectFirst("h3.title")?.text() ?: "Anime"
-                val items = section.select("div.card-item").mapNotNull {
-                    it.toSearchResult()
-                }
-                if (items.isNotEmpty()) {
-                    home.add(HomePageList(title, items))
-                }
-            }
-
-            // Calendar in Anime page
-            val calendar = document.select("div.calendar div.card-item").mapNotNull {
-                it.toSearchResult()
-            }
-            if (calendar.isNotEmpty()) {
-                home.add(HomePageList("Jadwal Tayang", calendar))
-            }
-
-        } else {
-            // Populer section (UGC)
-            val popular = document.select("li.section__list__item").mapNotNull {
-                it.toSearchResult()
-            }
-            if (popular.isNotEmpty()) {
-                home.add(HomePageList("Populer", popular))
-            }
-
-            // Anime section (OGV)
-            val anime = document.select("li.scroll-wrap__list__item, div.card-item").mapNotNull {
-                it.toSearchResult()
-            }
-            if (anime.isNotEmpty()) {
-                home.add(HomePageList("Anime", anime))
-            }
-        }
-
-        return newHomePageResponse(home, false)
+        return newHomePageResponse(request.name, items)
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val a = this.selectFirst("a") ?: return null
-        val href = a.attr("href").let { 
-            if (it.startsWith("//")) "https:$it" 
-            else if (it.startsWith("/")) "https://www.bilibili.tv$it"
-            else it 
-        }
-        val title = this.selectFirst(".card-title")?.text()
-            ?: this.selectFirst("img")?.attr("alt") 
-            ?: this.selectFirst(".bstar-video-card__title")?.text() 
-            ?: this.selectFirst(".bstar-video-card__title-text")?.text()
-            ?: return null
-            
-        var posterUrl = this.selectFirst("img")?.attr("src")
-            ?: this.selectFirst("img")?.attr("data-src")
-        
-        if (posterUrl == null || posterUrl.contains("data:image")) {
-             posterUrl = this.selectFirst("source")?.attr("srcset")
-        }
-        
-        val finalPoster = posterUrl?.substringBefore("@")
+    override suspend fun search(query: String): List<SearchResponse> {
+        // Menggunakan endpoint pencarian internal
+        val searchUrl = "$apiUrl/search?keyword=$query&platform=web&s_locale=id_ID&page=1"
+        val response = app.get(searchUrl, headers = apiHeaders).parsedSafe<BiliSearchResponse>()
 
-        return if (href.contains("/play/")) {
-            newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = finalPoster
+        return response?.data?.mapNotNull { item ->
+            val aid = item.aid ?: return@mapNotNull null
+            newAnimeSearchResponse(
+                item.title ?: "Tanpa Judul",
+                aid.toString(), // Gunakan aid sebagai ID unik
+                TvType.Anime
+            ) {
+                this.posterUrl = item.cover
             }
-        } else {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = finalPoster
-            }
-        }
-    }
-
-    override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val url = "$mainUrl/search-result?q=$query"
-        val document = app.get(url).document
-        return document.select(".bstar-video-card, li.section__list__item, li.scroll-wrap__list__item, .card-item").mapNotNull {
-            it.toSearchResult()
-        }.toNewSearchResponseList()
+        } ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
-        
-        val title = document.selectFirst("meta[property=og:title]")?.attr("content") 
-            ?: document.selectFirst("h1")?.text()
-            ?: ""
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
-        val description = document.selectFirst("meta[property=og:description]")?.attr("content")
-            ?: document.selectFirst(".video-info-desc")?.text()
+        // 'url' di sini adalah 'aid' dari fungsi search
+        val aid = url.toLongOrNull() ?: return null
 
-        return if (url.contains("/play/")) {
-            // Attempt to extract episodes from the play page
-            val episodes = document.select(".ep-list .ep-item, .episode-list li").mapNotNull { ep ->
-                val epHref = ep.selectFirst("a")?.attr("href")?.let { fixUrl(it) } ?: return@mapNotNull null
-                val epTitle = ep.selectFirst(".ep-title, .title")?.text() ?: ep.text()
-                val epNum = Regex("""\d+""").find(epTitle)?.value?.toIntOrNull()
-                
-                newEpisode(epHref) {
-                    this.name = epTitle
-                    this.episode = epNum
-                }
-            }
+        // Ambil detail video untuk mendapatkan daftar episode (jika ada)
+        // Untuk video single, kita hanya perlu info dasar
+        val detailUrl = "$apiUrl/v2/ugc/playlist?aid=$aid&platform=web&s_locale=id_ID"
+        val detailResponse = app.get(detailUrl, headers = apiHeaders).parsedSafe<BiliVideoDetailResponse>()
+        val videoData = detailResponse?.data?.playlist?.firstOrNull()
 
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
-                this.posterUrl = poster
-                this.plot = description
-            }
-        } else {
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
-                this.plot = description
-            }
+        val title = videoData?.title ?: "Video"
+        val poster = videoData?.cover
+
+        // Untuk saat ini, kita asumsikan ini adalah film single.
+        // Untuk seri, diperlukan logika tambahan untuk mengambil daftar episode.
+        return newMovieLoadResponse(title, url, TvType.Anime, url) {
+            this.posterUrl = poster
         }
     }
 
@@ -173,6 +97,72 @@ class BStation : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return false
+        val aid = data.toLongOrNull() ?: return false
+
+        // Panggil API playurl untuk mendapatkan tautan stream
+        val playUrl = "$apiUrl/playurl?aid=$aid&qn=64&platform=web&s_locale=id_ID&device=wap"
+        val response = app.get(playUrl, headers = apiHeaders).parsedSafe<BiliPlayUrlResponse>()
+
+        val videoUrl = response?.data?.durl?.firstOrNull()?.url
+            ?: response?.data?.dash?.video?.firstOrNull()?.baseUrl
+
+        if (videoUrl.isNullOrBlank()) {
+            return false
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                this.name,
+                this.name,
+                videoUrl,
+                ExtractorLinkType.VIDEO
+            ) {
+                this.referer = "https://www.bilibili.tv/"
+                this.quality = Qualities.Unknown.value
+            }
+        )
+
+        // Ambil subtitle (jika ada)
+        val subtitleUrl = "$apiUrl/v2/subtitle?aid=$aid&platform=web&s_locale=id_ID"
+        app.get(subtitleUrl, headers = apiHeaders).parsedSafe<BiliSubtitleResponse>()?.data?.subtitles?.map { sub ->
+            subtitleCallback.invoke(
+                newSubtitleFile(
+                    sub.lan,
+                    sub.url
+                )
+            )
+        }
+        
+        return true
+    }
+
+    // ==== Data Classes untuk API ====
+    data class BiliPlaylistResponse(@JsonProperty("data") val data: Data?) {
+        data class Data(@JsonProperty("playlist") val playlist: List<Item>?)
+    }
+    data class BiliSearchResponse(@JsonProperty("data") val data: List<Item>?)
+    data class Item(
+        @JsonProperty("aid") val aid: Long?,
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("cover") val cover: String?
+    )
+    data class BiliVideoDetailResponse(@JsonProperty("data") val data: Data?) {
+        data class Data(@JsonProperty("playlist") val playlist: List<Item>?)
+    }
+    data class BiliPlayUrlResponse(@JsonProperty("data") val data: Data?) {
+        data class Data(
+            @JsonProperty("durl") val durl: List<Durl>?,
+            @JsonProperty("dash") val dash: Dash?
+        )
+        data class Durl(@JsonProperty("url") val url: String?)
+        data class Dash(@JsonProperty("video") val video: List<Video>?)
+        data class Video(@JsonProperty("baseUrl") val baseUrl: String?)
+    }
+    data class BiliSubtitleResponse(@JsonProperty("data") val data: Data?) {
+        data class Data(@JsonProperty("subtitles") val subtitles: List<Subtitle>?)
+        data class Subtitle(
+            @JsonProperty("lan") val lan: String?,
+            @JsonProperty("url") val url: String?
+        )
     }
 }

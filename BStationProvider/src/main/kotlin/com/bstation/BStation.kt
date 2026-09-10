@@ -131,7 +131,15 @@ class BStation : MainAPI() {
     //  LOAD
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
+        println("$TAG: [LOAD] ================================")
+        println("$TAG: [LOAD] URL = $url")
+
+        val document = try {
+            app.get(url).document
+        } catch (e: Exception) {
+            println("$TAG: [LOAD] ❌ app.get GAGAL: ${e.message}")
+            return null
+        }
 
         val title = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.substringBefore(" HD")?.substringBefore(" | ")?.ifBlank { null }
@@ -147,6 +155,7 @@ class BStation : MainAPI() {
         if (url.contains("/video/")) {
             val aidMatch = Regex("""/video/(\d+)""").find(url)
             val aid = aidMatch?.groupValues?.get(1) ?: return null
+            println("$TAG: [LOAD] → UGC aid=$aid")
             return newMovieLoadResponse(title, url, TvType.Movie, "ugc:$aid") {
                 this.posterUrl = poster
                 this.plot = description
@@ -156,6 +165,7 @@ class BStation : MainAPI() {
         // ==== PGC series ====
         val seasonMatch = Regex("""/play/(\d+)""").find(url) ?: return null
         val seasonId = seasonMatch.groupValues[1]
+        println("$TAG: [LOAD] → PGC seasonId=$seasonId")
 
         val episodes = mutableListOf<Episode>()
         try {
@@ -164,6 +174,8 @@ class BStation : MainAPI() {
             println("$TAG: [PGC-LOAD] Fetch series -> $apiSeriesUrl")
             val resp = app.get(apiSeriesUrl, headers = apiHeaders)
                 .parsedSafe<SeriesApiResponse>()
+
+            println("$TAG: [PGC-LOAD] resp=${resp != null}, data=${resp?.data != null}, sections=${resp?.data?.sections?.size}")
 
             resp?.data?.sections?.forEach { section ->
                 section.episodes?.forEach { ep ->
@@ -188,7 +200,9 @@ class BStation : MainAPI() {
 
         if (episodes.isEmpty()) {
             println("$TAG: [PGC-LOAD] Fallback scraping HTML")
-            document.select("a.ep-item").forEach { el ->
+            val epElements = document.select("a.ep-item")
+            println("$TAG: [PGC-LOAD] Jumlah elemen a.ep-item = ${epElements.size}")
+            epElements.forEach { el ->
                 val href = el.attr("href").substringBefore("?")
                 val m = Regex("""/play/\d+/(\d+)""").find(href) ?: return@forEach
                 val epId = m.groupValues[1]
@@ -201,6 +215,10 @@ class BStation : MainAPI() {
                 })
             }
             println("$TAG: [PGC-LOAD] Total episodes dari HTML: ${episodes.size}")
+            // Log contoh episode pertama untuk verifikasi format
+            episodes.firstOrNull()?.let { ep ->
+                println("$TAG: [PGC-LOAD] Contoh episode -> name='${ep.name}', data='${ep.data}'")
+            }
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
@@ -210,7 +228,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD LINKS
+    //  LOAD LINKS  ← DIUBAH: tambah log data yang masuk
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -218,10 +236,26 @@ class BStation : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        println("$TAG: ################################")
+        println("$TAG: [loadLinks] DATA RECEIVED = '$data'")
+        println("$TAG: [loadLinks] isCasting = $isCasting")
+        println("$TAG: ################################")
+
         return when {
-            data.startsWith("pgc:") -> loadPgc(data.removePrefix("pgc:"), callback, subtitleCallback)
-            data.startsWith("ugc:") -> loadUgc(data.removePrefix("ugc:"), callback, subtitleCallback)
-            else -> false
+            data.startsWith("pgc:") -> {
+                val epId = data.removePrefix("pgc:")
+                println("$TAG: [loadLinks] → PGC epId='$epId'")
+                loadPgc(epId, callback, subtitleCallback)
+            }
+            data.startsWith("ugc:") -> {
+                val aid = data.removePrefix("ugc:")
+                println("$TAG: [loadLinks] → UGC aid='$aid'")
+                loadUgc(aid, callback, subtitleCallback)
+            }
+            else -> {
+                println("$TAG: [loadLinks] ❌ UNKNOWN PREFIX, tidak ada handler")
+                false
+            }
         }
     }
 
@@ -235,101 +269,115 @@ class BStation : MainAPI() {
     ): Boolean {
         var any = false
 
-        try {
-            val url = "$apiUrl/intl/gateway/web/playurl" +
-                    "?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=0"
-            println("$TAG: [PGC] Fetch playurl -> $url")
+        val attempts = listOf(
+            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=16",
+            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=16&type=0&device=wap&tf=0",
+            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=0&type=0&device=wap&tf=0",
+            "$apiUrl/pgc/player/web/playurl?ep_id=$epId&platform=web&s_locale=id_ID&qn=64&fnval=16",
+            "$apiUrl/pgc/player/web/playurl?ep_id=$epId&platform=web&s_locale=id_ID&qn=64&fnval=0",
+        )
 
-            val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+        for ((idx, attemptUrl) in attempts.withIndex()) {
+            println("$TAG: [PGC] === Attempt ${idx + 1}/${attempts.size} ===")
+            println("$TAG: [PGC] URL -> $attemptUrl")
 
-            if (resp == null) {
-                println("$TAG: [PGC] ERROR - parsedSafe returned null")
-                return false
-            }
-            if (resp.data == null) {
-                println("$TAG: [PGC] ERROR - resp.data null")
-                return false
-            }
-            if (resp.data.playurl == null) {
-                println("$TAG: [PGC] ERROR - playurl null")
-                return false
-            }
+            try {
+                val resp = app.get(attemptUrl, headers = apiHeaders)
+                    .parsedSafe<PlayUrlResponse>()
 
-            val play = resp.data.playurl
-            val videos = play.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
-            val audios = play.audioResource?.filter { !it.url.isNullOrBlank() } ?: emptyList()
-            val durationSec = (play.duration ?: 0L) / 1000
-            val audio = audios.firstOrNull()
+                if (resp == null) {
+                    println("$TAG: [PGC] Attempt ${idx + 1}: parsedSafe=null")
+                    continue
+                }
+                if (resp.data == null) {
+                    println("$TAG: [PGC] Attempt ${idx + 1}: resp.data=null")
+                    continue
+                }
+                if (resp.data.playurl == null) {
+                    println("$TAG: [PGC] Attempt ${idx + 1}: playurl=null")
+                    continue
+                }
 
-            println("$TAG: [PGC] videos=${videos.size}, audios=${audios.size}, dur=$durationSec")
+                val play = resp.data.playurl
+                val videos = play.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
+                val audios = play.audioResource?.filter { !it.url.isNullOrBlank() } ?: emptyList()
+                val durlCount = play.durl?.size ?: 0
+                val durationSec = (play.duration ?: 0L) / 1000
+                val audio = audios.firstOrNull()
 
-            // Fallback 1: durl (MP4 langsung)
-            if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                println("$TAG: [PGC] Fallback durl")
-                play.durl.forEach { d ->
-                    d.url?.let { directUrl ->
-                        callback.invoke(
-                            newExtractorLink(name, name, directUrl, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                            }
-                        )
-                        any = true
+                println("$TAG: [PGC] Attempt ${idx + 1}: videos=${videos.size}, audios=${audios.size}, durl=$durlCount, dur=$durationSec")
+
+                if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
+                    println("$TAG: [PGC] Attempt ${idx + 1}: pakai durl")
+                    play.durl.forEach { d ->
+                        d.url?.let { directUrl ->
+                            callback.invoke(
+                                newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
+                                    this.referer = "$mainUrl/"
+                                }
+                            )
+                            any = true
+                        }
                     }
                 }
-            }
 
-            videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
-                val vRes = v.videoResource ?: return@forEach
-                val vUrlRaw = vRes.url ?: return@forEach
-                val vQual = v.streamInfo?.quality ?: 32
-                val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
+                videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
+                    val vRes = v.videoResource ?: return@forEach
+                    val vUrlRaw = vRes.url ?: return@forEach
+                    val vQual = v.streamInfo?.quality ?: 32
+                    val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                // === LINK 1: VIDEO-only (URL m4s langsung) — PASTI BISA DIPUTAR ===
-                callback.invoke(
-                    newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
-                        this.referer = "$mainUrl/"
-                    }
-                )
-                any = true
+                    callback.invoke(
+                        newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
+                            this.referer = "$mainUrl/"
+                        }
+                    )
+                    any = true
 
-                // === LINK 2: DASH MPD (video+audio) — untuk player yang support ===
-                if (audio != null && !audio.url.isNullOrBlank()) {
-                    try {
-                        val mpd = buildMpd(
-                            vUrl = vUrlRaw,
-                            vW = vRes.width ?: 852,
-                            vH = vRes.height ?: 480,
-                            vBw = vRes.bandwidth ?: 245000,
-                            vCodecs = vRes.codecs ?: "avc1.64001F",
-                            vInitRange = vRes.segmentBase?.range ?: "",
-                            vIndexRange = vRes.segmentBase?.indexRange ?: "",
-                            aUrl = audio.url!!,
-                            aBw = audio.bandwidth ?: 67000,
-                            aCodecs = audio.codecs ?: "mp4a.40.2",
-                            aInitRange = audio.segmentBase?.range ?: "",
-                            aIndexRange = audio.segmentBase?.indexRange ?: "",
-                            durSec = durationSec
-                        )
-                        val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                        val dataUri = "data:application/dash+xml;base64,$b64"
+                    if (audio != null && !audio.url.isNullOrBlank()) {
+                        try {
+                            val mpd = buildMpd(
+                                vUrl = vUrlRaw,
+                                vW = vRes.width ?: 852,
+                                vH = vRes.height ?: 480,
+                                vBw = vRes.bandwidth ?: 245000,
+                                vCodecs = vRes.codecs ?: "avc1.64001F",
+                                vInitRange = vRes.segmentBase?.range ?: "",
+                                vIndexRange = vRes.segmentBase?.indexRange ?: "",
+                                aUrl = audio.url!!,
+                                aBw = audio.bandwidth ?: 67000,
+                                aCodecs = audio.codecs ?: "mp4a.40.2",
+                                aInitRange = audio.segmentBase?.range ?: "",
+                                aIndexRange = audio.segmentBase?.indexRange ?: "",
+                                durSec = durationSec
+                            )
+                            val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                            val dataUri = "data:application/dash+xml;base64,$b64"
 
-                        callback.invoke(
-                            newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
-                                this.referer = "$mainUrl/"
-                            }
-                        )
-                        println("$TAG: [PGC] Sukses buat DASH+VIDEO link: $vLabel")
-                    } catch (e: Exception) {
-                        println("$TAG: [PGC] Exception buildMpd: ${e.message}")
+                            callback.invoke(
+                                newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
+                                    this.referer = "$mainUrl/"
+                                }
+                            )
+                        } catch (e: Exception) {
+                            println("$TAG: [PGC] Attempt ${idx + 1}: buildMpd err: ${e.message}")
+                        }
                     }
                 }
+
+                if (any) {
+                    println("$TAG: [PGC] ✅ BERHASIL attempt ${idx + 1}")
+                    break
+                }
+            } catch (e: Exception) {
+                println("$TAG: [PGC] Attempt ${idx + 1} exception: ${e.message}")
             }
-        } catch (e: Exception) {
-            println("$TAG: [PGC] Exception di loadPgc: ${e.message}")
-            e.printStackTrace()
         }
 
-        // Subtitle
+        if (!any) {
+            println("$TAG: [PGC] ❌ SEMUA ENDPOINT GAGAL untuk ep_id=$epId")
+        }
+
         try {
             val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&episode_id=$epId"
             app.get(subUrl, headers = apiHeaders)
@@ -340,7 +388,6 @@ class BStation : MainAPI() {
                 }
         } catch (_: Exception) { }
 
-        println("$TAG: [PGC] Selesai, any=$any")
         return any
     }
 
@@ -354,7 +401,6 @@ class BStation : MainAPI() {
     ): Boolean {
         var any = false
 
-        // 1. Coba dapatkan cid (OPSIONAL)
         var cid: String? = null
         try {
             val viewUrl = "$apiUrl/intl/gateway/web/view?aid=$aid&platform=web&s_locale=id_ID"
@@ -368,7 +414,6 @@ class BStation : MainAPI() {
             println("$TAG: [UGC] Gagal ambil cid: ${e.message}")
         }
 
-        // 2. Panggil playurl
         try {
             val urlBuilder = StringBuilder("$apiUrl/intl/gateway/web/playurl")
                 .append("?s_locale=id_ID")
@@ -402,13 +447,11 @@ class BStation : MainAPI() {
 
             println("$TAG: [UGC] videos=${videos.size}, audios=${audios.size}, dur=$durationSec")
 
-            // Fallback 1: durl
             if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                println("$TAG: [UGC] Fallback durl")
                 play.durl.forEach { d ->
                     d.url?.let { directUrl ->
                         callback.invoke(
-                            newExtractorLink(name, name, directUrl, ExtractorLinkType.VIDEO) {
+                            newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
                                 this.referer = "$mainUrl/"
                             }
                         )
@@ -423,7 +466,6 @@ class BStation : MainAPI() {
                 val vQual = v.streamInfo?.quality ?: 32
                 val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                // LINK 1: VIDEO-only
                 callback.invoke(
                     newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
                         this.referer = "$mainUrl/"
@@ -431,7 +473,6 @@ class BStation : MainAPI() {
                 )
                 any = true
 
-                // LINK 2: DASH
                 if (audio != null && !audio.url.isNullOrBlank()) {
                     try {
                         val mpd = buildMpd(
@@ -457,9 +498,8 @@ class BStation : MainAPI() {
                                 this.referer = "$mainUrl/"
                             }
                         )
-                        println("$TAG: [UGC] Sukses buat link: $vLabel")
                     } catch (e: Exception) {
-                        println("$TAG: [UGC] Exception buildMpd: ${e.message}")
+                        println("$TAG: [UGC] buildMpd err: ${e.message}")
                     }
                 }
             }
@@ -468,7 +508,6 @@ class BStation : MainAPI() {
             e.printStackTrace()
         }
 
-        // 3. Subtitle
         try {
             val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&aid=$aid" +
                     (cid?.let { "&cid=$it" } ?: "")

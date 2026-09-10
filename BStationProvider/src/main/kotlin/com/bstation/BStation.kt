@@ -5,7 +5,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.io.File
 
 class BStation : MainAPI() {
     override var mainUrl = "https://www.bilibili.tv"
@@ -51,7 +50,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  XML ESCAPE — WAJIB untuk MPD
+    //  XML ESCAPE
     // ============================================================
     private fun escapeXml(s: String): String {
         return s.replace("&", "&amp;")
@@ -59,40 +58,6 @@ class BStation : MainAPI() {
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&apos;")
-    }
-
-    // ============================================================
-    //  WRITE MPD KE CACHE FILE  (SOLUSI CRONET!)
-    // ============================================================
-    /**
-     * Menulis MPD ke file lokal di cache CloudStream.
-     * Mengembalikan file:// URL yang bisa dibaca oleh FileDataSource.
-     * Ini menghindari masalah Cronet yang tidak mendukung skema "data:".
-     */
-    private fun writeMpdToCache(mpd: String): String? {
-        return try {
-            val cacheDir = File(app.cacheDir, "bstation_mpd")
-            if (!cacheDir.exists()) cacheDir.mkdirs()
-
-            // Bersihkan file lama (lebih dari 1 jam)
-            try {
-                val now = System.currentTimeMillis()
-                cacheDir.listFiles()?.forEach { f ->
-                    if (now - f.lastModified() > 60L * 60L * 1000L) f.delete()
-                }
-            } catch (_: Exception) { }
-
-            val fileName = "bs_${System.currentTimeMillis()}_${mpd.hashCode()}.mpd"
-            val file = File(cacheDir, fileName)
-            file.writeText(mpd, Charsets.UTF_8)
-
-            println("$TAG: MPD written to ${file.absolutePath} (${mpd.length} chars)")
-            "file://${file.absolutePath}"
-        } catch (e: Exception) {
-            println("$TAG: Gagal tulis MPD ke cache: ${e.message}")
-            e.printStackTrace()
-            null
-        }
     }
 
     // ============================================================
@@ -222,7 +187,7 @@ class BStation : MainAPI() {
         }
 
         if (episodes.isEmpty()) {
-            println("$TAG: [PGC-LOAD] Fallback scraping HTML untuk episodes")
+            println("$TAG: [PGC-LOAD] Fallback scraping HTML")
             document.select("a.ep-item").forEach { el ->
                 val href = el.attr("href").substringBefore("?")
                 val m = Regex("""/play/\d+/(\d+)""").find(href) ?: return@forEach
@@ -261,7 +226,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  PGC  (FIXED: file:// URL + debug logging)
+    //  PGC
     // ============================================================
     private suspend fun loadPgc(
         epId: String,
@@ -296,11 +261,11 @@ class BStation : MainAPI() {
             val durationSec = (play.duration ?: 0L) / 1000
             val audio = audios.firstOrNull()
 
-            println("$TAG: [PGC] videos=${videos.size}, audios=${audios.size}, duration=$durationSec")
+            println("$TAG: [PGC] videos=${videos.size}, audios=${audios.size}, dur=$durationSec")
 
             // Fallback 1: durl (MP4 langsung)
             if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                println("$TAG: [PGC] Menggunakan fallback durl")
+                println("$TAG: [PGC] Fallback durl")
                 play.durl.forEach { d ->
                     d.url?.let { directUrl ->
                         callback.invoke(
@@ -313,65 +278,50 @@ class BStation : MainAPI() {
                 }
             }
 
-            // Proses video + audio menjadi MPD
             videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
                 val vRes = v.videoResource ?: return@forEach
                 val vUrlRaw = vRes.url ?: return@forEach
                 val vQual = v.streamInfo?.quality ?: 32
                 val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                // Fallback 2: video-only (tanpa audio)
-                if (audio == null || audio.url.isNullOrBlank()) {
-                    println("$TAG: [PGC] Tidak ada audio, pakai video langsung: $vLabel")
-                    callback.invoke(
-                        newExtractorLink(name, "$name $vLabel", vUrlRaw, ExtractorLinkType.VIDEO) {
-                            this.referer = "$mainUrl/"
-                        }
-                    )
-                    any = true
-                    return@forEach
-                }
-
-                // Utama: gabung video + audio jadi MPD DASH, tulis ke file
-                try {
-                    val mpd = buildMpd(
-                        vUrl = vUrlRaw,
-                        vW = vRes.width ?: 852,
-                        vH = vRes.height ?: 480,
-                        vBw = vRes.bandwidth ?: 245000,
-                        vCodecs = vRes.codecs ?: "avc1.64001F",
-                        vInitRange = vRes.segmentBase?.range ?: "",
-                        vIndexRange = vRes.segmentBase?.indexRange ?: "",
-                        aUrl = audio.url!!,
-                        aBw = audio.bandwidth ?: 67000,
-                        aCodecs = audio.codecs ?: "mp4a.40.2",
-                        aInitRange = audio.segmentBase?.range ?: "",
-                        aIndexRange = audio.segmentBase?.indexRange ?: "",
-                        durSec = durationSec
-                    )
-
-                    val fileUrl = writeMpdToCache(mpd)
-                    if (fileUrl != null) {
-                        println("$TAG: [PGC] Sukses buat MPD file: $vLabel")
-                        callback.invoke(
-                            newExtractorLink(name, "$name $vLabel", fileUrl, ExtractorLinkType.DASH) {
-                                this.referer = "$mainUrl/"
-                                this.isLocal = true
-                            }
-                        )
-                        any = true
-                    } else {
-                        println("$TAG: [PGC] Gagal tulis MPD ke cache, fallback ke video-only")
-                        callback.invoke(
-                            newExtractorLink(name, "$name $vLabel", vUrlRaw, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                            }
-                        )
-                        any = true
+                // === LINK 1: VIDEO-only (URL m4s langsung) — PASTI BISA DIPUTAR ===
+                callback.invoke(
+                    newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
+                        this.referer = "$mainUrl/"
                     }
-                } catch (e: Exception) {
-                    println("$TAG: [PGC] Exception buildMpd: ${e.message}")
-                    e.printStackTrace()
+                )
+                any = true
+
+                // === LINK 2: DASH MPD (video+audio) — untuk player yang support ===
+                if (audio != null && !audio.url.isNullOrBlank()) {
+                    try {
+                        val mpd = buildMpd(
+                            vUrl = vUrlRaw,
+                            vW = vRes.width ?: 852,
+                            vH = vRes.height ?: 480,
+                            vBw = vRes.bandwidth ?: 245000,
+                            vCodecs = vRes.codecs ?: "avc1.64001F",
+                            vInitRange = vRes.segmentBase?.range ?: "",
+                            vIndexRange = vRes.segmentBase?.indexRange ?: "",
+                            aUrl = audio.url!!,
+                            aBw = audio.bandwidth ?: 67000,
+                            aCodecs = audio.codecs ?: "mp4a.40.2",
+                            aInitRange = audio.segmentBase?.range ?: "",
+                            aIndexRange = audio.segmentBase?.indexRange ?: "",
+                            durSec = durationSec
+                        )
+                        val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                        val dataUri = "data:application/dash+xml;base64,$b64"
+
+                        callback.invoke(
+                            newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
+                                this.referer = "$mainUrl/"
+                            }
+                        )
+                        println("$TAG: [PGC] Sukses buat DASH+VIDEO link: $vLabel")
+                    } catch (e: Exception) {
+                        println("$TAG: [PGC] Exception buildMpd: ${e.message}")
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -395,7 +345,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  UGC  (FIXED: file:// URL + debug logging)
+    //  UGC
     // ============================================================
     private suspend fun loadUgc(
         aid: String,
@@ -404,7 +354,7 @@ class BStation : MainAPI() {
     ): Boolean {
         var any = false
 
-        // 1. Coba dapatkan cid (OPSIONAL — untuk video multi-part)
+        // 1. Coba dapatkan cid (OPSIONAL)
         var cid: String? = null
         try {
             val viewUrl = "$apiUrl/intl/gateway/web/view?aid=$aid&platform=web&s_locale=id_ID"
@@ -440,7 +390,7 @@ class BStation : MainAPI() {
             val resp = app.get(finalUrl, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
 
             if (resp == null || resp.data == null || resp.data.playurl == null) {
-                println("$TAG: [UGC] ERROR - resp null / data null / playurl null")
+                println("$TAG: [UGC] ERROR - resp/data/playurl null")
                 return false
             }
 
@@ -450,11 +400,11 @@ class BStation : MainAPI() {
             val durationSec = (play.duration ?: 0L) / 1000
             val audio = audios.firstOrNull()
 
-            println("$TAG: [UGC] videos=${videos.size}, audios=${audios.size}, duration=$durationSec")
+            println("$TAG: [UGC] videos=${videos.size}, audios=${audios.size}, dur=$durationSec")
 
             // Fallback 1: durl
             if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                println("$TAG: [UGC] Fallback ke durl")
+                println("$TAG: [UGC] Fallback durl")
                 play.durl.forEach { d ->
                     d.url?.let { directUrl ->
                         callback.invoke(
@@ -473,58 +423,44 @@ class BStation : MainAPI() {
                 val vQual = v.streamInfo?.quality ?: 32
                 val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                // Fallback 2: video-only
-                if (audio == null || audio.url.isNullOrBlank()) {
-                    println("$TAG: [UGC] Video-only: $vLabel")
-                    callback.invoke(
-                        newExtractorLink(name, "$name $vLabel", vUrlRaw, ExtractorLinkType.VIDEO) {
-                            this.referer = "$mainUrl/"
-                        }
-                    )
-                    any = true
-                    return@forEach
-                }
-
-                // Utama: MPD DASH ke file
-                try {
-                    val mpd = buildMpd(
-                        vUrl = vUrlRaw,
-                        vW = vRes.width ?: 852,
-                        vH = vRes.height ?: 480,
-                        vBw = vRes.bandwidth ?: 245000,
-                        vCodecs = vRes.codecs ?: "avc1.64001F",
-                        vInitRange = vRes.segmentBase?.range ?: "",
-                        vIndexRange = vRes.segmentBase?.indexRange ?: "",
-                        aUrl = audio.url!!,
-                        aBw = audio.bandwidth ?: 67000,
-                        aCodecs = audio.codecs ?: "mp4a.40.2",
-                        aInitRange = audio.segmentBase?.range ?: "",
-                        aIndexRange = audio.segmentBase?.indexRange ?: "",
-                        durSec = durationSec
-                    )
-
-                    val fileUrl = writeMpdToCache(mpd)
-                    if (fileUrl != null) {
-                        println("$TAG: [UGC] Sukses buat MPD file: $vLabel")
-                        callback.invoke(
-                            newExtractorLink(name, "$name $vLabel", fileUrl, ExtractorLinkType.DASH) {
-                                this.referer = "$mainUrl/"
-                                this.isLocal = true
-                            }
-                        )
-                        any = true
-                    } else {
-                        println("$TAG: [UGC] Gagal tulis MPD, fallback ke video-only")
-                        callback.invoke(
-                            newExtractorLink(name, "$name $vLabel", vUrlRaw, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                            }
-                        )
-                        any = true
+                // LINK 1: VIDEO-only
+                callback.invoke(
+                    newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
+                        this.referer = "$mainUrl/"
                     }
-                } catch (e: Exception) {
-                    println("$TAG: [UGC] Exception buildMpd: ${e.message}")
-                    e.printStackTrace()
+                )
+                any = true
+
+                // LINK 2: DASH
+                if (audio != null && !audio.url.isNullOrBlank()) {
+                    try {
+                        val mpd = buildMpd(
+                            vUrl = vUrlRaw,
+                            vW = vRes.width ?: 852,
+                            vH = vRes.height ?: 480,
+                            vBw = vRes.bandwidth ?: 245000,
+                            vCodecs = vRes.codecs ?: "avc1.64001F",
+                            vInitRange = vRes.segmentBase?.range ?: "",
+                            vIndexRange = vRes.segmentBase?.indexRange ?: "",
+                            aUrl = audio.url!!,
+                            aBw = audio.bandwidth ?: 67000,
+                            aCodecs = audio.codecs ?: "mp4a.40.2",
+                            aInitRange = audio.segmentBase?.range ?: "",
+                            aIndexRange = audio.segmentBase?.indexRange ?: "",
+                            durSec = durationSec
+                        )
+                        val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                        val dataUri = "data:application/dash+xml;base64,$b64"
+
+                        callback.invoke(
+                            newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
+                                this.referer = "$mainUrl/"
+                            }
+                        )
+                        println("$TAG: [UGC] Sukses buat link: $vLabel")
+                    } catch (e: Exception) {
+                        println("$TAG: [UGC] Exception buildMpd: ${e.message}")
+                    }
                 }
             }
         } catch (e: Exception) {

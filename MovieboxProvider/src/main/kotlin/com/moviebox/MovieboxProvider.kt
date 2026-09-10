@@ -19,10 +19,9 @@ class MovieboxProvider : MainAPI() {
     private val apiUrl = "https://h5-api.aoneroom.com"
     private val apiPath = "/wefeed-h5api-bff"
 
-    // ==== JWT TOKEN ====
-    // Token dari DevTools (valid s/d ~Des 2026).
+    // ==== JWT TOKEN (valid s/d ~Des 2026) ====
     // Kalau expired, ambil token baru dari movieboxhd.net:
-    // DevTools → Network → request apapun ke h5-api.aoneroom.com → Headers → Authorization
+    // DevTools -> Network -> request apapun ke h5-api.aoneroom.com -> Headers -> Authorization
     private val authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjcyMjczODQ2OTQ1ODkyNDcwNzIsImF0cCI6MywiZXh0IjoiMTc4ODk1MDUyNSIsImV4cCI6MTc5NjcyNjUyNSwiaWF0IjoxNzg4OTUwMjI1fQ.5UOiHLYcY9GSNzm6J8aw0T5AqBRdyiSuQF4xHDwCTqU"
 
     private val commonHeaders = mapOf(
@@ -116,8 +115,8 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     // ================================================================
-    //  SEARCH — Endpoint final yang sudah diverifikasi
-    //  POST /wefeed-h5api-bff/subject/search
+    //  SEARCH — POST /wefeed-h5api-bff/subject/search
+    //  Diverifikasi bekerja (totalCount 131 untuk "one piece")
     // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
         val body = mapOf(
@@ -136,87 +135,114 @@ class MovieboxProvider : MainAPI() {
             ?: emptyList()
     }
 
+    // ================================================================
+    //  LOAD — parse HTML detail page (__NUXT_DATA__)
+    //  Karena MovieBox tidak expose endpoint API detail terpisah.
+    // ================================================================
     override suspend fun load(url: String): LoadResponse {
-        val id = url.substringAfterLast("/")
-        val document = app.get(
-            "$apiUrl$apiPath/subject/detail?subjectId=$id",
-            headers = commonHeaders
-        ).parsedSafe<MediaDetail>()?.data
+        // URL dari search berformat "subjectId|detailPath"
+        val parts = url.split("|")
+        val subjectId = parts.getOrNull(0) ?: throw ErrorLoadingException("ID subjek tidak ditemukan")
+        val detailPath = parts.getOrNull(1) ?: ""
 
-        val subject = document?.subject
-        val title = subject?.title ?: ""
-        val poster = subject?.cover?.url
-        val tags = subject?.genre?.split(",")?.map { it.trim() }
-        val year = subject?.releaseDate?.substringBefore("-")?.toIntOrNull()
-        val tvType = if (subject?.subjectType == 2) TvType.TvSeries else TvType.Movie
-        val description = subject?.description
-        val trailer = subject?.trailer?.videoAddress?.url
-        val rating = subject?.imdbRatingValue?.toIntOrNull()
-        val actors = document?.stars?.mapNotNull { cast ->
-            ActorData(
-                Actor(
-                    cast.name ?: return@mapNotNull null,
-                    cast.avatarUrl
-                ),
-                roleString = cast.character
+        // 1. Ambil HTML halaman detail
+        val html = app.get(
+            "$mainUrl/moviedetail/$detailPath?id=$subjectId",
+            headers = mapOf(
+                "user-agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+                "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "accept-language" to "en-US,en;q=0.9"
             )
-        }?.distinctBy { it.actor }
+        ).text
 
-        val recommendations =
-            app.get(
-                "$apiUrl$apiPath/subject/detail-rec?subjectId=$id&page=1&perPage=12",
-                headers = commonHeaders
-            ).parsedSafe<Media>()?.data?.items?.map {
-                it.toSearchResponse(this)
-            }
+        // 2. Ekstrak konten __NUXT_DATA__
+        val nuxtData = Regex(
+            """<script type="application/json" id="__NUXT_DATA__"[^>]*>(.*?)</script>""",
+            RegexOption.DOT_MATCHES_ALL
+        ).find(html)?.groupValues?.get(1)
+            ?: throw ErrorLoadingException("Data detail tidak ditemukan di halaman")
 
-        return if (tvType == TvType.TvSeries) {
-            val episode = document?.resource?.seasons?.map { seasons ->
-                (if (seasons.allEp.isNullOrEmpty()) (1..seasons.maxEp!!) else seasons.allEp.split(",")
-                    .map { it.toInt() })
-                    .map { episode ->
+        // 3. Fungsi bantu untuk extract nilai via regex
+        fun extract(pattern: String): String? =
+            Regex(pattern).find(nuxtData)?.groupValues?.getOrNull(1)
+
+        // 4. Ekstrak field utama
+        val title       = extract(""""title":"([^"]*)"""") ?: "Tanpa Judul"
+        val poster      = extract(""""cover":\{"url":"([^"]*)"""")
+        val description = extract(""""description":"([^"]*)"""") ?: "Sinopsis tidak tersedia."
+        val releaseDate = extract(""""releaseDate":"([^"]*)"""") ?: ""
+        val genre       = extract(""""genre":"([^"]*)"""") ?: ""
+        val rating      = extract(""""imdbRatingValue":"([^"]*)"""") ?: "0"
+        val trailer     = extract(""""trailer":\{"videoAddress":\{"url":"([^"]*)"""")
+
+        // 5. Tentukan tipe & tahun
+        val year = releaseDate.substringBefore("-").toIntOrNull()
+        val isSeries = genre.contains("Animation", ignoreCase = true) &&
+                Regex(""""se":\d+""").containsMatchIn(nuxtData)
+        val tvType = if (isSeries) TvType.TvSeries else TvType.Movie
+
+        // 6. Ekstrak episode (jika series)
+        val episodes = mutableListOf<Episode>()
+        if (tvType == TvType.TvSeries) {
+            val episodeRegex = Regex(""""se":(\d+).*?"ep":(\d+)""", RegexOption.DOT_MATCHES_ALL)
+            episodeRegex.findAll(nuxtData).forEach { match ->
+                val se = match.groupValues[1].toIntOrNull() ?: 0
+                val ep = match.groupValues[2].toIntOrNull() ?: 0
+                if (episodes.none { it.season == se && it.episode == ep }) {
+                    episodes.add(
                         newEpisode(
-                            LoadData(
-                                id,
-                                seasons.se,
-                                episode,
-                                subject?.detailPath
-                            ).toJson()
+                            LoadData(subjectId, se, ep, detailPath).toJson()
                         ) {
-                            this.season = seasons.se
-                            this.episode = episode
+                            this.season = se
+                            this.episode = ep
+                            this.name = "Episode $ep"
                         }
-                    }
-            }?.flatten() ?: emptyList()
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episode) {
+                    )
+                }
+            }
+        }
+
+        // 7. Recommendations (endpoint ini sudah terverifikasi bekerja)
+        val recommendations = try {
+            app.get(
+                "$apiUrl$apiPath/subject/detail-rec?subjectId=$subjectId&page=1&perPage=12",
+                headers = commonHeaders
+            ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
+        } catch (e: Exception) {
+            null
+        }
+
+        // 8. Bangun response
+        return if (tvType == TvType.TvSeries) {
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.tags = tags
+                this.tags = genre.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 this.score = Score.from10(rating)
-                this.actors = actors
                 this.recommendations = recommendations
-                addTrailer(trailer, addRaw = true)
+                if (!trailer.isNullOrBlank()) addTrailer(trailer, addRaw = true)
             }
         } else {
             newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                LoadData(id, detailPath = subject?.detailPath).toJson()
+                title, url, TvType.Movie,
+                LoadData(subjectId, detailPath = detailPath).toJson()
             ) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = description
-                this.tags = tags
+                this.tags = genre.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 this.score = Score.from10(rating)
-                this.actors = actors
                 this.recommendations = recommendations
-                addTrailer(trailer, addRaw = true)
+                if (!trailer.isNullOrBlank()) addTrailer(trailer, addRaw = true)
             }
         }
     }
 
+    // ================================================================
+    //  LOAD LINKS — pakai endpoint /subject/play (belum diverifikasi,
+    //  akan disesuaikan setelah load() berjalan)
+    // ================================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -333,9 +359,12 @@ class MovieboxProvider : MainAPI() {
                 else  -> TvType.TvSeries
             }
 
+            // URL = "subjectId|detailPath"
+            val url = "${subjectId ?: ""}|${detailPath ?: ""}"
+
             return provider.newMovieSearchResponse(
                 title ?: "",
-                subjectId ?: "",
+                url,
                 type,
                 false
             ) {

@@ -196,87 +196,59 @@ class BStation : MainAPI() {
     //  LOAD LINKS — Simple robust multi-fallback
     // ============================================================
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        // Ambil episode_id dari data (format "pgc:xxx" atau "xxx" atau URL)
-        val epId = when {
-            data.startsWith("pgc:") -> data.removePrefix("pgc:")
-            data.contains("/play/") -> {
-                val m = Regex("""/play/\d+/(\d+)""").find(data)
-                    ?: Regex("""/play/(\d+)""").find(data)
-                m?.groupValues?.get(1) ?: return false
-            }
-            else -> data
-        }
-        if (epId.isBlank()) return false
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+    val epId = if (data.startsWith("pgc:")) data.removePrefix("pgc:") else data
+    if (epId.isBlank()) return false
 
-        var any = false
+    try {
+        val url = "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=1"
+        val resp = app.get(url, headers = apiHeaders)
+        val text = resp.text
 
-        // ============== COBA 4 ENDPOINT BERBEDA ==============
-        val tryUrls = listOf(
-            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=32&fnval=1&device=wap&tf=0",
-            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=32&fnval=1",
-            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=32&fnval=0",
-            "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=android&ep_id=$epId&qn=32&fnval=1"
-        )
+        // Tulis 800 char pertama respons ke exception supaya muncul di UI
+        if (text.contains("\"code\":0")) {
+            val parsed = resp.parsedSafe<PlayUrlResponse>()
+            val durl = parsed?.data?.playurl?.durl
+            val video = parsed?.data?.playurl?.video
 
-        for (url in tryUrls) {
-            if (any) break
-            try {
-                val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
-                val play = resp?.data?.playurl ?: continue
-
-                // 1a. durl (MP4 muxed) — langsung play
-                play.durl?.forEach { d ->
-                    val u = d.url?.ifBlank { null } ?: return@forEach
-                    callback.invoke(
-                        newExtractorLink(name, "$name MP4", u, ExtractorLinkType.VIDEO) {
+            // Prioritas 1: MP4 muxed
+            if (!durl.isNullOrEmpty()) {
+                durl.first().url?.let { u ->
+                    if (u.isNotBlank()) {
+                        callback.invoke(newExtractorLink(name, name, u, ExtractorLinkType.VIDEO) {
                             this.referer = "$mainUrl/"
-                            this.quality = Qualities.P480.value
-                        }
-                    )
-                    any = true
-                }
-
-                // 1b. video URL langsung (video-only, tanpa audio)
-                play.video
-                    ?.filter { !it.videoResource?.url.isNullOrBlank() }
-                    ?.sortedByDescending { it.streamInfo?.quality ?: 0 }
-                    ?.forEach { v ->
-                        val vRes = v.videoResource ?: return@forEach
-                        val vUrl = vRes.url!!.replace("\\u0026", "&")
-                        val q = v.streamInfo?.quality ?: 32
-                        val label = v.streamInfo?.descWords?.ifBlank { null } ?: "${q}p"
-                        callback.invoke(
-                            newExtractorLink(name, "$name $label", vUrl, ExtractorLinkType.VIDEO) {
-                                this.referer = "$mainUrl/"
-                                this.quality = qualityFromBili(q)
-                            }
-                        )
-                        any = true
+                        })
+                        return true
                     }
-            } catch (e: Exception) {
-                println("[BStation] URL failed: $url — ${e.message}")
-            }
-        }
-
-        // ============== Subtitle ==============
-        try {
-            val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&episode_id=$epId"
-            app.get(subUrl, headers = apiHeaders)
-                .parsedSafe<SubtitleApiResponse>()?.data?.subtitles
-                ?.forEach { sub ->
-                    val u = sub.url?.ifBlank { null } ?: return@forEach
-                    subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
                 }
-        } catch (_: Exception) { }
+            }
 
-        return any
+            // Prioritas 2: video-only
+            if (!video.isNullOrEmpty()) {
+                val v = video.firstOrNull { !it.videoResource?.url.isNullOrBlank() }
+                val vUrl = v?.videoResource?.url
+                if (!vUrl.isNullOrBlank()) {
+                    callback.invoke(newExtractorLink(name, name, vUrl, ExtractorLinkType.VIDEO) {
+                        this.referer = "$mainUrl/"
+                    })
+                    return true
+                }
+            }
+
+            throw ErrorLoadingException("BStation: code 0 tapi durl/video kosong. Snippet: ${text.take(200)}")
+        } else {
+            throw ErrorLoadingException("BStation: ${text.take(300)}")
+        }
+    } catch (e: ErrorLoadingException) {
+        throw e
+    } catch (e: Exception) {
+        throw ErrorLoadingException("BStation err: ${e.message}")
     }
-
+}
     // ============================================================
     //  Quality mapper
     // ============================================================

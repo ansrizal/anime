@@ -3,15 +3,10 @@ package com.bstation
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.nicehttp.RequestBodyTypes
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
+import org.jsoup.nodes.Element
 
 class BStation : MainAPI() {
-    override var mainUrl = "https://www.bilibili.tv/id"
-    private val apiUrl = "https://api.bilibili.tv/intl/gateway/web"
+    override var mainUrl = "https://www.bilibili.tv"
     override var name = "BStation"
     override val hasMainPage = true
     override var lang = "id"
@@ -22,72 +17,126 @@ class BStation : MainAPI() {
         TvType.Anime,
     )
 
-    // Header yang meniru browser untuk menghindari blokir
+    private val apiUrl = "https://api.bilibili.tv"
     private val apiHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
         "Referer" to "https://www.bilibili.tv/",
         "Accept" to "application/json, text/plain, */*",
         "Origin" to "https://www.bilibili.tv"
     )
 
     override val mainPage = mainPageOf(
-        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=0" to "Populer",
-        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=1" to "Anime",
-        "https://api.bilibili.tv/intl/gateway/web/playlist?platform=web&s_locale=id_ID&page=1&per_page=20&type=2" to "Trending",
+        "$mainUrl/id/" to "Populer",
+        "$mainUrl/id/anime" to "Anime",
+        "$mainUrl/id/trending" to "Trending",
+        "$mainUrl/id/short-drama" to "Dracin",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Endpoint playlist mungkin perlu disesuaikan. Ini adalah contoh.
-        val url = request.data.replace("page=1", "page=$page")
-        val response = app.get(url, headers = apiHeaders).parsedSafe<BiliPlaylistResponse>()
-        
-        val items = response?.data?.playlist?.mapNotNull { item ->
-            newAnimeSearchResponse(
-                item.title ?: "",
-                item.aid.toString(), // Simpan aid sebagai URL internal
-                TvType.Anime
-            ) {
-                this.posterUrl = item.cover
-            }
-        } ?: emptyList()
+        val document = app.get(request.data).document
+        val home = mutableListOf<HomePageList>()
 
-        return newHomePageResponse(request.name, items)
+        val items = document.select("a[href*=/play/], a[href*=/video/]")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
+
+        if (items.isNotEmpty()) {
+            home.add(HomePageList(request.name, items))
+        }
+
+        return newHomePageResponse(home, false)
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        // Menggunakan endpoint pencarian internal
-        val searchUrl = "$apiUrl/search?keyword=$query&platform=web&s_locale=id_ID&page=1"
-        val response = app.get(searchUrl, headers = apiHeaders).parsedSafe<BiliSearchResponse>()
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
+        val document = app.get(url).document
 
-        return response?.data?.mapNotNull { item ->
-            val aid = item.aid ?: return@mapNotNull null
-            newAnimeSearchResponse(
-                item.title ?: "Tanpa Judul",
-                aid.toString(), // Gunakan aid sebagai ID unik
-                TvType.Anime
-            ) {
-                this.posterUrl = item.cover
+        val items = document.select("a[href*=/play/], a[href*=/video/]")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
+
+        return items.toNewSearchResponseList()
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val href = this.attr("href").let {
+            when {
+                it.startsWith("//") -> "https:$it"
+                it.startsWith("/") -> "$mainUrl$it"
+                else -> it
             }
-        } ?: emptyList()
+        }
+        if (!href.contains("/play/") && !href.contains("/video/")) return null
+
+        // Ambil title dari berbagai kemungkinan selector
+        val title = this.selectFirst("img")?.attr("alt")?.ifBlank { null }
+            ?: this.selectFirst(".bstar-video-card__title")?.text()?.ifBlank { null }
+            ?: this.selectFirst(".bstar-video-card__title-text")?.text()?.ifBlank { null }
+            ?: this.selectFirst("h3, .title, .card-title")?.text()?.ifBlank { null }
+            ?: return null
+
+        // Poster
+        val posterUrl = this.selectFirst("img")?.attr("src")?.ifBlank { null }
+            ?: this.selectFirst("img")?.attr("data-src")?.ifBlank { null }
+            ?: this.selectFirst("source")?.attr("srcset")
+
+        val finalPoster = posterUrl?.substringBefore("@")?.substringBefore(" ")
+
+        return newAnimeSearchResponse(title, href, TvType.Anime) {
+            this.posterUrl = finalPoster
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        // 'url' di sini adalah 'aid' dari fungsi search
-        val aid = url.toLongOrNull() ?: return null
+        val document = app.get(url).document
 
-        // Ambil detail video untuk mendapatkan daftar episode (jika ada)
-        // Untuk video single, kita hanya perlu info dasar
-        val detailUrl = "$apiUrl/v2/ugc/playlist?aid=$aid&platform=web&s_locale=id_ID"
-        val detailResponse = app.get(detailUrl, headers = apiHeaders).parsedSafe<BiliVideoDetailResponse>()
-        val videoData = detailResponse?.data?.playlist?.firstOrNull()
+        val title = document.selectFirst("meta[property=og:title]")?.attr("content")
+            ?.ifBlank { null }
+            ?: document.selectFirst("h1")?.text()?.ifBlank { null }
+            ?: "Unknown"
+        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        val description = document.selectFirst("meta[property=og:description]")?.attr("content")
+            ?.ifBlank { null }
+            ?: document.selectFirst(".video-info-desc, .desc")?.text()
 
-        val title = videoData?.title ?: "Video"
-        val poster = videoData?.cover
+        // Ekstrak season_id dan episode_id dari URL /play/{season_id}/{episode_id}
+        val playMatch = Regex("""/play/(\d+)/(\d+)""").find(url)
 
-        // Untuk saat ini, kita asumsikan ini adalah film single.
-        // Untuk seri, diperlukan logika tambahan untuk mengambil daftar episode.
+        if (playMatch != null) {
+            val seasonId = playMatch.groupValues[1]
+            val episodeId = playMatch.groupValues[2]
+
+            // Ambil daftar episode dari series API
+            val seriesUrl = "$apiUrl/intl/gateway/web/v2/ogv/play/series" +
+                    "?s_locale=id_ID&platform=web&season_id=$seasonId"
+            val seriesResponse = app.get(seriesUrl, headers = apiHeaders)
+                .parsedSafe<SeriesResponse>()
+
+            val episodes = seriesResponse?.data?.sections?.flatMap { section ->
+                section.episodes?.mapNotNull { ep ->
+                    val epId = ep.episodeId?.toString() ?: return@mapNotNull null
+                    newEpisode(epId) {
+                        this.name = ep.title ?: "Episode ${ep.episodeNumber ?: ""}"
+                        this.episode = ep.episodeNumber
+                    }
+                } ?: emptyList()
+            } ?: listOf(
+                newEpisode(episodeId) {
+                    this.name = "Episode 1"
+                    this.episode = 1
+                }
+            )
+
+            return newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        }
+
+        // Fallback untuk /video/{aid} (single video)
         return newMovieLoadResponse(title, url, TvType.Anime, url) {
             this.posterUrl = poster
+            this.plot = description
         }
     }
 
@@ -97,18 +146,23 @@ class BStation : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val aid = data.toLongOrNull() ?: return false
+        // data bisa berupa episode_id langsung atau URL
+        val episodeId: Long? = data.toLongOrNull() ?: run {
+            Regex("""(\d+)(?:\?|$)""").find(data)?.groupValues?.get(1)?.toLongOrNull()
+        }
+        if (episodeId == null) return false
 
-        // Panggil API playurl untuk mendapatkan tautan stream
-        val playUrl = "$apiUrl/playurl?aid=$aid&qn=64&platform=web&s_locale=id_ID&device=wap"
-        val response = app.get(playUrl, headers = apiHeaders).parsedSafe<BiliPlayUrlResponse>()
+        // 1. Ambil play URL
+        val playUrl = "$apiUrl/intl/gateway/web/playurl" +
+                "?s_locale=id_ID&platform=web&ep_id=$episodeId&tk=&qn=64&type=0&device=wap&tf=0"
+        val response = app.get(playUrl, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
 
+        // Coba durl (FLV) dulu, lalu dash (M4S)
         val videoUrl = response?.data?.durl?.firstOrNull()?.url
             ?: response?.data?.dash?.video?.firstOrNull()?.baseUrl
+            ?: response?.data?.dash?.video?.firstOrNull()?.base_url
 
-        if (videoUrl.isNullOrBlank()) {
-            return false
-        }
+        if (videoUrl.isNullOrBlank()) return false
 
         callback.invoke(
             newExtractorLink(
@@ -117,52 +171,66 @@ class BStation : MainAPI() {
                 videoUrl,
                 ExtractorLinkType.VIDEO
             ) {
-                this.referer = "https://www.bilibili.tv/"
+                this.referer = "$mainUrl/"
                 this.quality = Qualities.Unknown.value
             }
         )
 
-        // Ambil subtitle (jika ada)
-        val subtitleUrl = "$apiUrl/v2/subtitle?aid=$aid&platform=web&s_locale=id_ID"
-        app.get(subtitleUrl, headers = apiHeaders).parsedSafe<BiliSubtitleResponse>()?.data?.subtitles?.map { sub ->
-            subtitleCallback.invoke(
-                newSubtitleFile(
-                    sub.lan,
-                    sub.url
-                )
-            )
-        }
-        
+        // 2. Ambil subtitle (opsional)
+        try {
+            val subtitleUrl = "$apiUrl/intl/gateway/web/v2/subtitle" +
+                    "?s_locale=id_ID&platform=web&episode_id=$episodeId"
+            app.get(subtitleUrl, headers = apiHeaders)
+                .parsedSafe<SubtitleResponse>()?.data?.subtitles
+                ?.forEach { sub ->
+                    val subUrl = sub.url
+                    if (subUrl.isNullOrBlank()) return@forEach
+                    val subLang = sub.lan ?: "Unknown"
+                    subtitleCallback.invoke(newSubtitleFile(subLang, subUrl))
+                }
+        } catch (_: Exception) { /* subtitle opsional */ }
+
         return true
     }
 
-    // ==== Data Classes untuk API ====
-    data class BiliPlaylistResponse(@JsonProperty("data") val data: Data?) {
-        data class Data(@JsonProperty("playlist") val playlist: List<Item>?)
-    }
-    data class BiliSearchResponse(@JsonProperty("data") val data: List<Item>?)
-    data class Item(
-        @JsonProperty("aid") val aid: Long?,
-        @JsonProperty("title") val title: String?,
-        @JsonProperty("cover") val cover: String?
+    // ================================================================
+    //  DATA CLASSES
+    // ================================================================
+    data class SeriesResponse(@JsonProperty("data") val data: SeriesData?)
+    data class SeriesData(
+        @JsonProperty("sections") val sections: List<Section>?
     )
-    data class BiliVideoDetailResponse(@JsonProperty("data") val data: Data?) {
-        data class Data(@JsonProperty("playlist") val playlist: List<Item>?)
-    }
-    data class BiliPlayUrlResponse(@JsonProperty("data") val data: Data?) {
-        data class Data(
-            @JsonProperty("durl") val durl: List<Durl>?,
-            @JsonProperty("dash") val dash: Dash?
-        )
-        data class Durl(@JsonProperty("url") val url: String?)
-        data class Dash(@JsonProperty("video") val video: List<Video>?)
-        data class Video(@JsonProperty("baseUrl") val baseUrl: String?)
-    }
-    data class BiliSubtitleResponse(@JsonProperty("data") val data: Data?) {
-        data class Data(@JsonProperty("subtitles") val subtitles: List<Subtitle>?)
-        data class Subtitle(
-            @JsonProperty("lan") val lan: String?,
-            @JsonProperty("url") val url: String?
-        )
-    }
+    data class Section(
+        @JsonProperty("episodes") val episodes: List<SeriesEpisode>?
+    )
+    data class SeriesEpisode(
+        @JsonProperty("episode_id") val episodeId: Long?,
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("episode_number") val episodeNumber: Int?
+    )
+
+    data class PlayUrlResponse(@JsonProperty("data") val data: PlayData?)
+    data class PlayData(
+        @JsonProperty("durl") val durl: List<Durl>?,
+        @JsonProperty("dash") val dash: Dash?
+    )
+    data class Durl(
+        @JsonProperty("url") val url: String?
+    )
+    data class Dash(
+        @JsonProperty("video") val video: List<DashVideo>?
+    )
+    data class DashVideo(
+        @JsonProperty("baseUrl") val baseUrl: String?,
+        @JsonProperty("base_url") val base_url: String?
+    )
+
+    data class SubtitleResponse(@JsonProperty("data") val data: SubtitleData?)
+    data class SubtitleData(
+        @JsonProperty("subtitles") val subtitles: List<Subtitle>?
+    )
+    data class Subtitle(
+        @JsonProperty("lan") val lan: String?,
+        @JsonProperty("url") val url: String?
+    )
 }

@@ -24,9 +24,12 @@ class BStation : MainAPI() {
 
     private val TAG = "BStation"
 
-    // Prefix anti-resolve (tanpa ":")
     private val PREFIX_PGC = "PGCEP_"
     private val PREFIX_UGC = "UGC_"
+
+    // Regex untuk cari prefix di posisi manapun
+    private val pgcRegex = Regex("""PGCEP_(\d+)""")
+    private val ugcRegex = Regex("""UGC_(\d+)""")
 
     // ============================================================
     //  POSTER CLEANER
@@ -53,9 +56,6 @@ class BStation : MainAPI() {
         return null
     }
 
-    // ============================================================
-    //  XML ESCAPE
-    // ============================================================
     private fun escapeXml(s: String): String {
         return s.replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -119,9 +119,6 @@ class BStation : MainAPI() {
         return newHomePageResponse(home, false)
     }
 
-    // ============================================================
-    //  SEARCH
-    // ============================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
         val document = app.get(url).document
@@ -228,7 +225,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD LINKS
+    //  LOAD LINKS  ← FINAL FIX: pakai REGEX untuk cari prefix
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -237,22 +234,26 @@ class BStation : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         println("$TAG: ################################")
-        println("$TAG: [loadLinks] DATA RECEIVED = '$data'")
+        println("$TAG: [loadLinks] DATA RAW = '$data'")
         println("$TAG: ################################")
 
+        // ==== Cari prefix di posisi MANAPUN dalam string ====
+        val pgcMatch = pgcRegex.find(data)
+        val ugcMatch = ugcRegex.find(data)
+
         return when {
-            data.startsWith(PREFIX_PGC) -> {
-                val epId = data.removePrefix(PREFIX_PGC)
-                println("$TAG: [loadLinks] → PGC epId='$epId'")
+            pgcMatch != null -> {
+                val epId = pgcMatch.groupValues[1]
+                println("$TAG: [loadLinks] ✅ PGC MATCH, epId='$epId'")
                 loadPgc(epId, callback, subtitleCallback)
             }
-            data.startsWith(PREFIX_UGC) -> {
-                val aid = data.removePrefix(PREFIX_UGC)
-                println("$TAG: [loadLinks] → UGC aid='$aid'")
+            ugcMatch != null -> {
+                val aid = ugcMatch.groupValues[1]
+                println("$TAG: [loadLinks] ✅ UGC MATCH, aid='$aid'")
                 loadUgc(aid, callback, subtitleCallback)
             }
             else -> {
-                println("$TAG: [loadLinks] ❌ UNKNOWN PREFIX: '$data'")
+                println("$TAG: [loadLinks] ❌ TIDAK ADA MATCH di '$data'")
                 false
             }
         }

@@ -202,51 +202,79 @@ class BStation : MainAPI() {
     callback: (ExtractorLink) -> Unit
 ): Boolean {
     val epId = if (data.startsWith("pgc:")) data.removePrefix("pgc:") else data
-    if (epId.isBlank()) return false
+
+    // ==== Link 1: tampilkan data yang diterima ====
+    callback.invoke(
+        newExtractorLink(name, "INFO data='$data' ep='$epId'", "https://example.com/", ExtractorLinkType.VIDEO) {
+            this.referer = "$mainUrl/"
+        }
+    )
+
+    if (epId.isBlank()) return true
 
     try {
         val url = "$apiUrl/intl/gateway/web/playurl?s_locale=id_ID&platform=web&ep_id=$epId&qn=64&fnval=1"
         val resp = app.get(url, headers = apiHeaders)
         val text = resp.text
 
-        // Tulis 800 char pertama respons ke exception supaya muncul di UI
-        if (text.contains("\"code\":0")) {
-            val parsed = resp.parsedSafe<PlayUrlResponse>()
-            val durl = parsed?.data?.playurl?.durl
-            val video = parsed?.data?.playurl?.video
-
-            // Prioritas 1: MP4 muxed
-            if (!durl.isNullOrEmpty()) {
-                durl.first().url?.let { u ->
-                    if (u.isNotBlank()) {
-                        callback.invoke(newExtractorLink(name, name, u, ExtractorLinkType.VIDEO) {
-                            this.referer = "$mainUrl/"
-                        })
-                        return true
-                    }
-                }
+        // ==== Link 2: tampilkan 60 char pertama response ====
+        callback.invoke(
+            newExtractorLink(name, "RESP[${text.length}]: ${text.take(60).replace("\n", " ")}",
+                "https://example.com/", ExtractorLinkType.VIDEO) {
+                this.referer = "$mainUrl/"
             }
+        )
 
-            // Prioritas 2: video-only
-            if (!video.isNullOrEmpty()) {
-                val v = video.firstOrNull { !it.videoResource?.url.isNullOrBlank() }
-                val vUrl = v?.videoResource?.url
-                if (!vUrl.isNullOrBlank()) {
-                    callback.invoke(newExtractorLink(name, name, vUrl, ExtractorLinkType.VIDEO) {
+        // Coba parse
+        val parsed = resp.parsedSafe<PlayUrlResponse>()
+        val play = parsed?.data?.playurl
+
+        val durlCount = play?.durl?.size ?: -1
+        val videoCount = play?.video?.size ?: -1
+
+        // ==== Link 3: tampilkan hasil parsing ====
+        callback.invoke(
+            newExtractorLink(name, "PARSE durl=$durlCount video=$videoCount",
+                "https://example.com/", ExtractorLinkType.VIDEO) {
+                this.referer = "$mainUrl/"
+            }
+        )
+
+        // ==== Kalau ada durl, kirim sebagai link asli ====
+        play?.durl?.forEach { d ->
+            val link = d.url
+            if (!link.isNullOrBlank()) {
+                callback.invoke(
+                    newExtractorLink(name, "$name MP4", link, ExtractorLinkType.VIDEO) {
                         this.referer = "$mainUrl/"
-                    })
-                    return true
-                }
+                    }
+                )
+            }
+        }
+
+        // ==== Kalau ada video, kirim semua ====
+        play?.video
+            ?.filter { !it.videoResource?.url.isNullOrBlank() }
+            ?.forEach { v ->
+                val vUrl = v.videoResource?.url ?: return@forEach
+                val q = v.streamInfo?.quality ?: 32
+                val label = v.streamInfo?.descWords?.ifBlank { null } ?: "${q}p"
+                callback.invoke(
+                    newExtractorLink(name, "$name $label", vUrl, ExtractorLinkType.VIDEO) {
+                        this.referer = "$mainUrl/"
+                    }
+                )
             }
 
-            throw ErrorLoadingException("BStation: code 0 tapi durl/video kosong. Snippet: ${text.take(200)}")
-        } else {
-            throw ErrorLoadingException("BStation: ${text.take(300)}")
-        }
-    } catch (e: ErrorLoadingException) {
-        throw e
+        return true
     } catch (e: Exception) {
-        throw ErrorLoadingException("BStation err: ${e.message}")
+        // ==== Link error kalau API gagal ====
+        callback.invoke(
+            newExtractorLink(name, "EXC: ${e.message?.take(80)}", "https://example.com/", ExtractorLinkType.VIDEO) {
+                this.referer = "$mainUrl/"
+            }
+        )
+        return true
     }
 }
     // ============================================================

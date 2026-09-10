@@ -24,6 +24,10 @@ class BStation : MainAPI() {
 
     private val TAG = "BStation"
 
+    // Prefix anti-resolve (tanpa ":")
+    private val PREFIX_PGC = "PGCEP_"
+    private val PREFIX_UGC = "UGC_"
+
     // ============================================================
     //  POSTER CLEANER
     // ============================================================
@@ -131,7 +135,6 @@ class BStation : MainAPI() {
     //  LOAD
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
-        println("$TAG: [LOAD] ================================")
         println("$TAG: [LOAD] URL = $url")
 
         val document = try {
@@ -155,8 +158,8 @@ class BStation : MainAPI() {
         if (url.contains("/video/")) {
             val aidMatch = Regex("""/video/(\d+)""").find(url)
             val aid = aidMatch?.groupValues?.get(1) ?: return null
-            println("$TAG: [LOAD] → UGC aid=$aid")
-            return newMovieLoadResponse(title, url, TvType.Movie, "ugc:$aid") {
+            println("$TAG: [LOAD] → UGC aid=$aid, data=$PREFIX_UGC$aid")
+            return newMovieLoadResponse(title, url, TvType.Movie, "$PREFIX_UGC$aid") {
                 this.posterUrl = poster
                 this.plot = description
             }
@@ -175,8 +178,6 @@ class BStation : MainAPI() {
             val resp = app.get(apiSeriesUrl, headers = apiHeaders)
                 .parsedSafe<SeriesApiResponse>()
 
-            println("$TAG: [PGC-LOAD] resp=${resp != null}, data=${resp?.data != null}, sections=${resp?.data?.sections?.size}")
-
             resp?.data?.sections?.forEach { section ->
                 section.episodes?.forEach { ep ->
                     val id = ep.episodeId ?: return@forEach
@@ -186,7 +187,7 @@ class BStation : MainAPI() {
                         ?: "Episode"
                     val epNum = Regex("""E(\d+)""").find(displayTitle)
                         ?.groupValues?.get(1)?.toIntOrNull()
-                    episodes.add(newEpisode("pgc:$id") {
+                    episodes.add(newEpisode("$PREFIX_PGC$id") {
                         this.name = displayTitle
                         this.episode = epNum
                         this.posterUrl = ep.cover.cleanImage() ?: poster
@@ -209,13 +210,12 @@ class BStation : MainAPI() {
                 val shortTitle = el.text().trim()
                 val longTitle = el.attr("title")
                 val epNum = Regex("""E(\d+)""").find(shortTitle)?.groupValues?.get(1)?.toIntOrNull()
-                episodes.add(newEpisode("pgc:$epId") {
+                episodes.add(newEpisode("$PREFIX_PGC$epId") {
                     this.name = if (longTitle.isNotBlank()) "$shortTitle - $longTitle" else shortTitle
                     this.episode = epNum
                 })
             }
             println("$TAG: [PGC-LOAD] Total episodes dari HTML: ${episodes.size}")
-            // Log contoh episode pertama untuk verifikasi format
             episodes.firstOrNull()?.let { ep ->
                 println("$TAG: [PGC-LOAD] Contoh episode -> name='${ep.name}', data='${ep.data}'")
             }
@@ -228,7 +228,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD LINKS  ← DIUBAH: tambah log data yang masuk
+    //  LOAD LINKS
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -238,22 +238,21 @@ class BStation : MainAPI() {
     ): Boolean {
         println("$TAG: ################################")
         println("$TAG: [loadLinks] DATA RECEIVED = '$data'")
-        println("$TAG: [loadLinks] isCasting = $isCasting")
         println("$TAG: ################################")
 
         return when {
-            data.startsWith("pgc:") -> {
-                val epId = data.removePrefix("pgc:")
+            data.startsWith(PREFIX_PGC) -> {
+                val epId = data.removePrefix(PREFIX_PGC)
                 println("$TAG: [loadLinks] → PGC epId='$epId'")
                 loadPgc(epId, callback, subtitleCallback)
             }
-            data.startsWith("ugc:") -> {
-                val aid = data.removePrefix("ugc:")
+            data.startsWith(PREFIX_UGC) -> {
+                val aid = data.removePrefix(PREFIX_UGC)
                 println("$TAG: [loadLinks] → UGC aid='$aid'")
                 loadUgc(aid, callback, subtitleCallback)
             }
             else -> {
-                println("$TAG: [loadLinks] ❌ UNKNOWN PREFIX, tidak ada handler")
+                println("$TAG: [loadLinks] ❌ UNKNOWN PREFIX: '$data'")
                 false
             }
         }

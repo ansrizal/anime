@@ -15,10 +15,29 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class MovieboxProvider : MainAPI() {
-    override var mainUrl = "https://moviebox.ph"
-    private val mainAPIUrl = "https://h5-api.aoneroom.com"
-    private val secondAPIUrl = "https://movieboxhd.net"
-    private val secondPath   = "/wefeed-h5-bff"
+    override var mainUrl = "https://movieboxhd.net"
+    private val apiUrl = "https://h5-api.aoneroom.com"
+    private val apiPath = "/wefeed-h5api-bff"
+
+    // ==== JWT TOKEN ====
+    // Token dari DevTools (valid s/d ~Des 2026).
+    // Kalau expired, ambil token baru dari movieboxhd.net:
+    // DevTools → Network → request apapun ke h5-api.aoneroom.com → Headers → Authorization
+    private val authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjcyMjczODQ2OTQ1ODkyNDcwNzIsImF0cCI6MywiZXh0IjoiMTc4ODk1MDUyNSIsImV4cCI6MTc5NjcyNjUyNSwiaWF0IjoxNzg4OTUwMjI1fQ.5UOiHLYcY9GSNzm6J8aw0T5AqBRdyiSuQF4xHDwCTqU"
+
+    private val commonHeaders = mapOf(
+        "authorization"           to "Bearer $authToken",
+        "accept"                  to "application/json",
+        "content-type"            to "application/json",
+        "origin"                  to mainUrl,
+        "referer"                 to "$mainUrl/",
+        "user-agent"              to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+        "x-client-info"           to """{"timezone":"Asia/Jakarta"}""",
+        "x-request-lang"          to "en",
+        "x-no-high-risk-restrict" to "0",
+        "x-vip-restrict"          to "1"
+    )
+
     override val instantLinkLoading = true
     override var name = "MovieBox"
     override val hasMainPage = true
@@ -62,12 +81,13 @@ class MovieboxProvider : MainAPI() {
 
         val home = mutableListOf<SearchResponse>()
 
-        if(!request.data.contains(",")) {
-            val url = "$mainAPIUrl/wefeed-h5api-bff/ranking-list/content?id=${request.data}&page=$page&perPage=12"
+        if (!request.data.contains(",")) {
+            val url = "$apiUrl$apiPath/ranking-list/content?id=${request.data}&page=$page&perPage=12"
 
-            val index = app.get(url).parsedSafe<Media>()?.data?.subjectList?.map {
-                it.toSearchResponse(this)
-            } ?: throw ErrorLoadingException("No Data Found")
+            val index = app.get(url, headers = commonHeaders)
+                .parsedSafe<Media>()?.data?.subjectList?.map {
+                    it.toSearchResponse(this)
+                } ?: throw ErrorLoadingException("No Data Found")
 
             home.addAll(index)
         } else {
@@ -79,61 +99,54 @@ class MovieboxProvider : MainAPI() {
                 "sort" to params.last()
             ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-            val index = app.post("$mainAPIUrl/wefeed-h5api-bff/subject/filter", requestBody = body)
-                .parsedSafe<Media>()?.data?.items?.map {
-                    it.toSearchResponse(this)
-                } ?: throw ErrorLoadingException("No Data Found")
+            val index = app.post(
+                "$apiUrl$apiPath/subject/filter",
+                requestBody = body,
+                headers = commonHeaders
+            ).parsedSafe<Media>()?.data?.items?.map {
+                it.toSearchResponse(this)
+            } ?: throw ErrorLoadingException("No Data Found")
 
             home.addAll(index)
         }
 
-
         return newHomePageResponse(request.name, home)
     }
 
+    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+
+    // ================================================================
+    //  SEARCH — Endpoint final yang sudah diverifikasi
+    //  POST /wefeed-h5api-bff/subject/search
+    // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
-    val body = mapOf(
-        "keyword"     to query,
-        "page"        to "1",
-        "perPage"     to "24",
-        "subjectType" to "5"
-    ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        val body = mapOf(
+            "keyword"     to query,
+            "page"        to "1",
+            "perPage"     to "24",
+            "subjectType" to "0"   // 0 = All, 1 = Movie, 2 = TV, 5 = Education
+        ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
-    // Header wajib — token bisa di-generate atau hardcode sementara
-    val ts = (System.currentTimeMillis() / 1000).toString()
-    val headers = mapOf(
-        "X-Client-Token" to "$ts,${md5Hash(ts + "moviebox")}",
-        "X-Client-Info"  to """{"timezone":"Asia/Jakarta"}""",
-        "X-Request-Lang" to "id",
-        "Referer"        to "$mainUrl/",
-        "Origin"         to mainUrl,
-        "Accept"         to "application/json"
-    )
-
-    return app.post(
-        "$secondAPIUrl$secondPath/web/subject/search",
-        requestBody = body,
-        headers = headers
-    ).parsedSafe<Media>()?.data?.items
-        ?.mapNotNull { it.toSearchResponse(this) }
-        ?: emptyList()
-}
-
-// Helper MD5
-private fun md5Hash(input: String): String {
-    val md = java.security.MessageDigest.getInstance("MD5")
-    return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
-}
+        return app.post(
+            "$apiUrl$apiPath/subject/search",
+            requestBody = body,
+            headers = commonHeaders
+        ).parsedSafe<Media>()?.data?.items
+            ?.mapNotNull { it.toSearchResponse(this) }
+            ?: emptyList()
+    }
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
-            .parsedSafe<MediaDetail>()?.data
+        val document = app.get(
+            "$apiUrl$apiPath/subject/detail?subjectId=$id",
+            headers = commonHeaders
+        ).parsedSafe<MediaDetail>()?.data
+
         val subject = document?.subject
         val title = subject?.title ?: ""
         val poster = subject?.cover?.url
         val tags = subject?.genre?.split(",")?.map { it.trim() }
-
         val year = subject?.releaseDate?.substringBefore("-")?.toIntOrNull()
         val tvType = if (subject?.subjectType == 2) TvType.TvSeries else TvType.Movie
         val description = subject?.description
@@ -150,10 +163,12 @@ private fun md5Hash(input: String): String {
         }?.distinctBy { it.actor }
 
         val recommendations =
-            app.get("$mainUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
-                .parsedSafe<Media>()?.data?.items?.map {
-                    it.toSearchResponse(this)
-                }
+            app.get(
+                "$apiUrl$apiPath/subject/detail-rec?subjectId=$id&page=1&perPage=12",
+                headers = commonHeaders
+            ).parsedSafe<Media>()?.data?.items?.map {
+                it.toSearchResponse(this)
+            }
 
         return if (tvType == TvType.TvSeries) {
             val episode = document?.resource?.seasons?.map { seasons ->
@@ -210,11 +225,11 @@ private fun md5Hash(input: String): String {
     ): Boolean {
 
         val media = parseJson<LoadData>(data)
-        val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
+        val referer = "$mainUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
 
         val streams = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
-            referer = referer
+            "$apiUrl$apiPath/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+            headers = commonHeaders + mapOf("referer" to referer)
         ).parsedSafe<Media>()?.data?.streams
 
         streams?.reversed()?.distinctBy { it.url }?.map { source ->
@@ -225,7 +240,7 @@ private fun md5Hash(input: String): String {
                     source.url ?: return@map,
                     INFER_TYPE
                 ) {
-                    this.referer = "$secondAPIUrl/"
+                    this.referer = "$apiUrl/"
                     this.quality = getQualityFromName(source.resolutions)
                 }
             )
@@ -235,8 +250,8 @@ private fun md5Hash(input: String): String {
         val format = streams?.first()?.format
 
         app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
-            referer = referer
+            "$apiUrl$apiPath/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+            headers = commonHeaders + mapOf("referer" to referer)
         ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
             subtitleCallback.invoke(
                 newSubtitleFile(
@@ -311,10 +326,17 @@ private fun md5Hash(input: String): String {
         @JsonProperty("detailPath") val detailPath: String? = null) {
 
         fun toSearchResponse(provider: MovieboxProvider): SearchResponse {
+            val type = when (subjectType) {
+                1, 49 -> TvType.Movie
+                2, 24 -> TvType.TvSeries
+                6     -> TvType.Music
+                else  -> TvType.TvSeries
+            }
+
             return provider.newMovieSearchResponse(
                 title ?: "",
                 subjectId ?: "",
-                if (subjectType == 1) TvType.Movie else TvType.TvSeries,
+                type,
                 false
             ) {
                 this.posterUrl = cover?.url
@@ -330,5 +352,4 @@ private fun md5Hash(input: String): String {
                 @JsonProperty("url") val url: String? = null)
         }
     }
-
 }

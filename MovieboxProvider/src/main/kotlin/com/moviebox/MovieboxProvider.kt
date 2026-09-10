@@ -30,14 +30,6 @@ class MovieboxProvider : MainAPI() {
         TvType.AsianDrama
     )
 
-    companion object {
-        const val PER_PAGE = 24
-        const val SUBJECT_TYPE_ALL     = 5
-        const val SUBJECT_TYPE_SERIES  = 24
-        const val SUBJECT_TYPE_MOVIE   = 49
-        const val SUBJECT_TYPE_MUSIC   = 6
-    }
-
     override val mainPage: List<MainPageData> = mainPageOf(
         "872031290915189720" to "Trending Now",
         "997144265920760504" to "Popular Movie",
@@ -98,93 +90,19 @@ class MovieboxProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
+    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+
     override suspend fun search(query: String): List<SearchResponse> {
-        return searchPaged(query, page = 1, subjectType = SUBJECT_TYPE_ALL)
+        return app.post(
+            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
+                "keyword" to query,
+                "page" to "1",
+                "perPage" to "0",
+                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
+            ?: throw ErrorLoadingException()
     }
 
-    private suspend fun searchPaged(
-        query: String,
-        page: Int,
-        subjectType: Int
-    ): List<SearchResponse> {
-        val body = mapOf(
-            "keyword"     to query,
-            "page"        to page.toString(),
-            "perPage"     to PER_PAGE.toString(),
-            "subjectType" to subjectType.toString()
-        ).toJson().toRequestBody("application/json".toMediaTypeOrNull())
-
-        val response = app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search",
-            requestBody = body
-        ).parsedSafe<SearchApiResponse>()
-            ?: throw ErrorLoadingException("Search response null")
-
-        return response.data?.items
-            ?.mapNotNull { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException("No search items")
-    }
-
-    // ================================================================
-    //  DETAIL  →  GET /wefeed-h5-bff/web/subject/detail
-    // ================================================================
-    override suspend fun load(url: String): LoadResponse {
-        val subjectId = url.substringAfterLast("sid=", "")
-            .takeIf { it.isNotBlank() }
-            ?: throw ErrorLoadingException("Missing subjectId in url")
-
-        val detail = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/detail",
-            params = mapOf("subjectId" to subjectId)
-        ).parsedSafe<DetailApiResponse>()?.data
-            ?: throw ErrorLoadingException("Detail null")
-
-        val title     = detail.title ?: "Unknown"
-        val poster    = detail.cover?.url
-        val type      = if (detail.subjectType == SUBJECT_TYPE_MOVIE)
-                            TvType.Movie else TvType.TvSeries
-
-        // Bangun episode list
-        val episodes = detail.episodes?.map { ep ->
-            newEpisode(data = "$subjectId|${ep.se ?: 0}|${ep.ep ?: 0}") {
-                this.name       = ep.title ?: "Episode ${ep.ep}"
-                this.episode    = ep.ep ?: 0
-                this.season     = ep.se ?: 0
-                this.posterUrl  = ep.cover?.url ?: poster
-            }
-        } ?: emptyList()
-
-        return newTvSeriesLoadResponse(title, url, type, episodes) {
-            this.posterUrl = poster
-            this.plot      = detail.description
-            this.year      = detail.releaseDate?.take(4)?.toIntOrNull()
-            this.tags      = detail.genre?.split(",")?.map { it.trim() }
-        }
-    }
-
-    // ================================================================
-    //  STREAM  →  GET /wefeed-h5-bff/web/subject/play
-    // ================================================================
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val parts      = data.split("|")
-        val subjectId  = parts.getOrNull(0) ?: return false
-        val se         = parts.getOrNull(1)?.toIntOrNull() ?: 0
-        val ep         = parts.getOrNull(2)?.toIntOrNull() ?: 0
-
-        val play = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/play",
-            params = mapOf(
-                "subjectId" to subjectId,
-                "se"        to se.toString(),
-                "ep"        to ep.toString()
-            )
-        ).parsedSafe<PlayApiResponse>()?.data
-            ?: return false
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
         val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
@@ -374,7 +292,7 @@ class MovieboxProvider : MainAPI() {
             return provider.newMovieSearchResponse(
                 title ?: "",
                 subjectId ?: "",
-                if (subjectType == 0) TvType.Movie else TvType.TvSeries,
+                if (subjectType == 1) TvType.Movie else TvType.TvSeries,
                 false
             ) {
                 this.posterUrl = cover?.url

@@ -238,6 +238,20 @@ class BStation : MainAPI() {
             val durationSec = (play?.duration ?: 0L) / 1000
             val audio = audios.firstOrNull()
 
+            // Fallback MP4 langsung jika video list kosong
+            if (videos.isEmpty() && play?.durl?.isNotEmpty() == true) {
+                play.durl.forEach { d ->
+                    d.url?.let { directUrl ->
+                        callback.invoke(
+                            newExtractorLink(name, name, directUrl, ExtractorLinkType.VIDEO) {
+                                this.referer = "$mainUrl/"
+                            }
+                        )
+                        any = true
+                    }
+                }
+            }
+
             videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
                 val vRes = v.videoResource ?: return@forEach
                 val vUrlRaw = vRes.url ?: return@forEach
@@ -291,7 +305,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  UGC
+    //  UGC  (FIXED: cid opsional, param sesuai browser)
     // ============================================================
     private suspend fun loadUgc(
         aid: String,
@@ -299,8 +313,9 @@ class BStation : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit
     ): Boolean {
         var any = false
-        var cid: String? = null
 
+        // 1. Coba dapatkan cid (OPSIONAL — untuk video multi-part)
+        var cid: String? = null
         try {
             val viewUrl = "$apiUrl/intl/gateway/web/view?aid=$aid&platform=web&s_locale=id_ID"
             val viewResp = app.get(viewUrl, headers = apiHeaders)
@@ -310,12 +325,25 @@ class BStation : MainAPI() {
                 ?: Regex(""""cid":(\d+)""").find(viewResp.text)?.groupValues?.get(1)
         } catch (_: Exception) { }
 
-        if (cid == null) return false
-
+        // 2. Panggil playurl — JIKA cid null, TETAP coba dengan aid saja
         try {
-            val url = "$apiUrl/intl/gateway/web/playurl" +
-                    "?s_locale=id_ID&platform=web&avid=$aid&cid=$cid&qn=64&fnval=0"
-            val resp = app.get(url, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+            val urlBuilder = StringBuilder("$apiUrl/intl/gateway/web/playurl")
+                .append("?s_locale=id_ID")
+                .append("&platform=web")
+                .append("&aid=$aid")           // ← pakai aid (bukan avid)
+                .append("&qn=64")
+                .append("&type=0")             // ← sesuai request browser
+                .append("&device=wap")         // ← sesuai request browser
+                .append("&tf=0")               // ← sesuai request browser
+                .append("&fnval=0")
+
+            // cid hanya ditambahkan jika berhasil didapat
+            if (cid != null) {
+                urlBuilder.append("&cid=$cid")
+            }
+
+            val resp = app.get(urlBuilder.toString(), headers = apiHeaders)
+                .parsedSafe<PlayUrlResponse>()
             val play = resp?.data?.playurl
 
             val videos = play?.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
@@ -323,41 +351,82 @@ class BStation : MainAPI() {
             val durationSec = (play?.duration ?: 0L) / 1000
             val audio = audios.firstOrNull()
 
+            // Fallback 1: MP4 langsung via durl
+            if (videos.isEmpty() && play?.durl?.isNotEmpty() == true) {
+                play.durl.forEach { d ->
+                    d.url?.let { directUrl ->
+                        callback.invoke(
+                            newExtractorLink(name, name, directUrl, ExtractorLinkType.VIDEO) {
+                                this.referer = "$mainUrl/"
+                            }
+                        )
+                        any = true
+                    }
+                }
+            }
+
+            // Proses video + audio menjadi MPD
             videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
                 val vRes = v.videoResource ?: return@forEach
                 val vUrlRaw = vRes.url ?: return@forEach
                 val vQual = v.streamInfo?.quality ?: 32
                 val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
-                if (audio != null && !audio.url.isNullOrBlank()) {
-                    try {
-                        val mpd = buildMpd(
-                            vUrl = vUrlRaw,
-                            vW = vRes.width ?: 852,
-                            vH = vRes.height ?: 480,
-                            vBw = vRes.bandwidth ?: 245000,
-                            vCodecs = vRes.codecs ?: "avc1.64001F",
-                            vInitRange = vRes.segmentBase?.range ?: "",
-                            vIndexRange = vRes.segmentBase?.indexRange ?: "",
-                            aUrl = audio.url!!,
-                            aBw = audio.bandwidth ?: 67000,
-                            aCodecs = audio.codecs ?: "mp4a.40.2",
-                            aInitRange = audio.segmentBase?.range ?: "",
-                            aIndexRange = audio.segmentBase?.indexRange ?: "",
-                            durSec = durationSec
-                        )
-                        val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                        val dataUri = "data:application/dash+xml;base64,$b64"
+                // Fallback 2: Kalau tidak ada audio resource, pakai video URL langsung
+                if (audio == null || audio.url.isNullOrBlank()) {
+                    callback.invoke(
+                        newExtractorLink(name, "$name $vLabel", vUrlRaw, ExtractorLinkType.VIDEO) {
+                            this.referer = "$mainUrl/"
+                        }
+                    )
+                    any = true
+                    return@forEach
+                }
 
-                        callback.invoke(
-                            newExtractorLink(name, "$name $vLabel", dataUri, ExtractorLinkType.DASH) {
-                                this.referer = "$mainUrl/"
-                            }
-                        )
-                        any = true
-                    } catch (_: Exception) { }
+                // Utama: gabung video + audio jadi MPD DASH
+                try {
+                    val mpd = buildMpd(
+                        vUrl = vUrlRaw,
+                        vW = vRes.width ?: 852,
+                        vH = vRes.height ?: 480,
+                        vBw = vRes.bandwidth ?: 245000,
+                        vCodecs = vRes.codecs ?: "avc1.64001F",
+                        vInitRange = vRes.segmentBase?.range ?: "",
+                        vIndexRange = vRes.segmentBase?.indexRange ?: "",
+                        aUrl = audio.url!!,
+                        aBw = audio.bandwidth ?: 67000,
+                        aCodecs = audio.codecs ?: "mp4a.40.2",
+                        aInitRange = audio.segmentBase?.range ?: "",
+                        aIndexRange = audio.segmentBase?.indexRange ?: "",
+                        durSec = durationSec
+                    )
+                    val b64 = Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                    val dataUri = "data:application/dash+xml;base64,$b64"
+
+                    callback.invoke(
+                        newExtractorLink(name, "$name $vLabel", dataUri, ExtractorLinkType.DASH) {
+                            this.referer = "$mainUrl/"
+                        }
+                    )
+                    any = true
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 3. Subtitle (endpoint UGC pakai aid, bukan episode_id)
+        try {
+            val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&aid=$aid" +
+                    (cid?.let { "&cid=$it" } ?: "")
+            app.get(subUrl, headers = apiHeaders)
+                .parsedSafe<SubtitleApiResponse>()?.data?.subtitles
+                ?.forEach { sub ->
+                    val u = sub.url?.ifBlank { null } ?: return@forEach
+                    subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
+                }
         } catch (_: Exception) { }
 
         return any

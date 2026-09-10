@@ -17,7 +17,8 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 class MovieboxProvider : MainAPI() {
     override var mainUrl = "https://moviebox.ph"
     private val mainAPIUrl = "https://h5-api.aoneroom.com"
-    private val secondAPIUrl = "https://filmboom.top"
+    private val secondAPIUrl = "https://movieboxhd.net"
+    private val secondPath   = "/wefeed-h5-bff"
     override val instantLinkLoading = true
     override var name = "MovieBox"
     override val hasMainPage = true
@@ -90,18 +91,39 @@ class MovieboxProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-
     override suspend fun search(query: String): List<SearchResponse> {
-        return app.post(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/search", requestBody = mapOf(
-                "keyword" to query,
-                "page" to "1",
-                "perPage" to "0",
-                "subjectType" to "0").toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-        ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
-            ?: throw ErrorLoadingException()
-    }
+    val body = mapOf(
+        "keyword"     to query,
+        "page"        to "1",
+        "perPage"     to "24",
+        "subjectType" to "5"
+    ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+
+    // Header wajib — token bisa di-generate atau hardcode sementara
+    val ts = (System.currentTimeMillis() / 1000).toString()
+    val headers = mapOf(
+        "X-Client-Token" to "$ts,${md5Hash(ts + "moviebox")}",
+        "X-Client-Info"  to """{"timezone":"Asia/Jakarta"}""",
+        "X-Request-Lang" to "id",
+        "Referer"        to "$mainUrl/",
+        "Origin"         to mainUrl,
+        "Accept"         to "application/json"
+    )
+
+    return app.post(
+        "$secondAPIUrl$secondPath/web/subject/search",
+        requestBody = body,
+        headers = headers
+    ).parsedSafe<Media>()?.data?.items
+        ?.mapNotNull { it.toSearchResponse(this) }
+        ?: emptyList()
+}
+
+// Helper MD5
+private fun md5Hash(input: String): String {
+    val md = java.security.MessageDigest.getInstance("MD5")
+    return md.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
+}
 
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")

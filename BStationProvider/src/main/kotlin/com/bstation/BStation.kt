@@ -221,6 +221,40 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
+    //  PARSER KARTU REKOMENDASI  (member extension → akses mainUrl & MainAPI)
+    // ============================================================
+    private fun HomeRecommendCard.toSearchResult(): SearchResponse? {
+        val t = title?.takeIf { it.isNotBlank() } ?: return null
+        if (t.length < 2) return null
+
+        val poster = cover
+            ?.substringBefore("@")
+            ?.substringBefore("?")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+        return when {
+            // OGV: anime / series resmi → /play/{season_id}
+            cardType == "ogv_anime" || type == "ogv" -> {
+                val sid = seasonId?.takeIf { it.isNotBlank() } ?: return null
+                val url = "$mainUrl/id/play/$sid"
+                newAnimeSearchResponse(t, url, TvType.Anime) {
+                    this.posterUrl = poster
+                }
+            }
+            // UGC: video biasa → /video/{aid}
+            cardType == "ugc_video" || type == "ugc" -> {
+                val videoAid = aid?.takeIf { it.isNotBlank() } ?: return null
+                val url = "$mainUrl/id/video/$videoAid"
+                newAnimeSearchResponse(t, url, TvType.Movie) {
+                    this.posterUrl = poster
+                }
+            }
+            else -> null
+        }
+    }
+
+    // ============================================================
     //  SEARCH
     // ============================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
@@ -765,36 +799,7 @@ class BStation : MainAPI() {
         @JsonProperty("duration")    val duration: String?,
         @JsonProperty("index_show")  val indexShow: String?,
         @JsonProperty("view")        val view: String?
-    ) {
-        fun toSearchResult(): SearchResponse? {
-            val t = title?.takeIf { it.isNotBlank() } ?: return null
-            if (t.length < 2) return null
-
-            val poster = cover
-                ?.substringBefore("@")
-                ?.substringBefore("?")
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-
-            return when {
-                cardType == "ogv_anime" || type == "ogv" -> {
-                    val sid = seasonId?.takeIf { it.isNotBlank() } ?: return null
-                    val url = "$mainUrl/id/play/$sid"
-                    newAnimeSearchResponse(t, url, TvType.Anime) {
-                        this.posterUrl = poster
-                    }
-                }
-                cardType == "ugc_video" || type == "ugc" -> {
-                    val videoAid = aid?.takeIf { it.isNotBlank() } ?: return null
-                    val url = "$mainUrl/id/video/$videoAid"
-                    newAnimeSearchResponse(t, url, TvType.Movie) {
-                        this.posterUrl = poster
-                    }
-                }
-                else -> null
-            }
-        }
-    }
+    )
 
     // ---- Series API (untuk load episode) ----
     data class SeriesApiResponse(@JsonProperty("data") val data: SeriesApiData?)

@@ -9,14 +9,12 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
-    // Gunakan domain resmi agar otomatis redirect jika IP berubah
     override var mainUrl = "https://oppa.biz/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Header browser lengkap untuk menghindari blokir server
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -27,17 +25,16 @@ class OppadramaProvider : MainAPI() {
     )
 
     companion object {
-        fun getStatus(t: String): ShowStatus {
-            return when (t) {
-                "Completed" -> ShowStatus.Completed
-                "Ongoing" -> ShowStatus.Ongoing
-                else -> ShowStatus.Completed
-            }
+        const val TAG = "OppaDramaDebug"
+        fun getStatus(t: String): ShowStatus = when (t) {
+            "Completed" -> ShowStatus.Completed
+            "Ongoing" -> ShowStatus.Ongoing
+            else -> ShowStatus.Completed
         }
     }
 
     override val mainPage = mainPageOf(
-        "" to "Latest Update",
+        "series/?status=&type=&order=update" to "Latest Update",
         "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
         "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
         "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
@@ -53,17 +50,43 @@ class OppadramaProvider : MainAPI() {
             else -> if (page <= 1) "$mainUrl$path/" else "$mainUrl$path/page/$page/"
         }
 
-        val document = app.get(url, headers = defaultHeaders).document
+        println("[$TAG] ============================================")
+        println("[$TAG] GET $url")
+        println("[$TAG] Headers: $defaultHeaders")
 
-        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
-        if (items.isEmpty()) {
-            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+        return try {
+            val response = app.get(url, headers = defaultHeaders)
+            println("[$TAG] Response code   = ${response.code}")
+            println("[$TAG] Final URL       = ${response.url}")
+            println("[$TAG] Content-Type    = ${response.headers["content-type"]}")
+            println("[$TAG] HTML length     = ${response.text.length}")
+
+            val document = response.document
+            println("[$TAG] Page title      = ${document.title()}")
+            println("[$TAG] HTML preview    = ${response.text.take(500)}")
+
+            var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+            println("[$TAG] items(.listupd article.bs) = ${items.size}")
+            if (items.isEmpty()) {
+                items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+                println("[$TAG] items(article.bs)          = ${items.size}")
+            }
+            if (items.isEmpty()) {
+                items = document.select("article").mapNotNull { it.toSearchResult() }
+                println("[$TAG] items(article)             = ${items.size}")
+            }
+
+            val hasNext = document.selectFirst("div.hpage a.r") != null
+            println("[$TAG] hasNext = $hasNext")
+            println("[$TAG] ============================================")
+
+            newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
+        } catch (e: Exception) {
+            println("[$TAG] !!! EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
+            e.printStackTrace()
+            println("[$TAG] ============================================")
+            newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
         }
-
-        // Cek apakah ada tombol "Selanjutnya" untuk pagination
-        val hasNext = document.selectFirst("div.hpage a.r") != null
-
-        return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -84,24 +107,25 @@ class OppadramaProvider : MainAPI() {
         val isMovie = typeElement?.text()?.equals("Movie", ignoreCase = true) == true
 
         return if (isMovie) {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = poster
-            }
+            newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
         } else {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = poster
-            }
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) { this.posterUrl = poster }
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl?s=$query"
-        val document = app.get(url, headers = defaultHeaders, timeout = 50000L).document
-        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
-        if (items.isEmpty()) {
-            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+        return try {
+            val response = app.get(url, headers = defaultHeaders, timeout = 50000L)
+            println("[$TAG] SEARCH $url -> code=${response.code}, len=${response.text.length}")
+            val document = response.document
+            var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+            if (items.isEmpty()) items = document.select("article.bs").mapNotNull { it.toSearchResult() }
+            items
+        } catch (e: Exception) {
+            println("[$TAG] SEARCH EXCEPTION: ${e.message}")
+            emptyList()
         }
-        return items
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {
@@ -109,66 +133,42 @@ class OppadramaProvider : MainAPI() {
         val title = this.selectFirst(".tt")?.text()?.trim() ?: return null
         val href = fixUrl(link.attr("href"))
         val poster = this.selectFirst("img")?.getImageAttr()?.let { fixUrlNull(it) }
-        return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = poster
-        }
+        return newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = defaultHeaders).document
+        val response = app.get(url, headers = defaultHeaders)
+        println("[$TAG] LOAD $url -> code=${response.code}, len=${response.text.length}")
+        val document = response.document
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
-
         val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
-
-        val description = document.select("div.entry-content p")
-            .joinToString("\n") { it.text() }
-            .trim()
-
+        val description = document.select("div.entry-content p").joinToString("\n") { it.text() }.trim()
         val year = document.selectFirst("span:matchesOwn(Dirilis:)")?.ownText()
             ?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
-
         val duration = document.selectFirst("div.spe span:contains(Durasi:)")?.ownText()?.let {
             val h = Regex("(\\d+)\\s*hr").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val m = Regex("(\\d+)\\s*min").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             (h * 60) + m
         }
-
         val tags = document.select("div.genxed a").map { it.text() }
-
-        val actors = document.select("span:has(b:matchesOwn(Artis:)) a")
-            .map { it.text().trim() }
-
-        val rating = document.selectFirst("div.rating strong")
-            ?.text()
-            ?.replace("Rating", "")
-            ?.trim()
-            ?.toDoubleOrNull()
-
+        val actors = document.select("span:has(b:matchesOwn(Artis:)) a").map { it.text().trim() }
+        val rating = document.selectFirst("div.rating strong")?.text()
+            ?.replace("Rating", "")?.trim()?.toDoubleOrNull()
         val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
-
         val status = getStatus(
-            document.selectFirst("div.info-content div.spe span")
-                ?.ownText()
-                ?.replace(":", "")
-                ?.trim()
-                ?: ""
+            document.selectFirst("div.info-content div.spe span")?.ownText()
+                ?.replace(":", "")?.trim() ?: ""
         )
-
-        val recommendations = document.select("article.bs")
-            .mapNotNull { it.toRecommendResult() }
-
+        val recommendations = document.select("article.bs").mapNotNull { it.toRecommendResult() }
         val episodeElements = document.select("div.eplister ul li a")
-
-        val episodes = episodeElements
-            .reversed()
-            .mapIndexed { index, aTag ->
-                val href = fixUrl(aTag.attr("href"))
-                newEpisode(href) {
-                    this.name = "Episode ${index + 1}"
-                    this.episode = index + 1
-                }
+        val episodes = episodeElements.reversed().mapIndexed { index, aTag ->
+            val href = fixUrl(aTag.attr("href"))
+            newEpisode(href) {
+                this.name = "Episode ${index + 1}"
+                this.episode = index + 1
             }
+        }
 
         return if (episodes.size > 1) {
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -181,7 +181,6 @@ class OppadramaProvider : MainAPI() {
                 this.duration = duration ?: 0
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
-                // Amankan dari nilai null
                 trailer?.takeIf { it.isNotBlank() }?.let { addTrailer(it) }
             }
         } else {
@@ -207,11 +206,9 @@ class OppadramaProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data, headers = defaultHeaders).document
 
-        document.selectFirst("div.player-embed iframe")
-            ?.getIframeAttr()
-            ?.let { iframe ->
-                loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
-            }
+        document.selectFirst("div.player-embed iframe")?.getIframeAttr()?.let { iframe ->
+            loadExtractor(httpsify(iframe), data, subtitleCallback, callback)
+        }
 
         val mirrorOptions = document.select("select.mirror option[value]:not([disabled])")
         for (opt in mirrorOptions) {
@@ -229,9 +226,7 @@ class OppadramaProvider : MainAPI() {
                 if (!mirrorUrl.isNullOrBlank()) {
                     loadExtractor(httpsify(mirrorUrl), data, subtitleCallback, callback)
                 }
-            } catch (_: Exception) {
-                // ignore broken mirrors
-            }
+            } catch (_: Exception) {}
         }
 
         val downloadLinks = document.select("div.dlbox li span.e a[href]")
@@ -241,7 +236,6 @@ class OppadramaProvider : MainAPI() {
                 loadExtractor(httpsify(url), data, subtitleCallback, callback)
             }
         }
-
         return true
     }
 

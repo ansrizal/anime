@@ -9,7 +9,16 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
-    override var mainUrl = "https://oppa.biz/"
+
+    // ====================================================================
+    //  UBAH HANYA BARIS INI jika IP server berubah.
+    //  Cek IP terbaru dengan membuka https://oppa.biz di browser —
+    //  browser akan di-redirect ke IP aktif (lihat address bar).
+    // ====================================================================
+    private val SERVER_IP = "45.11.57.188"
+    // ====================================================================
+
+    override var mainUrl = "http://$SERVER_IP/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
@@ -25,7 +34,6 @@ class OppadramaProvider : MainAPI() {
     )
 
     companion object {
-        const val TAG = "OppaDramaDebug"
         fun getStatus(t: String): ShowStatus = when (t) {
             "Completed" -> ShowStatus.Completed
             "Ongoing" -> ShowStatus.Ongoing
@@ -34,7 +42,7 @@ class OppadramaProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "series/?status=&type=&order=update" to "Latest Update",
+        "" to "Latest Update",
         "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
         "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
         "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
@@ -45,48 +53,21 @@ class OppadramaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data.trim('/')
         val url = when {
-            path.isEmpty() -> if (page <= 1) mainUrl else "$mainUrl/page/$page/"
+            path.isEmpty() -> if (page <= 1) mainUrl else "${mainUrl}page/$page/"
             path.contains('?') -> "$mainUrl$path&page=$page"
             else -> if (page <= 1) "$mainUrl$path/" else "$mainUrl$path/page/$page/"
         }
 
-        println("[$TAG] ============================================")
-        println("[$TAG] GET $url")
-        println("[$TAG] Headers: $defaultHeaders")
+        val document = app.get(url, headers = defaultHeaders).document
 
-        return try {
-            val response = app.get(url, headers = defaultHeaders)
-            println("[$TAG] Response code   = ${response.code}")
-            println("[$TAG] Final URL       = ${response.url}")
-            println("[$TAG] Content-Type    = ${response.headers["content-type"]}")
-            println("[$TAG] HTML length     = ${response.text.length}")
-
-            val document = response.document
-            println("[$TAG] Page title      = ${document.title()}")
-            println("[$TAG] HTML preview    = ${response.text.take(500)}")
-
-            var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
-            println("[$TAG] items(.listupd article.bs) = ${items.size}")
-            if (items.isEmpty()) {
-                items = document.select("article.bs").mapNotNull { it.toSearchResult() }
-                println("[$TAG] items(article.bs)          = ${items.size}")
-            }
-            if (items.isEmpty()) {
-                items = document.select("article").mapNotNull { it.toSearchResult() }
-                println("[$TAG] items(article)             = ${items.size}")
-            }
-
-            val hasNext = document.selectFirst("div.hpage a.r") != null
-            println("[$TAG] hasNext = $hasNext")
-            println("[$TAG] ============================================")
-
-            newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
-        } catch (e: Exception) {
-            println("[$TAG] !!! EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
-            println("[$TAG] ============================================")
-            newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+        if (items.isEmpty()) {
+            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
         }
+
+        val hasNext = document.selectFirst("div.hpage a.r") != null
+
+        return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -114,18 +95,13 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl?s=$query"
-        return try {
-            val response = app.get(url, headers = defaultHeaders, timeout = 50000L)
-            println("[$TAG] SEARCH $url -> code=${response.code}, len=${response.text.length}")
-            val document = response.document
-            var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
-            if (items.isEmpty()) items = document.select("article.bs").mapNotNull { it.toSearchResult() }
-            items
-        } catch (e: Exception) {
-            println("[$TAG] SEARCH EXCEPTION: ${e.message}")
-            emptyList()
+        val url = "${mainUrl}?s=$query"
+        val document = app.get(url, headers = defaultHeaders, timeout = 50000L).document
+        var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
+        if (items.isEmpty()) {
+            items = document.select("article.bs").mapNotNull { it.toSearchResult() }
         }
+        return items
     }
 
     private fun Element.toRecommendResult(): SearchResponse? {
@@ -137,30 +113,33 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val response = app.get(url, headers = defaultHeaders)
-        println("[$TAG] LOAD $url -> code=${response.code}, len=${response.text.length}")
-        val document = response.document
+        val document = app.get(url, headers = defaultHeaders).document
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
         val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
-        val description = document.select("div.entry-content p").joinToString("\n") { it.text() }.trim()
+        val description = document.select("div.entry-content p")
+            .joinToString("\n") { it.text() }.trim()
+
         val year = document.selectFirst("span:matchesOwn(Dirilis:)")?.ownText()
             ?.filter { it.isDigit() }?.take(4)?.toIntOrNull()
+
         val duration = document.selectFirst("div.spe span:contains(Durasi:)")?.ownText()?.let {
             val h = Regex("(\\d+)\\s*hr").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val m = Regex("(\\d+)\\s*min").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             (h * 60) + m
         }
+
         val tags = document.select("div.genxed a").map { it.text() }
         val actors = document.select("span:has(b:matchesOwn(Artis:)) a").map { it.text().trim() }
-        val rating = document.selectFirst("div.rating strong")?.text()
-            ?.replace("Rating", "")?.trim()?.toDoubleOrNull()
+        val rating = document.selectFirst("div.rating strong")
+            ?.text()?.replace("Rating", "")?.trim()?.toDoubleOrNull()
         val trailer = document.selectFirst("div.bixbox.trailer iframe")?.attr("src")
         val status = getStatus(
-            document.selectFirst("div.info-content div.spe span")?.ownText()
-                ?.replace(":", "")?.trim() ?: ""
+            document.selectFirst("div.info-content div.spe span")
+                ?.ownText()?.replace(":", "")?.trim() ?: ""
         )
         val recommendations = document.select("article.bs").mapNotNull { it.toRecommendResult() }
+
         val episodeElements = document.select("div.eplister ul li a")
         val episodes = episodeElements.reversed().mapIndexed { index, aTag ->
             val href = fixUrl(aTag.attr("href"))

@@ -9,12 +9,22 @@ import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
-    // Gunakan IP yang sama dengan yang ada di HTML
-    override var mainUrl = "http://45.11.57.188/"
+    // Gunakan domain resmi agar otomatis redirect jika IP berubah
+    override var mainUrl = "https://oppa.biz/"
     override var name = "OppaDrama"
     override val hasMainPage = true
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    // Header browser lengkap untuk menghindari blokir server
+    private val defaultHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
+        "Upgrade-Insecure-Requests" to "1",
+        "Referer" to mainUrl,
+    )
 
     companion object {
         fun getStatus(t: String): ShowStatus {
@@ -26,9 +36,8 @@ class OppadramaProvider : MainAPI() {
         }
     }
 
-    // Path menggunakan parameter query (seperti pembanding) untuk kategori, tapi root tetap ""
     override val mainPage = mainPageOf(
-        "" to "Latest Update",                                  // root
+        "" to "Latest Update",
         "series/?country%5B%5D=south-korea&status=&type=Drama&order=update" to "Drama Korea",
         "series/?country%5B%5D=china&type=Drama&order=update" to "Drama Chinese",
         "series/?country%5B%5D=japan&type=Drama&order=update" to "Drama Jepang",
@@ -39,21 +48,22 @@ class OppadramaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data.trim('/')
         val url = when {
-            // Jika path kosong (root) gunakan pagination /page/
             path.isEmpty() -> if (page <= 1) mainUrl else "$mainUrl/page/$page/"
-            // Jika path mengandung '?' (query) berarti sudah ada parameter, tambahkan &page
             path.contains('?') -> "$mainUrl$path&page=$page"
-            // Path biasa (misal country/...) tambahkan /page/
             else -> if (page <= 1) "$mainUrl$path/" else "$mainUrl$path/page/$page/"
-        }.replace("(?<!:)/{2,}".toRegex(), "/")
+        }
 
-        val document = app.get(url).document
-        // Coba selector yang paling umum
+        val document = app.get(url, headers = defaultHeaders).document
+
         var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
         if (items.isEmpty()) {
             items = document.select("article.bs").mapNotNull { it.toSearchResult() }
         }
-        return newHomePageResponse(HomePageList(request.name, items), hasNext = items.isNotEmpty())
+
+        // Cek apakah ada tombol "Selanjutnya" untuk pagination
+        val hasNext = document.selectFirst("div.hpage a.r") != null
+
+        return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -61,9 +71,9 @@ class OppadramaProvider : MainAPI() {
         val href = fixUrl(link.attr("href"))
         var title = link.attr("title").trim()
         if (title.isBlank()) {
-            title = this.selectFirst(".tt")?.text()?.trim() ?:
-                    this.selectFirst(".tts")?.text()?.trim() ?:
-                    this.selectFirst("h2")?.text()?.trim() ?: return null
+            title = this.selectFirst(".tt")?.text()?.trim()
+                ?: this.selectFirst(".tts")?.text()?.trim()
+                ?: this.selectFirst("h2")?.text()?.trim() ?: return null
         }
         val img = this.selectFirst("img")
         val poster = img?.let {
@@ -86,7 +96,7 @@ class OppadramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl?s=$query"
-        val document = app.get(url, timeout = 50000L).document
+        val document = app.get(url, headers = defaultHeaders, timeout = 50000L).document
         var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
         if (items.isEmpty()) {
             items = document.select("article.bs").mapNotNull { it.toSearchResult() }
@@ -105,7 +115,7 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, headers = defaultHeaders).document
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
 
@@ -171,7 +181,8 @@ class OppadramaProvider : MainAPI() {
                 this.duration = duration ?: 0
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
-                addTrailer(trailer)
+                // Amankan dari nilai null
+                trailer?.takeIf { it.isNotBlank() }?.let { addTrailer(it) }
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, episodes.firstOrNull()?.data ?: url) {
@@ -183,7 +194,7 @@ class OppadramaProvider : MainAPI() {
                 this.duration = duration ?: 0
                 rating?.let { addScore(it.toString(), 10) }
                 addActors(actors)
-                addTrailer(trailer)
+                trailer?.takeIf { it.isNotBlank() }?.let { addTrailer(it) }
             }
         }
     }
@@ -194,7 +205,7 @@ class OppadramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = defaultHeaders).document
 
         document.selectFirst("div.player-embed iframe")
             ?.getIframeAttr()
@@ -245,6 +256,6 @@ class OppadramaProvider : MainAPI() {
 
     private fun Element?.getIframeAttr(): String? {
         return this?.attr("data-litespeed-src").takeIf { it?.isNotEmpty() == true }
-                ?: this?.attr("src")
+            ?: this?.attr("src")
     }
 }

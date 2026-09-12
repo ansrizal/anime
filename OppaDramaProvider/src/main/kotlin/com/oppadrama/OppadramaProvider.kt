@@ -5,16 +5,21 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.util.concurrent.TimeUnit
 
 class OppadramaProvider : MainAPI() {
 
     // ====================================================================
-    //  KONFIGURASI
-    //  Ubah SERVER_IP jika server berpindah. Untuk cek IP terbaru:
-    //      curl -sSI "https://oppa.biz/" | findstr /I "Location"
-    //  Nilai HOST_HEADER adalah domain yang diakui server.
+    //  KONFIGURASI SERVER
+    //  Cek IP terbaru dengan: curl -sSI "https://oppa.biz/" | findstr /I "Location"
     // ====================================================================
     private val SERVER_IP = "45.11.57.188"
     private val HOST_HEADER = "oppa.biz"
@@ -26,9 +31,7 @@ class OppadramaProvider : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    // Header lengkap termasuk Host override.
-    // OkHttp hanya mengisi Host otomatis jika belum di-set oleh user,
-    // jadi baris Host di bawah ini akan dipakai dan menembus filter server.
+    // Header untuk semua request (TANPA Host — Host di-set oleh interceptor)
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -36,8 +39,36 @@ class OppadramaProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
         "Upgrade-Insecure-Requests" to "1",
         "Referer" to "http://$HOST_HEADER/",
-        "Host" to HOST_HEADER,
     )
+
+    // OkHttpClient kita sendiri, dengan interceptor yang memaksa Host: oppa.biz
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(Interceptor { chain ->
+            val req = chain.request()
+            val newReq = if (req.url.host == SERVER_IP) {
+                req.newBuilder().header("Host", HOST_HEADER).build()
+            } else {
+                req
+            }
+            chain.proceed(newReq)
+        })
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
+
+    /** Helper: fetch HTML via OkHttpClient kita sendiri dan parse dengan Jsoup. */
+    private suspend fun fetchDocument(url: String): Document = withContext(Dispatchers.IO) {
+        val builder = Request.Builder().url(url)
+        defaultHeaders.forEach { (k, v) -> builder.header(k, v) }
+        val request = builder.build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            println("[OppaDrama] ${response.code} len=${body.length} url=$url")
+            Jsoup.parse(body, url)
+        }
+    }
 
     companion object {
         fun getStatus(t: String): ShowStatus = when (t) {
@@ -64,15 +95,13 @@ class OppadramaProvider : MainAPI() {
             else -> if (page <= 1) "$mainUrl$path/" else "$mainUrl$path/page/$page/"
         }
 
-        val document = app.get(url, headers = defaultHeaders).document
-
+        val document = fetchDocument(url)
         var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
         if (items.isEmpty()) {
             items = document.select("article.bs").mapNotNull { it.toSearchResult() }
         }
-
         val hasNext = document.selectFirst("div.hpage a.r") != null
-
+        println("[OppaDrama] getMainPage items=${items.size} hasNext=$hasNext")
         return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
@@ -102,7 +131,7 @@ class OppadramaProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "${mainUrl}?s=$query"
-        val document = app.get(url, headers = defaultHeaders, timeout = 50000L).document
+        val document = fetchDocument(url)
         var items = document.select(".listupd article.bs").mapNotNull { it.toSearchResult() }
         if (items.isEmpty()) {
             items = document.select("article.bs").mapNotNull { it.toSearchResult() }
@@ -119,7 +148,7 @@ class OppadramaProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = defaultHeaders).document
+        val document = fetchDocument(url)
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
         val poster = document.selectFirst("div.bigcontent img")?.getImageAttr()?.let { fixUrlNull(it) }
@@ -189,7 +218,7 @@ class OppadramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = defaultHeaders).document
+        val document = fetchDocument(data)
 
         document.selectFirst("div.player-embed iframe")?.getIframeAttr()?.let { iframe ->
             loadExtractor(httpsify(iframe), data, subtitleCallback, callback)

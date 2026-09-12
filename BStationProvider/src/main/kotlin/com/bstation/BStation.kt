@@ -94,14 +94,22 @@ class BStation : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     private val apiUrl = "https://api.bilibili.tv"
-    private val apiHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
-        "Accept" to "application/json, text/plain, */*",
-        "Origin" to mainUrl
-    )
-
     private val TAG = "BStation"
+
+    // Header lengkap seperti browser Android asli
+    private val apiHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Referer" to "$mainUrl/id/",
+        "Origin" to mainUrl,
+        "Accept" to "application/json, text/plain, */*",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "sec-ch-ua" to "\"Chromium\";v=\"137\";\"Not/A)Brand\";v=\"24\"",
+        "sec-ch-ua-mobile" to "?1",
+        "sec-ch-ua-platform" to "\"Android\"",
+        "sec-fetch-dest" to "empty",
+        "sec-fetch-mode" to "cors",
+        "sec-fetch-site" to "same-site"
+    )
 
     private val PREFIX_PGC = "PGCEP_"
     private val PREFIX_UGC = "UGC_"
@@ -109,9 +117,42 @@ class BStation : MainAPI() {
     private val pgcRegex = Regex("""PGCEP_(\d+)""")
     private val ugcRegex = Regex("""UGC_(\d+)""")
 
-    // Endpoint API untuk kategori "Populer" (recommend feed)
     private val recommendEndpoint =
         "$apiUrl/intl/gateway/web/v2/home/recommend?s_locale=id_ID&platform=web"
+
+    // Flag untuk warm-up cookie (sekali saja per sesi)
+    @Volatile
+    private var cookiesReady = false
+
+    // ============================================================
+    //  WARM-UP : kunjungi halaman utama untuk dapat cookie buvid3/buvid4
+    //  Tanpa ini, API Bilibili akan balas 412 Security Policy
+    // ============================================================
+    private suspend fun ensureCookies() {
+        if (cookiesReady) return
+        synchronized(this) {
+            if (cookiesReady) return
+        }
+        try {
+            println("$TAG: [COOKIE] Warm-up kunjungi $mainUrl/id/ ...")
+            val resp = app.get(
+                "$mainUrl/id/",
+                headers = mapOf(
+                    "User-Agent" to apiHeaders["User-Agent"]!!,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
+                )
+            )
+            val setCookies = resp.headers["Set-Cookie"] ?: emptyList()
+            println("$TAG: [COOKIE] Set-Cookie count=${setCookies.size}")
+            setCookies.forEach { c ->
+                println("$TAG: [COOKIE] ${c.take(120)}")
+            }
+            cookiesReady = true
+        } catch (e: Exception) {
+            println("$TAG: [COOKIE] Warm-up gagal: ${e.message}")
+        }
+    }
 
     // ============================================================
     //  POSTER CLEANER
@@ -147,12 +188,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  URI NORMALIZER (untuk API recommend)
-    //  Bilibili kadang kirim URI dalam bentuk:
-    //    - bilibili://video/123456
-    //    - bilibili://pgc/season/xxx
-    //    - /id/video/123456
-    //    - https://www.bilibili.tv/id/play/xxx
+    //  URI NORMALIZER
     // ============================================================
     private fun String?.normalizeRecommendUri(): String? {
         if (this.isNullOrBlank()) return null
@@ -166,7 +202,6 @@ class BStation : MainAPI() {
                 if (id.isBlank()) null else "$mainUrl/id/video/$id"
             }
             u.startsWith("bilibili://pgc/") -> {
-                // contoh: bilibili://pgc/season/12345  atau  bilibili://pgc/ep/67890
                 val rest = u.removePrefix("bilibili://pgc/")
                 val parts = rest.split("/").filter { it.isNotBlank() }
                 when {
@@ -180,7 +215,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  CARD PARSER (HTML)
+    //  CARD PARSER
     // ============================================================
     private fun Element.toSearchResult(): SearchResponse? {
         val a = if (this.tagName() == "a") this
@@ -222,12 +257,12 @@ class BStation : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Kategori "Populer" → pakai API recommend (infinite scroll)
+        ensureCookies()
+
         if (request.data.contains("/intl/gateway/web/v2/home/recommend")) {
             return getRecommendPage(page, request)
         }
 
-        // Kategori lain → pakai HTML statis
         val document = app.get(request.data).document
         val items = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
@@ -246,23 +281,48 @@ class BStation : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        // Halaman pertama pakai ps=50, berikutnya ps=20 (sesuai perilaku web)
         val pageSize = if (page == 1) 50 else 20
         val url = "${request.data}&pn=$page&ps=$pageSize"
 
         println("$TAG: [RECOMMEND] GET page=$page -> $url")
 
+        var rawText: String? = null
         val response: HomeRecommendResponse? = try {
-            app.get(url, headers = apiHeaders).parsedSafe<HomeRecommendResponse>()
+            val resp = app.get(url, headers = apiHeaders)
+            rawText = resp.text
+            // Log preview untuk debug
+            println("$TAG: [RECOMMEND RAW] page=$page len=${rawText.length} preview=${rawText.take(400)}")
+            rawText.parsedSafe<HomeRecommendResponse>()
         } catch (e: Exception) {
             println("$TAG: [RECOMMEND] ❌ Error page $page: ${e.message}")
             null
         }
 
+        // Deteksi 412 (security block)
+        if (rawText != null && rawText.contains("错误号: 412")) {
+            println("$TAG: [RECOMMEND] ⚠️ Terkena Error 412, coba refresh cookie & retry...")
+            cookiesReady = false
+            ensureCookies()
+            // Retry sekali
+            try {
+                val retry = app.get(url, headers = apiHeaders)
+                rawText = retry.text
+                val parsed = rawText.parsedSafe<HomeRecommendResponse>()
+                return buildRecommendResponse(parsed, request, page)
+            } catch (e: Exception) {
+                println("$TAG: [RECOMMEND] Retry gagal: ${e.message}")
+            }
+        }
+
+        return buildRecommendResponse(response, request, page)
+    }
+
+    private fun buildRecommendResponse(
+        response: HomeRecommendResponse?,
+        request: MainPageRequest,
+        page: Int
+    ): HomePageResponse {
         val items = response?.data?.items?.mapNotNull { item ->
-            // Prioritas 1: field "uri"
-            // Prioritas 2: bangun dari args.aid
-            // Prioritas 3: bangun dari args.season_id
             val uri = item.uri.normalizeRecommendUri()
                 ?: item.args?.aid?.let { "$mainUrl/id/video/$it" }
                 ?: item.args?.seasonId?.let { "$mainUrl/id/play/$it" }
@@ -284,8 +344,6 @@ class BStation : MainAPI() {
 
         println("$TAG: [RECOMMEND] page=$page -> items=${items.size}")
 
-        // API recommend biasanya tidak kirim flag has_next yang reliable.
-        // Strategi: selama masih ada items, anggap masih ada halaman berikutnya.
         val hasNext = items.isNotEmpty()
 
         return newHomePageResponse(
@@ -311,6 +369,7 @@ class BStation : MainAPI() {
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
         println("$TAG: [LOAD] URL = $url")
+        ensureCookies()
 
         val document = try {
             app.get(url).document
@@ -376,6 +435,37 @@ class BStation : MainAPI() {
                         break
                     }
 
+                    // Deteksi 412
+                    if (response.text.contains("错误号: 412")) {
+                        println("$TAG: [$tag] ⚠️ 412, refresh cookie & retry")
+                        cookiesReady = false
+                        ensureCookies()
+                        val retry = try { app.get(u, headers = apiHeaders) } catch (_: Exception) { null }
+                        if (retry != null && !retry.text.contains("错误号: 412")) {
+                            val resp = retry.parsedSafe<SeriesApiResponse>()
+                            val sections = resp?.data?.sectionsList ?: resp?.data?.sections
+                            if (!sections.isNullOrEmpty()) {
+                                val before = episodes.size
+                                sections.forEach { s ->
+                                    s.episodes?.forEach { ep ->
+                                        val id = ep.episodeId?.toString() ?: return@forEach
+                                        val t = ep.titleDisplay ?: ep.longTitleDisplay
+                                            ?: ep.shortTitleDisplay ?: "Episode"
+                                        val n = Regex("""E(\d+)""").find(t)
+                                            ?.groupValues?.get(1)?.toIntOrNull()
+                                        addEp(id, t, n, ep.cover.cleanImage() ?: poster)
+                                    }
+                                }
+                                if (episodes.size > before) {
+                                    anyAdded = true
+                                    page++
+                                    continue
+                                }
+                            }
+                        }
+                        break
+                    }
+
                     if (!rawLogged) {
                         println("$TAG: [RAW] $pageParam=$page: ${response.text.take(2500)}")
                         rawLogged = true
@@ -418,10 +508,10 @@ class BStation : MainAPI() {
             }
         }
 
-        // 1. Fetch primary season dengan pagination
+        // 1. Fetch primary season
         fetchSeason(primarySeasonId, "primary")
 
-        // 2. Merge HTML (fallback / tambahan)
+        // 2. Merge HTML
         val htmlBefore = episodes.size
         document.select("a.ep-item").forEach { el ->
             val href = el.attr("href").substringBefore("?")
@@ -450,7 +540,7 @@ class BStation : MainAPI() {
             related.forEach { sid -> fetchSeason(sid, "related") }
         }
 
-        // 4. Deteksi season dari field API (data.seasons)
+        // 4. Season dari API
         try {
             val u = "$apiUrl/intl/gateway/web/v2/ogv/play/series?" +
                     "s_locale=id_ID&platform=web&season_id=$primarySeasonId"
@@ -488,6 +578,7 @@ class BStation : MainAPI() {
         println("$TAG: ################################")
         println("$TAG: [loadLinks] DATA RAW = '$data'")
         println("$TAG: ################################")
+        ensureCookies()
 
         val pgcMatch = pgcRegex.find(data)
         val ugcMatch = ugcRegex.find(data)
@@ -530,26 +621,34 @@ class BStation : MainAPI() {
 
         for ((idx, attemptUrl) in attempts.withIndex()) {
             println("$TAG: [PGC] === Attempt ${idx + 1}/${attempts.size} ===")
-            println("$TAG: [PGC] URL -> $attemptUrl")
 
             try {
-                val resp = app.get(attemptUrl, headers = apiHeaders)
-                    .parsedSafe<PlayUrlResponse>()
+                var resp = app.get(attemptUrl, headers = apiHeaders)
 
-                if (resp == null) {
+                // Retry jika 412
+                if (resp.text.contains("错误号: 412")) {
+                    println("$TAG: [PGC] ⚠️ 412, refresh cookie & retry")
+                    cookiesReady = false
+                    ensureCookies()
+                    resp = app.get(attemptUrl, headers = apiHeaders)
+                }
+
+                val parsed = resp.parsedSafe<PlayUrlResponse>()
+
+                if (parsed == null) {
                     println("$TAG: [PGC] Attempt ${idx + 1}: parsedSafe=null")
                     continue
                 }
-                if (resp.data == null) {
+                if (parsed.data == null) {
                     println("$TAG: [PGC] Attempt ${idx + 1}: resp.data=null")
                     continue
                 }
-                if (resp.data.playurl == null) {
+                if (parsed.data.playurl == null) {
                     println("$TAG: [PGC] Attempt ${idx + 1}: playurl=null")
                     continue
                 }
 
-                val play = resp.data.playurl
+                val play = parsed.data.playurl
                 val videos = play.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
                 val audios = play.audioResource?.filter { !it.url.isNullOrBlank() } ?: emptyList()
                 val durlCount = play.durl?.size ?: 0
@@ -559,7 +658,6 @@ class BStation : MainAPI() {
                 println("$TAG: [PGC] Attempt ${idx + 1}: videos=${videos.size}, audios=${audios.size}, durl=$durlCount, dur=$durationSec")
 
                 if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                    println("$TAG: [PGC] Attempt ${idx + 1}: pakai durl")
                     play.durl.forEach { d ->
                         d.url?.let { directUrl ->
                             callback.invoke(
@@ -610,7 +708,7 @@ class BStation : MainAPI() {
                                 }
                             )
                         } catch (e: Exception) {
-                            println("$TAG: [PGC] Attempt ${idx + 1}: buildMpd err: ${e.message}")
+                            println("$TAG: [PGC] buildMpd err: ${e.message}")
                         }
                     }
                 }
@@ -848,7 +946,7 @@ class BStation : MainAPI() {
         @JsonProperty("title_display") val titleDisplay: String?
     )
 
-    // ====== Recommend API v2 data classes ======
+    // ====== Recommend API v2 ======
     data class HomeRecommendResponse(@JsonProperty("data") val data: HomeRecommendData?)
     data class HomeRecommendData(
         @JsonProperty("items") val items: List<HomeRecommendItem>?,

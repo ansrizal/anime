@@ -3,6 +3,7 @@ package com.bstation
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -96,7 +97,7 @@ class BStation : MainAPI() {
     private val apiUrl = "https://api.bilibili.tv"
     private val TAG = "BStation"
 
-    private val apiHeaders = mapOf(
+    private val apiHeaders: Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Referer" to "$mainUrl/id/",
         "Origin" to mainUrl,
@@ -140,7 +141,7 @@ class BStation : MainAPI() {
                     "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
             )
-            val setCookies = resp.headers["Set-Cookie"] ?: emptyList()
+            val setCookies: List<String> = resp.headers["Set-Cookie"] ?: emptyList()
             println("$TAG: [COOKIE] Set-Cookie count=${setCookies.size}")
             cookiesReady = true
         } catch (e: Exception) {
@@ -163,11 +164,11 @@ class BStation : MainAPI() {
     }
 
     private fun Element.extractPoster(): String? {
-        this.select("img").forEach { img ->
+        this.select("img").forEach { img: Element ->
             img.attr("src").cleanImage()?.let { return it }
             img.attr("data-src").cleanImage()?.let { return it }
         }
-        this.select("source").forEach { src ->
+        this.select("source").forEach { src: Element ->
             src.attr("srcset").substringBefore(",").substringBefore(" ").cleanImage()?.let { return it }
         }
         return null
@@ -212,28 +213,28 @@ class BStation : MainAPI() {
     //  CARD PARSER
     // ============================================================
     private fun Element.toSearchResult(): SearchResponse? {
-        val a = if (this.tagName() == "a") this
-        else this.selectFirst("a[href*=/play/], a[href*=/video/]") ?: return null
+        val a: Element = if (this.tagName() == "a") this
+        else (this.selectFirst("a[href*=/play/], a[href*=/video/]") ?: return null)
 
         val rawHref = a.attr("href").ifBlank { return null }
         val cleanHref = rawHref.substringBefore("?")
-        val fullUrl = when {
+        val fullUrl: String = when {
             cleanHref.startsWith("//") -> "https:$cleanHref"
             cleanHref.startsWith("/") -> "$mainUrl$cleanHref"
             else -> cleanHref
         }
         if (!fullUrl.contains("/play/") && !fullUrl.contains("/video/")) return null
 
-        val title = a.selectFirst("img")?.attr("alt")?.ifBlank { null }
+        val title: String = (a.selectFirst("img")?.attr("alt")?.ifBlank { null }
             ?: a.selectFirst(".bstar-video-card__title-text")?.text()?.ifBlank { null }
             ?: this.selectFirst(".bstar-video-card__title-text")?.text()?.ifBlank { null }
             ?: this.selectFirst(".card-title")?.text()?.ifBlank { null }
             ?: a.text().trim().ifBlank { null }
-            ?: return null
+            ?: return null)
         if (title.length < 2) return null
 
-        val poster = a.extractPoster() ?: this.extractPoster()
-        val type = if (fullUrl.contains("/play/")) TvType.Anime else TvType.Movie
+        val poster: String? = a.extractPoster() ?: this.extractPoster()
+        val type: TvType = if (fullUrl.contains("/play/")) TvType.Anime else TvType.Movie
 
         return newAnimeSearchResponse(title, fullUrl, type) {
             this.posterUrl = poster
@@ -257,10 +258,14 @@ class BStation : MainAPI() {
             return getRecommendPage(page, request)
         }
 
-        val document = app.get(request.data).document
-        val items: List<SearchResponse> = document.select(
+        val document: org.jsoup.nodes.Document = app.get(request.data).document
+        val elements: List<Element> = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
-        ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        ).toList()
+
+        val items: List<SearchResponse> = elements
+            .mapNotNull { el: Element -> el.toSearchResult() }
+            .distinctBy { it.url }
 
         return newHomePageResponse(
             HomePageList(request.name, items),
@@ -287,13 +292,12 @@ class BStation : MainAPI() {
             val resp = app.get(url, headers = apiHeaders)
             rawText = resp.text
             println("$TAG: [RECOMMEND RAW] page=$page len=${rawText.length} preview=${rawText.take(500)}")
-            // ✅ parsedSafe dipanggil pada Response, bukan String
-            response = resp.parsedSafe<HomeRecommendResponse>()
+            // ✅ pakai parseJson (fungsi statis) agar tidak tergantung resolusi extension
+            response = parseJson<HomeRecommendResponse>(rawText)
         } catch (e: Exception) {
             println("$TAG: [RECOMMEND] ❌ Error page $page: ${e.message}")
         }
 
-        // Deteksi 412 (security block)
         if (rawText.contains("错误号: 412")) {
             println("$TAG: [RECOMMEND] ⚠️ Terkena Error 412, refresh cookie & retry...")
             cookiesReady = false
@@ -301,7 +305,7 @@ class BStation : MainAPI() {
             try {
                 val retry = app.get(url, headers = apiHeaders)
                 rawText = retry.text
-                response = retry.parsedSafe<HomeRecommendResponse>()
+                response = parseJson<HomeRecommendResponse>(rawText)
             } catch (e: Exception) {
                 println("$TAG: [RECOMMEND] Retry gagal: ${e.message}")
             }
@@ -315,25 +319,27 @@ class BStation : MainAPI() {
         request: MainPageRequest,
         page: Int
     ): HomePageResponse {
-        val items: List<SearchResponse> = response?.data?.items?.mapNotNull { item ->
-            val uri = item.uri.normalizeRecommendUri()
+        val rawItems: List<HomeRecommendItem> = response?.data?.items ?: emptyList()
+
+        val items: List<SearchResponse> = rawItems.mapNotNull { item: HomeRecommendItem ->
+            val uri: String = item.uri.normalizeRecommendUri()
                 ?: item.args?.aid?.let { "$mainUrl/id/video/$it" }
                 ?: item.args?.seasonId?.let { "$mainUrl/id/play/$it" }
                 ?: return@mapNotNull null
 
-            val title = item.title?.ifBlank { null }
+            val title: String = item.title?.ifBlank { null }
                 ?: item.args?.title?.ifBlank { null }
                 ?: return@mapNotNull null
 
             if (title.length < 2) return@mapNotNull null
 
-            val poster = item.cover.cleanImage() ?: item.pic.cleanImage()
-            val type = if (uri.contains("/play/")) TvType.Anime else TvType.Movie
+            val poster: String? = item.cover.cleanImage() ?: item.pic.cleanImage()
+            val type: TvType = if (uri.contains("/play/")) TvType.Anime else TvType.Movie
 
             newAnimeSearchResponse(title, uri, type) {
                 this.posterUrl = poster
             }
-        } ?: emptyList()
+        }
 
         println("$TAG: [RECOMMEND] page=$page -> items=${items.size}")
 
@@ -350,10 +356,15 @@ class BStation : MainAPI() {
     // ============================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
-        val document = app.get(url).document
-        val items: List<SearchResponse> = document.select(
+        val document: org.jsoup.nodes.Document = app.get(url).document
+        val elements: List<Element> = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
-        ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        ).toList()
+
+        val items: List<SearchResponse> = elements
+            .mapNotNull { el: Element -> el.toSearchResult() }
+            .distinctBy { it.url }
+
         return items.toNewSearchResponseList()
     }
 
@@ -364,24 +375,23 @@ class BStation : MainAPI() {
         println("$TAG: [LOAD] URL = $url")
         ensureCookies()
 
-        val document = try {
+        val document: org.jsoup.nodes.Document = try {
             app.get(url).document
         } catch (e: Exception) {
             println("$TAG: [LOAD] ❌ app.get GAGAL: ${e.message}")
             return null
         }
 
-        val title = document.selectFirst("meta[property=og:title]")?.attr("content")
+        val title: String = document.selectFirst("meta[property=og:title]")?.attr("content")
             ?.substringBefore(" HD")?.substringBefore(" | ")?.ifBlank { null }
             ?: document.selectFirst(".bstar-meta__title a")?.text()?.ifBlank { null }
             ?: document.selectFirst("h1")?.text()?.ifBlank { null }
             ?: "Unknown"
 
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content").cleanImage()
-        val description = document.selectFirst(".bstar-meta__desc")?.text()?.ifBlank { null }
+        val poster: String? = document.selectFirst("meta[property=og:image]")?.attr("content").cleanImage()
+        val description: String? = document.selectFirst(".bstar-meta__desc")?.text()?.ifBlank { null }
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.ifBlank { null }
 
-        // ==== UGC video ====
         if (url.contains("/video/")) {
             val aidMatch = Regex("""/video/(\d+)""").find(url)
             val aid = aidMatch?.groupValues?.get(1) ?: return null
@@ -392,7 +402,6 @@ class BStation : MainAPI() {
             }
         }
 
-        // ==== PGC series ====
         val seasonMatch = Regex("""/play/(\d+)""").find(url) ?: return null
         val primarySeasonId = seasonMatch.groupValues[1]
         println("$TAG: [LOAD] → primary seasonId=$primarySeasonId")
@@ -433,16 +442,17 @@ class BStation : MainAPI() {
                         rawLogged = true
                     }
 
-                    val parsed = resp.parsedSafe<SeriesApiResponse>()
-                    val sections = parsed?.data?.sectionsList ?: parsed?.data?.sections
+                    val parsed: SeriesApiResponse? = parseJson<SeriesApiResponse>(resp.text)
+                    val sections: List<SeriesApiSection>? =
+                        parsed?.data?.sectionsList ?: parsed?.data?.sections
                     if (sections.isNullOrEmpty()) {
                         println("$TAG: [$tag] $pageParam=$page: sections null/kosong")
                         break
                     }
 
                     val before = episodes.size
-                    sections.forEach { s ->
-                        s.episodes?.forEach { ep ->
+                    sections.forEach { s: SeriesApiSection ->
+                        s.episodes?.forEach { ep: SeriesApiEpisode ->
                             val id = ep.episodeId?.toString() ?: return@forEach
                             val t = ep.titleDisplay ?: ep.longTitleDisplay
                                 ?: ep.shortTitleDisplay ?: "Episode"
@@ -470,12 +480,10 @@ class BStation : MainAPI() {
             }
         }
 
-        // 1. Fetch primary season
         fetchSeason(primarySeasonId, "primary")
 
-        // 2. Merge HTML
         val htmlBefore = episodes.size
-        document.select("a.ep-item").forEach { el ->
+        document.select("a.ep-item").forEach { el: Element ->
             val href = el.attr("href").substringBefore("?")
             val m = Regex("""/play/\d+/(\d+)""").find(href) ?: return@forEach
             val epId = m.groupValues[1]
@@ -488,9 +496,8 @@ class BStation : MainAPI() {
         }
         println("$TAG: [LOAD] HTML added=${episodes.size - htmlBefore} total=${episodes.size}")
 
-        // 3. Deteksi season terkait dari HTML
         val related = mutableSetOf<String>()
-        document.select("a[href]").forEach { el ->
+        document.select("a[href]").forEach { el: Element ->
             val href = el.attr("href").substringBefore("?").trimEnd('/')
             Regex("""/play/(\d+)$""").find(href)?.let {
                 val sid = it.groupValues[1]
@@ -499,15 +506,15 @@ class BStation : MainAPI() {
         }
         if (related.isNotEmpty()) {
             println("$TAG: [LOAD] Related seasons: $related")
-            related.forEach { sid -> fetchSeason(sid, "related") }
+            related.forEach { sid: String -> fetchSeason(sid, "related") }
         }
 
-        // 4. Season dari API
         try {
             val u = "$apiUrl/intl/gateway/web/v2/ogv/play/series?" +
                     "s_locale=id_ID&platform=web&season_id=$primarySeasonId"
-            val parsed = app.get(u, headers = apiHeaders).parsedSafe<SeriesApiResponse>()
-            parsed?.data?.seasons?.forEach { s ->
+            val resp = app.get(u, headers = apiHeaders)
+            val parsed: SeriesApiResponse? = parseJson<SeriesApiResponse>(resp.text)
+            parsed?.data?.seasons?.forEach { s: RelatedSeason ->
                 val sid = s.seasonId?.toString() ?: return@forEach
                 if (sid != primarySeasonId && sid !in related) {
                     println("$TAG: [LOAD] API related season: $sid (${s.title})")
@@ -594,22 +601,14 @@ class BStation : MainAPI() {
                     resp = app.get(attemptUrl, headers = apiHeaders)
                 }
 
-                val parsed = resp.parsedSafe<PlayUrlResponse>()
+                val parsed: PlayUrlResponse? = parseJson<PlayUrlResponse>(resp.text)
 
-                if (parsed == null) {
-                    println("$TAG: [PGC] Attempt ${idx + 1}: parsedSafe=null")
-                    continue
-                }
-                if (parsed.data == null) {
-                    println("$TAG: [PGC] Attempt ${idx + 1}: resp.data=null")
-                    continue
-                }
-                if (parsed.data.playurl == null) {
-                    println("$TAG: [PGC] Attempt ${idx + 1}: playurl=null")
+                if (parsed?.data?.playurl == null) {
+                    println("$TAG: [PGC] Attempt ${idx + 1}: data/playurl null")
                     continue
                 }
 
-                val play = parsed.data.playurl
+                val play = parsed.data!!.playurl!!
                 val videos = play.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
                 val audios = play.audioResource?.filter { !it.url.isNullOrBlank() } ?: emptyList()
                 val durlCount = play.durl?.size ?: 0
@@ -619,7 +618,7 @@ class BStation : MainAPI() {
                 println("$TAG: [PGC] Attempt ${idx + 1}: videos=${videos.size}, audios=${audios.size}, durl=$durlCount, dur=$durationSec")
 
                 if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                    play.durl.forEach { d ->
+                    play.durl.forEach { d: Durl ->
                         d.url?.let { directUrl ->
                             callback.invoke(
                                 newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
@@ -631,7 +630,7 @@ class BStation : MainAPI() {
                     }
                 }
 
-                videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
+                videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v: VideoItem ->
                     val vRes = v.videoResource ?: return@forEach
                     val vUrlRaw = vRes.url ?: return@forEach
                     val vQual = v.streamInfo?.quality ?: 32
@@ -689,12 +688,12 @@ class BStation : MainAPI() {
 
         try {
             val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&episode_id=$epId"
-            app.get(subUrl, headers = apiHeaders)
-                .parsedSafe<SubtitleApiResponse>()?.data?.subtitles
-                ?.forEach { sub ->
-                    val u = sub.url?.ifBlank { null } ?: return@forEach
-                    subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
-                }
+            val resp = app.get(subUrl, headers = apiHeaders)
+            val parsed: SubtitleApiResponse? = parseJson<SubtitleApiResponse>(resp.text)
+            parsed?.data?.subtitles?.forEach { sub: SubtitleItem ->
+                val u = sub.url?.ifBlank { null } ?: return@forEach
+                subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
+            }
         } catch (_: Exception) { }
 
         return any
@@ -714,7 +713,7 @@ class BStation : MainAPI() {
         try {
             val viewUrl = "$apiUrl/intl/gateway/web/view?aid=$aid&platform=web&s_locale=id_ID"
             val viewResp = app.get(viewUrl, headers = apiHeaders)
-            val viewParsed = viewResp.parsedSafe<ViewApiResponse>()
+            val viewParsed: ViewApiResponse? = parseJson<ViewApiResponse>(viewResp.text)
             cid = viewParsed?.data?.pages?.firstOrNull()?.cid?.toString()
                 ?: viewParsed?.data?.cid?.toString()
                 ?: Regex(""""cid":(\d+)""").find(viewResp.text)?.groupValues?.get(1)
@@ -741,14 +740,15 @@ class BStation : MainAPI() {
             val finalUrl = urlBuilder.toString()
             println("$TAG: [UGC] Fetch playurl -> $finalUrl")
 
-            val resp = app.get(finalUrl, headers = apiHeaders).parsedSafe<PlayUrlResponse>()
+            val resp = app.get(finalUrl, headers = apiHeaders)
+            val parsed: PlayUrlResponse? = parseJson<PlayUrlResponse>(resp.text)
 
-            if (resp == null || resp.data == null || resp.data.playurl == null) {
-                println("$TAG: [UGC] ERROR - resp/data/playurl null")
+            if (parsed?.data?.playurl == null) {
+                println("$TAG: [UGC] ERROR - data/playurl null")
                 return false
             }
 
-            val play = resp.data.playurl
+            val play = parsed.data!!.playurl!!
             val videos = play.video?.filter { !it.videoResource?.url.isNullOrBlank() } ?: emptyList()
             val audios = play.audioResource?.filter { !it.url.isNullOrBlank() } ?: emptyList()
             val durationSec = (play.duration ?: 0L) / 1000
@@ -757,7 +757,7 @@ class BStation : MainAPI() {
             println("$TAG: [UGC] videos=${videos.size}, audios=${audios.size}, dur=$durationSec")
 
             if (videos.isEmpty() && play.durl?.isNotEmpty() == true) {
-                play.durl.forEach { d ->
+                play.durl.forEach { d: Durl ->
                     d.url?.let { directUrl ->
                         callback.invoke(
                             newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
@@ -769,7 +769,7 @@ class BStation : MainAPI() {
                 }
             }
 
-            videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v ->
+            videos.sortedByDescending { it.streamInfo?.quality ?: 0 }.forEach { v: VideoItem ->
                 val vRes = v.videoResource ?: return@forEach
                 val vUrlRaw = vRes.url ?: return@forEach
                 val vQual = v.streamInfo?.quality ?: 32
@@ -819,12 +819,12 @@ class BStation : MainAPI() {
         try {
             val subUrl = "$apiUrl/intl/gateway/web/v2/subtitle?s_locale=id_ID&platform=web&aid=$aid" +
                     (cid?.let { "&cid=$it" } ?: "")
-            app.get(subUrl, headers = apiHeaders)
-                .parsedSafe<SubtitleApiResponse>()?.data?.subtitles
-                ?.forEach { sub ->
-                    val u = sub.url?.ifBlank { null } ?: return@forEach
-                    subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
-                }
+            val resp = app.get(subUrl, headers = apiHeaders)
+            val parsed: SubtitleApiResponse? = parseJson<SubtitleApiResponse>(resp.text)
+            parsed?.data?.subtitles?.forEach { sub: SubtitleItem ->
+                val u = sub.url?.ifBlank { null } ?: return@forEach
+                subtitleCallback.invoke(newSubtitleFile(sub.lan ?: "Unknown", u))
+            }
         } catch (_: Exception) { }
 
         println("$TAG: [UGC] Selesai, any=$any")
@@ -907,7 +907,6 @@ class BStation : MainAPI() {
         @JsonProperty("title_display") val titleDisplay: String?
     )
 
-    // ====== Recommend API v2 ======
     data class HomeRecommendResponse(@JsonProperty("data") val data: HomeRecommendData?)
     data class HomeRecommendData(
         @JsonProperty("items") val items: List<HomeRecommendItem>?,
@@ -933,7 +932,6 @@ class BStation : MainAPI() {
         @JsonProperty("title") val title: String?
     )
 
-    // ====== View / PlayUrl / Subtitle ======
     data class ViewApiResponse(@JsonProperty("data") val data: ViewApiData?)
     data class ViewApiData(
         @JsonProperty("aid") val aid: Long?,

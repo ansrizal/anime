@@ -66,6 +66,13 @@ class OppadramaProvider : MainAPI() {
         httpClient.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             println("[OppaDrama] ${response.code} len=${body.length} url=$url")
+            // Log 500 karakter pertama HTML agar kita tahu isinya apa
+            println("[OppaDrama] HEAD: ${body.take(500).replace('\n', ' ').replace('\r', ' ')}")
+            // Cek keberadaan marker kunci
+            println("[OppaDrama] has<article.bs>=${body.contains("article class=\"bs\"")} " +
+                    "has<listupd>=${body.contains("listupd")} " +
+                    "has<cloudflare>=${body.contains("cloudflare", ignoreCase = true)} " +
+                    "has<AccessDenied>=${body.contains("Access Denied")}")
             Jsoup.parse(body, url)
         }
     }

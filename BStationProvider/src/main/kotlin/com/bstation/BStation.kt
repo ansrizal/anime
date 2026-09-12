@@ -96,7 +96,6 @@ class BStation : MainAPI() {
     private val apiUrl = "https://api.bilibili.tv"
     private val TAG = "BStation"
 
-    // Header lengkap seperti browser Android asli
     private val apiHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         "Referer" to "$mainUrl/id/",
@@ -120,13 +119,11 @@ class BStation : MainAPI() {
     private val recommendEndpoint =
         "$apiUrl/intl/gateway/web/v2/home/recommend?s_locale=id_ID&platform=web"
 
-    // Flag untuk warm-up cookie (sekali saja per sesi)
     @Volatile
     private var cookiesReady = false
 
     // ============================================================
-    //  WARM-UP : kunjungi halaman utama untuk dapat cookie buvid3/buvid4
-    //  Tanpa ini, API Bilibili akan balas 412 Security Policy
+    //  WARM-UP
     // ============================================================
     private suspend fun ensureCookies() {
         if (cookiesReady) return
@@ -138,16 +135,13 @@ class BStation : MainAPI() {
             val resp = app.get(
                 "$mainUrl/id/",
                 headers = mapOf(
-                    "User-Agent" to apiHeaders["User-Agent"]!!,
+                    "User-Agent" to (apiHeaders["User-Agent"] ?: ""),
                     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
             )
             val setCookies = resp.headers["Set-Cookie"] ?: emptyList()
             println("$TAG: [COOKIE] Set-Cookie count=${setCookies.size}")
-            setCookies.forEach { c ->
-                println("$TAG: [COOKIE] ${c.take(120)}")
-            }
             cookiesReady = true
         } catch (e: Exception) {
             println("$TAG: [COOKIE] Warm-up gagal: ${e.message}")
@@ -264,7 +258,7 @@ class BStation : MainAPI() {
         }
 
         val document = app.get(request.data).document
-        val items = document.select(
+        val items: List<SearchResponse> = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
         ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
@@ -286,29 +280,28 @@ class BStation : MainAPI() {
 
         println("$TAG: [RECOMMEND] GET page=$page -> $url")
 
-        var rawText: String? = null
-        val response: HomeRecommendResponse? = try {
+        var rawText: String = ""
+        var response: HomeRecommendResponse? = null
+
+        try {
             val resp = app.get(url, headers = apiHeaders)
             rawText = resp.text
-            // Log preview untuk debug
-            println("$TAG: [RECOMMEND RAW] page=$page len=${rawText.length} preview=${rawText.take(400)}")
-            rawText.parsedSafe<HomeRecommendResponse>()
+            println("$TAG: [RECOMMEND RAW] page=$page len=${rawText.length} preview=${rawText.take(500)}")
+            // ✅ parsedSafe dipanggil pada Response, bukan String
+            response = resp.parsedSafe<HomeRecommendResponse>()
         } catch (e: Exception) {
             println("$TAG: [RECOMMEND] ❌ Error page $page: ${e.message}")
-            null
         }
 
         // Deteksi 412 (security block)
-        if (rawText != null && rawText.contains("错误号: 412")) {
-            println("$TAG: [RECOMMEND] ⚠️ Terkena Error 412, coba refresh cookie & retry...")
+        if (rawText.contains("错误号: 412")) {
+            println("$TAG: [RECOMMEND] ⚠️ Terkena Error 412, refresh cookie & retry...")
             cookiesReady = false
             ensureCookies()
-            // Retry sekali
             try {
                 val retry = app.get(url, headers = apiHeaders)
                 rawText = retry.text
-                val parsed = rawText.parsedSafe<HomeRecommendResponse>()
-                return buildRecommendResponse(parsed, request, page)
+                response = retry.parsedSafe<HomeRecommendResponse>()
             } catch (e: Exception) {
                 println("$TAG: [RECOMMEND] Retry gagal: ${e.message}")
             }
@@ -322,7 +315,7 @@ class BStation : MainAPI() {
         request: MainPageRequest,
         page: Int
     ): HomePageResponse {
-        val items = response?.data?.items?.mapNotNull { item ->
+        val items: List<SearchResponse> = response?.data?.items?.mapNotNull { item ->
             val uri = item.uri.normalizeRecommendUri()
                 ?: item.args?.aid?.let { "$mainUrl/id/video/$it" }
                 ?: item.args?.seasonId?.let { "$mainUrl/id/play/$it" }
@@ -358,7 +351,7 @@ class BStation : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
         val document = app.get(url).document
-        val items = document.select(
+        val items: List<SearchResponse> = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
         ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
         return items.toNewSearchResponseList()
@@ -428,51 +421,20 @@ class BStation : MainAPI() {
                             "s_locale=id_ID&platform=web&season_id=$sid" +
                             "&$pageParam=$page"
 
-                    val response = try {
+                    val resp = try {
                         app.get(u, headers = apiHeaders)
                     } catch (e: Exception) {
                         println("$TAG: [$tag] $pageParam=$page err: ${e.message}")
                         break
                     }
 
-                    // Deteksi 412
-                    if (response.text.contains("错误号: 412")) {
-                        println("$TAG: [$tag] ⚠️ 412, refresh cookie & retry")
-                        cookiesReady = false
-                        ensureCookies()
-                        val retry = try { app.get(u, headers = apiHeaders) } catch (_: Exception) { null }
-                        if (retry != null && !retry.text.contains("错误号: 412")) {
-                            val resp = retry.parsedSafe<SeriesApiResponse>()
-                            val sections = resp?.data?.sectionsList ?: resp?.data?.sections
-                            if (!sections.isNullOrEmpty()) {
-                                val before = episodes.size
-                                sections.forEach { s ->
-                                    s.episodes?.forEach { ep ->
-                                        val id = ep.episodeId?.toString() ?: return@forEach
-                                        val t = ep.titleDisplay ?: ep.longTitleDisplay
-                                            ?: ep.shortTitleDisplay ?: "Episode"
-                                        val n = Regex("""E(\d+)""").find(t)
-                                            ?.groupValues?.get(1)?.toIntOrNull()
-                                        addEp(id, t, n, ep.cover.cleanImage() ?: poster)
-                                    }
-                                }
-                                if (episodes.size > before) {
-                                    anyAdded = true
-                                    page++
-                                    continue
-                                }
-                            }
-                        }
-                        break
-                    }
-
                     if (!rawLogged) {
-                        println("$TAG: [RAW] $pageParam=$page: ${response.text.take(2500)}")
+                        println("$TAG: [RAW] $pageParam=$page: ${resp.text.take(2500)}")
                         rawLogged = true
                     }
 
-                    val resp = response.parsedSafe<SeriesApiResponse>()
-                    val sections = resp?.data?.sectionsList ?: resp?.data?.sections
+                    val parsed = resp.parsedSafe<SeriesApiResponse>()
+                    val sections = parsed?.data?.sectionsList ?: parsed?.data?.sections
                     if (sections.isNullOrEmpty()) {
                         println("$TAG: [$tag] $pageParam=$page: sections null/kosong")
                         break
@@ -492,7 +454,7 @@ class BStation : MainAPI() {
                     val added = episodes.size - before
                     println("$TAG: [$tag] $pageParam=$page: added=$added total=${episodes.size}")
 
-                    val hasNext = resp?.data?.pagination?.hasNext
+                    val hasNext = parsed?.data?.pagination?.hasNext
                     if (added == 0) break
                     anyAdded = true
                     if (hasNext == false) break
@@ -625,7 +587,6 @@ class BStation : MainAPI() {
             try {
                 var resp = app.get(attemptUrl, headers = apiHeaders)
 
-                // Retry jika 412
                 if (resp.text.contains("错误号: 412")) {
                     println("$TAG: [PGC] ⚠️ 412, refresh cookie & retry")
                     cookiesReady = false

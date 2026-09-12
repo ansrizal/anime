@@ -141,8 +141,9 @@ class BStation : MainAPI() {
                     "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7"
                 )
             )
-            val setCookies: List<String> = resp.headers["Set-Cookie"] ?: emptyList()
-            println("$TAG: [COOKIE] Set-Cookie count=${setCookies.size}")
+            // headers bertipe Map<String, String> → ambil sebagai String saja
+            val setCookie: String? = resp.headers["Set-Cookie"]
+            println("$TAG: [COOKIE] Set-Cookie=${setCookie?.take(120)}")
             cookiesReady = true
         } catch (e: Exception) {
             println("$TAG: [COOKIE] Warm-up gagal: ${e.message}")

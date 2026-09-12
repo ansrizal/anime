@@ -5,17 +5,21 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.Jsoup
 
 class OppadramaProvider : MainAPI() {
 
     // ====================================================================
-    //  UBAH HANYA BARIS INI jika IP server berubah.
-    //  Cek IP terbaru dengan membuka https://oppa.biz di browser —
-    //  browser akan di-redirect ke IP aktif (lihat address bar).
+    //  KONFIGURASI SERVER
+    //  Ubah SERVER_IP jika server berpindah. Cek IP terbaru dengan
+    //  membuka https://oppa.biz di browser dan melihat URL redirect.
     // ====================================================================
     private val SERVER_IP = "45.11.57.188"
+    private val HOST_HEADER = "oppa.biz"
     // ====================================================================
 
     override var mainUrl = "http://$SERVER_IP/"
@@ -30,8 +34,53 @@ class OppadramaProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
         "Upgrade-Insecure-Requests" to "1",
-        "Referer" to mainUrl,
+        "Referer" to "http://$HOST_HEADER/",
     )
+
+    init {
+        // Interceptor untuk memaksa Host header menjadi oppa.biz
+        // pada setiap request yang menuju SERVER_IP.
+        val hostInterceptor = Interceptor { chain ->
+            val originalRequest = chain.request()
+            val host = originalRequest.url.host
+            val newRequest = if (host == SERVER_IP) {
+                originalRequest.newBuilder()
+                    .header("Host", HOST_HEADER)
+                    .build()
+            } else {
+                originalRequest
+            }
+            chain.proceed(newRequest)
+        }
+
+        // Akses OkHttpClient dari CloudStream dan tambahkan interceptor.
+        // Caranya: app.baseClient adalah OkHttpClient yang dipakai CloudStream.
+        try {
+            val field = app.javaClass.getDeclaredField("baseClient")
+            field.isAccessible = true
+            val baseClient = field.get(app) as OkHttpClient
+            val newClient = baseClient.newBuilder()
+                .addInterceptor(hostInterceptor)
+                .build()
+            val setter = app.javaClass.getDeclaredField("baseClient")
+            setter.isAccessible = true
+            setter.set(app, newClient)
+        } catch (e: Exception) {
+            // Jika cara di atas gagal, coba pendekatan alternatif:
+            // gunakan property app.client (jika tersedia)
+            try {
+                val clientField = app.javaClass.getDeclaredField("client")
+                clientField.isAccessible = true
+                val baseClient = clientField.get(app) as OkHttpClient
+                val newClient = baseClient.newBuilder()
+                    .addInterceptor(hostInterceptor)
+                    .build()
+                clientField.set(app, newClient)
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+        }
+    }
 
     companion object {
         fun getStatus(t: String): ShowStatus = when (t) {

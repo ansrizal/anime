@@ -109,6 +109,10 @@ class BStation : MainAPI() {
     private val pgcRegex = Regex("""PGCEP_(\d+)""")
     private val ugcRegex = Regex("""UGC_(\d+)""")
 
+    // Endpoint API untuk kategori "Populer" (recommend feed)
+    private val recommendEndpoint =
+        "$apiUrl/intl/gateway/web/v2/home/recommend?s_locale=id_ID&platform=web"
+
     // ============================================================
     //  POSTER CLEANER
     // ============================================================
@@ -143,7 +147,40 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  CARD PARSER
+    //  URI NORMALIZER (untuk API recommend)
+    //  Bilibili kadang kirim URI dalam bentuk:
+    //    - bilibili://video/123456
+    //    - bilibili://pgc/season/xxx
+    //    - /id/video/123456
+    //    - https://www.bilibili.tv/id/play/xxx
+    // ============================================================
+    private fun String?.normalizeRecommendUri(): String? {
+        if (this.isNullOrBlank()) return null
+        val u = this.trim()
+        return when {
+            u.startsWith("http://") || u.startsWith("https://") -> u
+            u.startsWith("//") -> "https:$u"
+            u.startsWith("/") -> "$mainUrl$u"
+            u.startsWith("bilibili://video/") -> {
+                val id = u.removePrefix("bilibili://video/").substringBefore("/").substringBefore("?")
+                if (id.isBlank()) null else "$mainUrl/id/video/$id"
+            }
+            u.startsWith("bilibili://pgc/") -> {
+                // contoh: bilibili://pgc/season/12345  atau  bilibili://pgc/ep/67890
+                val rest = u.removePrefix("bilibili://pgc/")
+                val parts = rest.split("/").filter { it.isNotBlank() }
+                when {
+                    parts.size >= 2 && parts[0] == "season" -> "$mainUrl/id/play/${parts[1]}"
+                    parts.size >= 2 && parts[0] == "ep" -> "$mainUrl/id/play/${parts[1]}"
+                    else -> null
+                }
+            }
+            else -> null
+        }
+    }
+
+    // ============================================================
+    //  CARD PARSER (HTML)
     // ============================================================
     private fun Element.toSearchResult(): SearchResponse? {
         val a = if (this.tagName() == "a") this
@@ -178,25 +215,88 @@ class BStation : MainAPI() {
     //  MAIN PAGE
     // ============================================================
     override val mainPage = mainPageOf(
-        "$mainUrl/id/" to "Populer",
+        recommendEndpoint to "Populer",
         "$mainUrl/id/anime" to "Anime",
         "$mainUrl/id/trending" to "Trending",
         "$mainUrl/id/short-drama" to "Dracin",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        // Kategori "Populer" → pakai API recommend (infinite scroll)
+        if (request.data.contains("/intl/gateway/web/v2/home/recommend")) {
+            return getRecommendPage(page, request)
+        }
+
+        // Kategori lain → pakai HTML statis
         val document = app.get(request.data).document
-        val home = mutableListOf<HomePageList>()
         val items = document.select(
             "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
         ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
-        if (items.isNotEmpty()) {
-            home.add(HomePageList(request.name, items))
-        }
-        return newHomePageResponse(home, false)
+        return newHomePageResponse(
+            HomePageList(request.name, items),
+            hasNext = items.isNotEmpty()
+        )
     }
 
+    // ============================================================
+    //  RECOMMEND PAGE (API)
+    // ============================================================
+    private suspend fun getRecommendPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        // Halaman pertama pakai ps=50, berikutnya ps=20 (sesuai perilaku web)
+        val pageSize = if (page == 1) 50 else 20
+        val url = "${request.data}&pn=$page&ps=$pageSize"
+
+        println("$TAG: [RECOMMEND] GET page=$page -> $url")
+
+        val response: HomeRecommendResponse? = try {
+            app.get(url, headers = apiHeaders).parsedSafe<HomeRecommendResponse>()
+        } catch (e: Exception) {
+            println("$TAG: [RECOMMEND] ❌ Error page $page: ${e.message}")
+            null
+        }
+
+        val items = response?.data?.items?.mapNotNull { item ->
+            // Prioritas 1: field "uri"
+            // Prioritas 2: bangun dari args.aid
+            // Prioritas 3: bangun dari args.season_id
+            val uri = item.uri.normalizeRecommendUri()
+                ?: item.args?.aid?.let { "$mainUrl/id/video/$it" }
+                ?: item.args?.seasonId?.let { "$mainUrl/id/play/$it" }
+                ?: return@mapNotNull null
+
+            val title = item.title?.ifBlank { null }
+                ?: item.args?.title?.ifBlank { null }
+                ?: return@mapNotNull null
+
+            if (title.length < 2) return@mapNotNull null
+
+            val poster = item.cover.cleanImage() ?: item.pic.cleanImage()
+            val type = if (uri.contains("/play/")) TvType.Anime else TvType.Movie
+
+            newAnimeSearchResponse(title, uri, type) {
+                this.posterUrl = poster
+            }
+        } ?: emptyList()
+
+        println("$TAG: [RECOMMEND] page=$page -> items=${items.size}")
+
+        // API recommend biasanya tidak kirim flag has_next yang reliable.
+        // Strategi: selama masih ada items, anggap masih ada halaman berikutnya.
+        val hasNext = items.isNotEmpty()
+
+        return newHomePageResponse(
+            HomePageList(request.name, items),
+            hasNext = hasNext
+        )
+    }
+
+    // ============================================================
+    //  SEARCH
+    // ============================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
         val document = app.get(url).document
@@ -207,7 +307,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  LOAD (dengan deteksi episode berhalaman + multi-season)
+    //  LOAD
     // ============================================================
     override suspend fun load(url: String): LoadResponse? {
         println("$TAG: [LOAD] URL = $url")
@@ -748,6 +848,33 @@ class BStation : MainAPI() {
         @JsonProperty("title_display") val titleDisplay: String?
     )
 
+    // ====== Recommend API v2 data classes ======
+    data class HomeRecommendResponse(@JsonProperty("data") val data: HomeRecommendData?)
+    data class HomeRecommendData(
+        @JsonProperty("items") val items: List<HomeRecommendItem>?,
+        @JsonProperty("has_more") val hasMore: Boolean?,
+        @JsonProperty("next_offset") val nextOffset: String?
+    )
+    data class HomeRecommendItem(
+        @JsonProperty("uri") val uri: String?,
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("cover") val cover: String?,
+        @JsonProperty("pic") val pic: String?,
+        @JsonProperty("goto") val goto: String?,
+        @JsonProperty("card_type") val cardType: String?,
+        @JsonProperty("args") val args: RecommendArgs?
+    )
+    data class RecommendArgs(
+        @JsonProperty("aid") val aid: Long?,
+        @JsonProperty("bvid") val bvid: String?,
+        @JsonProperty("up_id") val upId: Long?,
+        @JsonProperty("up_name") val upName: String?,
+        @JsonProperty("season_id") val seasonId: Long?,
+        @JsonProperty("ep_id") val epId: Long?,
+        @JsonProperty("title") val title: String?
+    )
+
+    // ====== View / PlayUrl / Subtitle ======
     data class ViewApiResponse(@JsonProperty("data") val data: ViewApiData?)
     data class ViewApiData(
         @JsonProperty("aid") val aid: Long?,

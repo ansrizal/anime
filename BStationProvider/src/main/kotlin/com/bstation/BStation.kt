@@ -96,9 +96,10 @@ class BStation : MainAPI() {
     private val apiUrl = "https://api.bilibili.tv"
     private val apiHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
+        "Referer" to "$mainUrl/id/",
+        "Origin" to mainUrl,
         "Accept" to "application/json, text/plain, */*",
-        "Origin" to mainUrl
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
     )
 
     private val TAG = "BStation"
@@ -204,20 +205,75 @@ class BStation : MainAPI() {
 
         return try {
             val resp = app.get(url, headers = apiHeaders)
-            val parsed = resp.parsedSafe<HomeRecommendResponse>()
-            val cards = parsed?.data?.cards
-            if (cards.isNullOrEmpty()) {
-                println("$TAG: [RECOMMEND] pn=$page: cards kosong")
+
+            // >>> Log raw untuk diagnosa
+            println("$TAG: [RECOMMEND] pn=$page HTTP ${resp.code}")
+            println("$TAG: [RECOMMEND] raw: ${resp.text.take(600)}")
+
+            if (resp.code != 200) {
+                println("$TAG: [RECOMMEND] HTTP error ${resp.code}")
                 return emptyList()
             }
 
-            println("$TAG: [RECOMMEND] pn=$page: ${cards.size} cards, is_end=${parsed.data.isEnd}")
+            val parsed = resp.parsedSafe<HomeRecommendResponse>()
+            val cards = parsed?.data?.cards
 
-            cards.mapNotNull { it.toSearchResult() }
+            if (!cards.isNullOrEmpty()) {
+                println("$TAG: [RECOMMEND] pn=$page: ${cards.size} cards (parsedSafe), is_end=${parsed.data.isEnd}")
+                return cards.mapNotNull { it.toSearchResult() }
+            }
+
+            // >>> FALLBACK: parse manual pakai regex kalau parsedSafe gagal
+            println("$TAG: [RECOMMEND] parsedSafe gagal/kosong, coba fallback regex")
+            parseCardsManually(resp.text)
         } catch (e: Exception) {
             println("$TAG: [RECOMMEND] pn=$page err: ${e.message}")
+            e.printStackTrace()
             emptyList()
         }
+    }
+
+    // ============================================================
+    //  FALLBACK PARSER (regex) — dipakai kalau parsedSafe gagal
+    // ============================================================
+    private fun parseCardsManually(raw: String): List<SearchResponse> {
+        val results = mutableListOf<SearchResponse>()
+        // Regex sederhana: cari objek card ugc/ogv dengan field yang dibutuhkan
+        val cardRegex = Regex(
+            """\{"type":"(ugc|ogv)"[^{}]*?"card_type":"([^"]+)"[^{}]*?"title":"((?:[^"\\]|\\.)*)"[^{}]*?"cover":"((?:[^"\\]|\\.)*)"(?:[^{}]*?"aid":"(\d+)")?(?:[^{}]*?"season_id":"(\d+)")?"""
+        )
+        cardRegex.findAll(raw).forEach { m ->
+            val type = m.groupValues[1]
+            val cardType = m.groupValues[2]
+            val title = m.groupValues[3]
+                .replace("\\u0026", "&")
+                .replace("\\\"", "\"")
+                .replace("\\/", "/")
+            val cover = m.groupValues[4]
+                .substringBefore("@")
+                .substringBefore("?")
+                .replace("\\/", "/")
+            val aid = m.groupValues[5].ifBlank { null }
+            val sid = m.groupValues[6].ifBlank { null }
+
+            if (title.length < 2) return@forEach
+
+            val url = when {
+                cardType == "ogv_anime" && sid != null -> "$mainUrl/id/play/$sid"
+                cardType == "ugc_video" && aid != null -> "$mainUrl/id/video/$aid"
+                type == "ogv" && sid != null -> "$mainUrl/id/play/$sid"
+                type == "ugc" && aid != null -> "$mainUrl/id/video/$aid"
+                else -> null
+            } ?: return@forEach
+
+            val isAnime = cardType == "ogv_anime" || type == "ogv"
+            val resp = newAnimeSearchResponse(title, url, if (isAnime) TvType.Anime else TvType.Movie) {
+                this.posterUrl = cover.takeIf { it.isNotBlank() }
+            }
+            results.add(resp)
+        }
+        println("$TAG: [RECOMMEND] fallback regex hasil: ${results.size} cards")
+        return results
     }
 
     // ============================================================
@@ -234,7 +290,6 @@ class BStation : MainAPI() {
             ?.takeIf { it.isNotBlank() }
 
         return when {
-            // OGV: anime / series resmi → /play/{season_id}
             cardType == "ogv_anime" || type == "ogv" -> {
                 val sid = seasonId?.takeIf { it.isNotBlank() } ?: return null
                 val url = "$mainUrl/id/play/$sid"
@@ -242,7 +297,6 @@ class BStation : MainAPI() {
                     this.posterUrl = poster
                 }
             }
-            // UGC: video biasa → /video/{aid}
             cardType == "ugc_video" || type == "ugc" -> {
                 val videoAid = aid?.takeIf { it.isNotBlank() } ?: return null
                 val url = "$mainUrl/id/video/$videoAid"

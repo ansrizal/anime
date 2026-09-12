@@ -96,10 +96,9 @@ class BStation : MainAPI() {
     private val apiUrl = "https://api.bilibili.tv"
     private val apiHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/id/",
-        "Origin" to mainUrl,
+        "Referer" to "$mainUrl/",
         "Accept" to "application/json, text/plain, */*",
-        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin" to mainUrl
     )
 
     private val TAG = "BStation"
@@ -144,7 +143,7 @@ class BStation : MainAPI() {
     }
 
     // ============================================================
-    //  CARD PARSER (untuk hasil search HTML)
+    //  CARD PARSER
     // ============================================================
     private fun Element.toSearchResult(): SearchResponse? {
         val a = if (this.tagName() == "a") this
@@ -179,138 +178,25 @@ class BStation : MainAPI() {
     //  MAIN PAGE
     // ============================================================
     override val mainPage = mainPageOf(
-        "pop"    to "Populer",
-        "anime"  to "Anime",
-        "trend"  to "Trending",
-        "drama"  to "Dracin",
+        "$mainUrl/id/" to "Populer",
+        "$mainUrl/id/anime" to "Anime",
+        "$mainUrl/id/trending" to "Trending",
+        "$mainUrl/id/short-drama" to "Dracin",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val kind = request.data
-        val items = fetchHomeRecommend(page)
-        println("$TAG: [MAIN] kind=$kind pn=$page items=${items.size}")
-        val hasNext = items.isNotEmpty()
-        return newHomePageResponse(
-            listOf(HomePageList(request.name, items)),
-            hasNext
-        )
-    }
+        val document = app.get(request.data).document
+        val home = mutableListOf<HomePageList>()
+        val items = document.select(
+            "li.section__list__item, li.scroll-wrap__list__item, div.card-item, div.bstar-video-card"
+        ).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
-    // ============================================================
-    //  HOME RECOMMEND (infinite scroll — sesuai web aslinya)
-    // ============================================================
-    private suspend fun fetchHomeRecommend(page: Int): List<SearchResponse> {
-        val url = "$apiUrl/intl/gateway/web/v2/home/recommend" +
-                "?s_locale=id_ID&platform=web&pn=$page&ps=20"
-
-        return try {
-            val resp = app.get(url, headers = apiHeaders)
-
-            // >>> Log raw untuk diagnosa
-            println("$TAG: [RECOMMEND] pn=$page HTTP ${resp.code}")
-            println("$TAG: [RECOMMEND] raw: ${resp.text.take(600)}")
-
-            if (resp.code != 200) {
-                println("$TAG: [RECOMMEND] HTTP error ${resp.code}")
-                return emptyList()
-            }
-
-            val parsed = resp.parsedSafe<HomeRecommendResponse>()
-            val cards = parsed?.data?.cards
-
-            if (!cards.isNullOrEmpty()) {
-                println("$TAG: [RECOMMEND] pn=$page: ${cards.size} cards (parsedSafe), is_end=${parsed.data.isEnd}")
-                return cards.mapNotNull { it.toSearchResult() }
-            }
-
-            // >>> FALLBACK: parse manual pakai regex kalau parsedSafe gagal
-            println("$TAG: [RECOMMEND] parsedSafe gagal/kosong, coba fallback regex")
-            parseCardsManually(resp.text)
-        } catch (e: Exception) {
-            println("$TAG: [RECOMMEND] pn=$page err: ${e.message}")
-            e.printStackTrace()
-            emptyList()
+        if (items.isNotEmpty()) {
+            home.add(HomePageList(request.name, items))
         }
+        return newHomePageResponse(home, true)
     }
 
-    // ============================================================
-    //  FALLBACK PARSER (regex) — dipakai kalau parsedSafe gagal
-    // ============================================================
-    private fun parseCardsManually(raw: String): List<SearchResponse> {
-        val results = mutableListOf<SearchResponse>()
-        // Regex sederhana: cari objek card ugc/ogv dengan field yang dibutuhkan
-        val cardRegex = Regex(
-            """\{"type":"(ugc|ogv)"[^{}]*?"card_type":"([^"]+)"[^{}]*?"title":"((?:[^"\\]|\\.)*)"[^{}]*?"cover":"((?:[^"\\]|\\.)*)"(?:[^{}]*?"aid":"(\d+)")?(?:[^{}]*?"season_id":"(\d+)")?"""
-        )
-        cardRegex.findAll(raw).forEach { m ->
-            val type = m.groupValues[1]
-            val cardType = m.groupValues[2]
-            val title = m.groupValues[3]
-                .replace("\\u0026", "&")
-                .replace("\\\"", "\"")
-                .replace("\\/", "/")
-            val cover = m.groupValues[4]
-                .substringBefore("@")
-                .substringBefore("?")
-                .replace("\\/", "/")
-            val aid = m.groupValues[5].ifBlank { null }
-            val sid = m.groupValues[6].ifBlank { null }
-
-            if (title.length < 2) return@forEach
-
-            val url = when {
-                cardType == "ogv_anime" && sid != null -> "$mainUrl/id/play/$sid"
-                cardType == "ugc_video" && aid != null -> "$mainUrl/id/video/$aid"
-                type == "ogv" && sid != null -> "$mainUrl/id/play/$sid"
-                type == "ugc" && aid != null -> "$mainUrl/id/video/$aid"
-                else -> null
-            } ?: return@forEach
-
-            val isAnime = cardType == "ogv_anime" || type == "ogv"
-            val resp = newAnimeSearchResponse(title, url, if (isAnime) TvType.Anime else TvType.Movie) {
-                this.posterUrl = cover.takeIf { it.isNotBlank() }
-            }
-            results.add(resp)
-        }
-        println("$TAG: [RECOMMEND] fallback regex hasil: ${results.size} cards")
-        return results
-    }
-
-    // ============================================================
-    //  PARSER KARTU REKOMENDASI  (member extension → akses mainUrl & MainAPI)
-    // ============================================================
-    private fun HomeRecommendCard.toSearchResult(): SearchResponse? {
-        val t = title?.takeIf { it.isNotBlank() } ?: return null
-        if (t.length < 2) return null
-
-        val poster = cover
-            ?.substringBefore("@")
-            ?.substringBefore("?")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-
-        return when {
-            cardType == "ogv_anime" || type == "ogv" -> {
-                val sid = seasonId?.takeIf { it.isNotBlank() } ?: return null
-                val url = "$mainUrl/id/play/$sid"
-                newAnimeSearchResponse(t, url, TvType.Anime) {
-                    this.posterUrl = poster
-                }
-            }
-            cardType == "ugc_video" || type == "ugc" -> {
-                val videoAid = aid?.takeIf { it.isNotBlank() } ?: return null
-                val url = "$mainUrl/id/video/$videoAid"
-                newAnimeSearchResponse(t, url, TvType.Movie) {
-                    this.posterUrl = poster
-                }
-            }
-            else -> null
-        }
-    }
-
-    // ============================================================
-    //  SEARCH
-    // ============================================================
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/id/search-result?q=${query.replace(" ", "%20")}"
         val document = app.get(url).document
@@ -329,7 +215,7 @@ class BStation : MainAPI() {
         val document = try {
             app.get(url).document
         } catch (e: Exception) {
-            println("$TAG: [LOAD] ❌ app.get GAGAL: ${e.message}")
+            println("$TAG: [LOAD] âŒ app.get GAGAL: ${e.message}")
             return null
         }
 
@@ -347,7 +233,7 @@ class BStation : MainAPI() {
         if (url.contains("/video/")) {
             val aidMatch = Regex("""/video/(\d+)""").find(url)
             val aid = aidMatch?.groupValues?.get(1) ?: return null
-            println("$TAG: [LOAD] → UGC aid=$aid, data=$PREFIX_UGC$aid")
+            println("$TAG: [LOAD] â†’ UGC aid=$aid, data=$PREFIX_UGC$aid")
             return newMovieLoadResponse(title, url, TvType.Movie, "$PREFIX_UGC$aid") {
                 this.posterUrl = poster
                 this.plot = description
@@ -357,7 +243,7 @@ class BStation : MainAPI() {
         // ==== PGC series ====
         val seasonMatch = Regex("""/play/(\d+)""").find(url) ?: return null
         val primarySeasonId = seasonMatch.groupValues[1]
-        println("$TAG: [LOAD] → primary seasonId=$primarySeasonId")
+        println("$TAG: [LOAD] â†’ primary seasonId=$primarySeasonId")
 
         val seenIds = mutableSetOf<String>()
         val episodes = mutableListOf<Episode>()
@@ -509,16 +395,16 @@ class BStation : MainAPI() {
         return when {
             pgcMatch != null -> {
                 val epId = pgcMatch.groupValues[1]
-                println("$TAG: [loadLinks] ✅ PGC MATCH, epId='$epId'")
+                println("$TAG: [loadLinks] âœ… PGC MATCH, epId='$epId'")
                 loadPgc(epId, callback, subtitleCallback)
             }
             ugcMatch != null -> {
                 val aid = ugcMatch.groupValues[1]
-                println("$TAG: [loadLinks] ✅ UGC MATCH, aid='$aid'")
+                println("$TAG: [loadLinks] âœ… UGC MATCH, aid='$aid'")
                 loadUgc(aid, callback, subtitleCallback)
             }
             else -> {
-                println("$TAG: [loadLinks] ❌ TIDAK ADA MATCH di '$data'")
+                println("$TAG: [loadLinks] âŒ TIDAK ADA MATCH di '$data'")
                 false
             }
         }
@@ -577,7 +463,7 @@ class BStation : MainAPI() {
                     play.durl.forEach { d ->
                         d.url?.let { directUrl ->
                             callback.invoke(
-                                newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
+                                newExtractorLink(name, "ðŸ“º $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
                                     this.referer = "$mainUrl/"
                                 }
                             )
@@ -593,7 +479,7 @@ class BStation : MainAPI() {
                     val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
                     callback.invoke(
-                        newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
+                        newExtractorLink(name, "ðŸ“º $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
                             this.referer = "$mainUrl/"
                         }
                     )
@@ -619,7 +505,7 @@ class BStation : MainAPI() {
                             val dataUri = DashServer.publish(mpd)
 
                             callback.invoke(
-                                newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
+                                newExtractorLink(name, "ðŸŽ¬ $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
                                     this.referer = "$mainUrl/"
                                 }
                             )
@@ -630,7 +516,7 @@ class BStation : MainAPI() {
                 }
 
                 if (any) {
-                    println("$TAG: [PGC] ✅ BERHASIL attempt ${idx + 1}")
+                    println("$TAG: [PGC] âœ… BERHASIL attempt ${idx + 1}")
                     break
                 }
             } catch (e: Exception) {
@@ -639,7 +525,7 @@ class BStation : MainAPI() {
         }
 
         if (!any) {
-            println("$TAG: [PGC] ❌ SEMUA ENDPOINT GAGAL untuk ep_id=$epId")
+            println("$TAG: [PGC] âŒ SEMUA ENDPOINT GAGAL untuk ep_id=$epId")
         }
 
         try {
@@ -715,7 +601,7 @@ class BStation : MainAPI() {
                 play.durl.forEach { d ->
                     d.url?.let { directUrl ->
                         callback.invoke(
-                            newExtractorLink(name, "📺 $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
+                            newExtractorLink(name, "ðŸ“º $name (MP4)", directUrl, ExtractorLinkType.VIDEO) {
                                 this.referer = "$mainUrl/"
                             }
                         )
@@ -731,7 +617,7 @@ class BStation : MainAPI() {
                 val vLabel = v.streamInfo?.descWords?.ifBlank { null } ?: "${vQual}p"
 
                 callback.invoke(
-                    newExtractorLink(name, "📺 $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
+                    newExtractorLink(name, "ðŸ“º $vLabel (video)", vUrlRaw, ExtractorLinkType.VIDEO) {
                         this.referer = "$mainUrl/"
                     }
                 )
@@ -757,7 +643,7 @@ class BStation : MainAPI() {
                         val dataUri = DashServer.publish(mpd)
 
                         callback.invoke(
-                            newExtractorLink(name, "🎬 $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
+                            newExtractorLink(name, "ðŸŽ¬ $vLabel (DASH)", dataUri, ExtractorLinkType.DASH) {
                                 this.referer = "$mainUrl/"
                             }
                         )
@@ -833,29 +719,6 @@ class BStation : MainAPI() {
     // ============================================================
     //  DATA CLASSES
     // ============================================================
-
-    // ---- Home Recommend (infinite scroll) ----
-    data class HomeRecommendResponse(@JsonProperty("data") val data: HomeRecommendData?)
-
-    data class HomeRecommendData(
-        @JsonProperty("cards")   val cards: List<HomeRecommendCard>?,
-        @JsonProperty("is_end")  val isEnd: Boolean?
-    )
-
-    data class HomeRecommendCard(
-        @JsonProperty("type")        val type: String?,
-        @JsonProperty("card_type")   val cardType: String?,
-        @JsonProperty("title")       val title: String?,
-        @JsonProperty("cover")       val cover: String?,
-        @JsonProperty("aid")         val aid: String?,
-        @JsonProperty("season_id")   val seasonId: String?,
-        @JsonProperty("episode_id")  val episodeId: String?,
-        @JsonProperty("duration")    val duration: String?,
-        @JsonProperty("index_show")  val indexShow: String?,
-        @JsonProperty("view")        val view: String?
-    )
-
-    // ---- Series API (untuk load episode) ----
     data class SeriesApiResponse(@JsonProperty("data") val data: SeriesApiData?)
     data class SeriesApiData(
         @JsonProperty("sectionsList") val sectionsList: List<SeriesApiSection>?,
@@ -885,7 +748,6 @@ class BStation : MainAPI() {
         @JsonProperty("title_display") val titleDisplay: String?
     )
 
-    // ---- View API (UGC) ----
     data class ViewApiResponse(@JsonProperty("data") val data: ViewApiData?)
     data class ViewApiData(
         @JsonProperty("aid") val aid: Long?,
@@ -894,7 +756,6 @@ class BStation : MainAPI() {
     )
     data class ViewPage(@JsonProperty("cid") val cid: Long?)
 
-    // ---- PlayUrl API ----
     data class PlayUrlResponse(@JsonProperty("data") val data: PlayUrlData?)
     data class PlayUrlData(@JsonProperty("playurl") val playurl: PlayurlData?)
     data class PlayurlData(
@@ -938,7 +799,6 @@ class BStation : MainAPI() {
         @JsonProperty("segment_base") val segmentBase: SegmentBase?
     )
 
-    // ---- Subtitle API ----
     data class SubtitleApiResponse(@JsonProperty("data") val data: SubtitleApiData?)
     data class SubtitleApiData(@JsonProperty("subtitles") val subtitles: List<SubtitleItem>?)
     data class SubtitleItem(

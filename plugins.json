@@ -1,0 +1,812 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AlqanimeProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AlqanimeProvider",
+        "internalName": "AlqanimeProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AlqanimeProvider",
+        "fileSize": 68440,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-18d8e518165d72037c9896620935d1724d98e5a82e1e8003f2b71c2c678654ad"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AnichinProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AnichinProvider",
+        "internalName": "AnichinProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AnichinProvider",
+        "fileSize": 30733,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-9f7705b28c690afcc61ba87005b713a9cd5589c40643e721f68ce8b2ab441fe0"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Animasu.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Animasu",
+        "internalName": "Animasu",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Animasu",
+        "fileSize": 13849,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-4d3dbf37acb01a61220c86a0ee4e89aae1274cfda44a9fe4dcec019e4243ce1c"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AnimeIndo.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AnimeIndo",
+        "internalName": "AnimeIndo",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AnimeIndo",
+        "fileSize": 21474,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-b6a49d6d09f0936c9cb0ee44fb1720f72ec7271c7cb050f3dafed718ba67ed23"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AnimeSailProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AnimeSailProvider",
+        "internalName": "AnimeSailProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AnimeSailProvider",
+        "fileSize": 22228,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-a5766df2cd96eee27289c003fc900757c71755cc9fe08fedbd8de1e2cbe7a677"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AnimexinProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AnimexinProvider",
+        "internalName": "AnimexinProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AnimexinProvider",
+        "fileSize": 14343,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-3b0993dd8ec20f834e01de097446927fa3e3a236b69c2d17edab3a8a96408e5e"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/AnoboyProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "AnoboyProvider",
+        "internalName": "AnoboyProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for AnoboyProvider",
+        "fileSize": 51570,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-e5850c5f22824b0c2753e926cb231403d5027cc012ff2bafb0e414c22b1fbbf8"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/BStationProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "BStationProvider",
+        "internalName": "BStationProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for BStation",
+        "fileSize": 54441,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-5f6a011c94277f41fbc0dcc6b9a9eaf7be91c3d7496f5596dd63c14bef0df831"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Cinemax21Provider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Cinemax21Provider",
+        "internalName": "Cinemax21Provider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Cinemax21Provider",
+        "fileSize": 202703,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-43fcc4bca991c10ef19e804abcf4fd32e4acec5d06262d78aac53269371ee99e"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/DonghubProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "DonghubProvider",
+        "internalName": "DonghubProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for DonghubProvider",
+        "fileSize": 20440,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-c5652f63fdffa632843aac3b24f93ce2bb1d82d1f8d6546ebcf39ee666cd872f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/DrakorProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "DrakorProvider",
+        "internalName": "DrakorProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for DrakorProvider",
+        "fileSize": 200115,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-1f629dee0ec585bbb1820a0ffbc0638efecf35f1179400788ca95b3e2734a0e7"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/DubbindoProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "DubbindoProvider",
+        "internalName": "DubbindoProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for DubbindoProvider",
+        "fileSize": 26009,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-3666a3faca251b994c258f89813d2695b1197f998a504c30579278361e1d3f7a"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/DutamovieProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "DutamovieProvider",
+        "internalName": "DutamovieProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for DutamovieProvider",
+        "fileSize": 28095,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-b1e9449f142212f65748cba07bf38b41e8bac05de0d6731c2fd512f3be1c3675"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/FilmApikProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "FilmApikProvider",
+        "internalName": "FilmApikProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for FilmApik",
+        "fileSize": 22880,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-e61e3a58d6f427df62a0cfe205d3f73a093fd422d5e6264a89df544fd7ec7516"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Filmkita.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Filmkita",
+        "internalName": "Filmkita",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Filmkita",
+        "fileSize": 25341,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-35afd4e6f540f0ef274854008dd7020f1b9ba7be526ed326bcef7b53a2bf5a77"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Filmlokal.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Filmlokal",
+        "internalName": "Filmlokal",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Filmlokal",
+        "fileSize": 21554,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-3d88e46c521b883f72dc6cf50ef8626292b1c49cef075455962266ad8212b223"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Hanime.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Hanime",
+        "internalName": "Hanime",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Hanime",
+        "fileSize": 22797,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-ef15bf3a4688d499bc025c86c66d15b7786c56458a55fc59fe5d11e5070ec16f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/HidoriStreamProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "HidoriStreamProvider",
+        "internalName": "HidoriStreamProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for HidoriStreamProvider",
+        "fileSize": 45626,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-d470c8ffa072a2c1e5202c103382ceb7c42f7820eeeb01a69e795c18404a2e65"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/IdlixProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "IdlixProvider",
+        "internalName": "IdlixProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for IdlixProvider",
+        "fileSize": 44858,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-86bd2d026d3981fe3d14a734a2ad71eb99ff09c89871c8fb6d366232ac5f1592"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Indomax.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Indomax",
+        "internalName": "Indomax",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Indomax",
+        "fileSize": 21861,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-ff8ceb0d4363b5411752c2bf53b8800b65cb73fc7832e08d8eb34d4346f2996f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/IndoMax21Provider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "IndoMax21Provider",
+        "internalName": "IndoMax21Provider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for IndoMax21Provider",
+        "fileSize": 23913,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-58081498eb91c9700cf13e9b6fca715bb2380848e71f36dfee0e9648428b578e"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/IndoxxiProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "IndoxxiProvider",
+        "internalName": "IndoxxiProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for INDOXXI",
+        "fileSize": 20370,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-08b577a61199d51ed9b4fc8c27fac23ba17ef5d2ab86d70fc2a845e0a50521f5"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/JavHeyProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "JavHeyProvider",
+        "internalName": "JavHeyProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for JavHeyProvider",
+        "fileSize": 21584,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-15e8fac941816dcc832374d14dc9cdc125ef9a8d79d5b6e201c84e9a29c2a3c9"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Kawanfilm.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Kawanfilm",
+        "internalName": "Kawanfilm",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Kawanfilm",
+        "fileSize": 28666,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-f20332c77081ed3fa76fd2e33f78d58679aa70a8034e06b0829761e8051d4138"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/KlikXXi.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "KlikXXi",
+        "internalName": "KlikXXi",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for KlikXXi",
+        "fileSize": 21269,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-3e9f0e4d87c046a7fbbee0d44cbb11290479b8f6a1d6c3924eaedb085a7ad1b7"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/KlikxxiProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "KlikxxiProvider",
+        "internalName": "KlikxxiProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for KlikxxiProvider",
+        "fileSize": 20345,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-d8a6e549a867f1eb372e5999bf7cc5c6ed4b7b4049160fdaace0b29685e6e39a"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/KuramanimeProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "KuramanimeProvider",
+        "internalName": "KuramanimeProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for KuramanimeProvider",
+        "fileSize": 33987,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-76ff8c3f6dd077de3631c88684c27b8be4752ba95042af929df56f5106e77a05"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/KuronimeProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "KuronimeProvider",
+        "internalName": "KuronimeProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for KuronimeProvider",
+        "fileSize": 37512,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-7bdf18c3227e443cbbaa851919138fd106fe1bde5bcb5f175d0dd474eb23907b"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/LayarAsiaProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "LayarAsiaProvider",
+        "internalName": "LayarAsiaProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for LayarAsiaProvider",
+        "fileSize": 29234,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-8ebdebf07039818e37a34770fcc7859c344992e3a589a18c138d3b6157ddbba9"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/LayarKacaProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "LayarKacaProvider",
+        "internalName": "LayarKacaProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for LayarKacaProvider",
+        "fileSize": 30867,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-75ebf6eebf71bc898a428473dc6c984bee997a53723f2f7c210feaf3145d6903"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/LayarWarna.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "LayarWarna",
+        "internalName": "LayarWarna",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for LayarWarna",
+        "fileSize": 25493,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-6cb8651742fd2118501adb350db30797d1fbd2034f2792cdd4e04d2c5e00b6fe"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/MissAVProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "MissAVProvider",
+        "internalName": "MissAVProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for MissAV",
+        "fileSize": 16852,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-8bf7fdeb80f7fa85cc3e535e0b562598ce82474c24ceda4c57919d234c8acbbe"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/MovieboxProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "MovieboxProvider",
+        "internalName": "MovieboxProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for MovieboxProvider",
+        "fileSize": 31046,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-64f88df0659c0fb883ec4129c212574d8c3e84b856e94859f1df3fc232c39e89"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/NekopoiProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "NekopoiProvider",
+        "internalName": "NekopoiProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for NekopoiProvider",
+        "fileSize": 37579,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-5a0d6a9b9ffe1d22c7b9a3c599adecc683df73616e30f73a836140dd5c379cf8"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Ngefilm.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Ngefilm",
+        "internalName": "Ngefilm",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Ngefilm",
+        "fileSize": 23098,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-fc0baf30525525c561bdbd84e8500be541c3624e488fb3f2be825f89d2492c18"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/NgeFilm21Provider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "NgeFilm21Provider",
+        "internalName": "NgeFilm21Provider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for NgeFilm21Provider",
+        "fileSize": 28565,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-e8632cbd0c713ef7713e3f4f625171cbecc52f4ac799ddbc5e8bcea8f7d582b1"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/NimegamiProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "NimegamiProvider",
+        "internalName": "NimegamiProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for NimegamiProvider",
+        "fileSize": 24075,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-d61ea70860378aa3b5095be5a4949e8ddb856bf32d9260970936dd478e0b22c0"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/NomatProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "NomatProvider",
+        "internalName": "NomatProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for NomatProvider",
+        "fileSize": 16709,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-fe7847ed8655767ac2ccdf40b66b666aba8d1a18345a92275f12f6bcd0779710"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/NontonAnimeIDProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "NontonAnimeIDProvider",
+        "internalName": "NontonAnimeIDProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for NontonAnimeIDProvider",
+        "fileSize": 40303,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-a31a423c879ca1d91e5f1bdf105376e75d19f2c0f480a4c235e3783d08c61309"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Oploverz.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Oploverz",
+        "internalName": "Oploverz",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Oploverz",
+        "fileSize": 22178,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-63f06535e0ec87f225cdbdd004b3a608cadbec1db1d0b34910173bca45fe8cbd"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/OppaDramaProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "OppaDramaProvider",
+        "internalName": "OppaDramaProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for OppaDramaProvider",
+        "fileSize": 26383,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-d7811a8ff3437bd80b8a2abbba3d3ded79947e33b8814bf4228449a8526e2bb0"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/OtakudesuProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "OtakudesuProvider",
+        "internalName": "OtakudesuProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for OtakudesuProvider",
+        "fileSize": 35406,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-18dae1537b6bf0bcc2e6707fa2bb62e31b81eb6ec7278d3a85429ff1ced6459d"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Pahe.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Pahe",
+        "internalName": "Pahe",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Pahe",
+        "fileSize": 13056,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-2ac12cac4cc0a0a27931c5e8854b57991cd8102385de46cd3b8e0b6be8461d03"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Pencurimovie.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Pencurimovie",
+        "internalName": "Pencurimovie",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Pencurimovie",
+        "fileSize": 17676,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-7a53e1ce36d44c48c14ef3b21bb312864ab4358e6a17448d8f883c5942185362"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/PencuriMovieProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "PencuriMovieProvider",
+        "internalName": "PencuriMovieProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for PencuriMovieProvider",
+        "fileSize": 15208,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-a57a7b2b08586c6962a9023a86ddeabbf45bb6a496056b79918a0aba8c2c4196"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Pusatfilm.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Pusatfilm",
+        "internalName": "Pusatfilm",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Pusatfilm",
+        "fileSize": 19461,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-5e41b489efd57f90bcefc97dc58c4932820468feeabf3b4732667775d5dbadfc"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Pusatmovie.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Pusatmovie",
+        "internalName": "Pusatmovie",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Pusatmovie",
+        "fileSize": 24990,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-f43d9c12dcc05dff7ce39c52f12bc5476fc7aaac783d32fc4e8cd55e7b2ea3d4"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Rebahin.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Rebahin",
+        "internalName": "Rebahin",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Rebahin",
+        "fileSize": 19481,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-fe43640164a280069ea34cb1ac52d5800fe8b1cf3622a3c2f5aa41a801d48363"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/SamehadakuProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "SamehadakuProvider",
+        "internalName": "SamehadakuProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for SamehadakuProvider",
+        "fileSize": 29541,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-6c2520381d4c71f232d591b5024e28fd625df62adaca1948a02fc4bd949bfba9"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Sarangfilm.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Sarangfilm",
+        "internalName": "Sarangfilm",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Sarangfilm",
+        "fileSize": 31003,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-694f03b7ab791776bbf5e73387e81740772f8ed44bce1cc5c830cf40d17d91bb"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/Savefilm.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "Savefilm",
+        "internalName": "Savefilm",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for Savefilm",
+        "fileSize": 23255,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-6c81e9a68c1ba8d72c3466424856d2bf8d9807c601a5ebedbb151d873cab29ee"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/SemiRebahin.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "SemiRebahin",
+        "internalName": "SemiRebahin",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for SemiRebahin",
+        "fileSize": 15320,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-e329a931210445a6672b20a9dde3c352bf7407d3d936fb96480d103bad4cdd7f"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/SokujaProvider.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "SokujaProvider",
+        "internalName": "SokujaProvider",
+        "authors": [
+            "Ans Rizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for SokujaProvider",
+        "fileSize": 27558,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-a0e226c817fbfc63ed92bf120dcdfbcf75a3eea156a52ee84f00d1b736a91466"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/ansrizal/anime/builds/WGFilm21.cs3",
+        "status": 3,
+        "version": 1,
+        "name": "WGFilm21",
+        "internalName": "WGFilm21",
+        "authors": [
+            "ansrizal"
+        ],
+        "description": "CloudStream 3 streaming provider extension module for WGFilm21",
+        "fileSize": 25219,
+        "repositoryUrl": "https://github.com/ansrizal/anime",
+        "apiVersion": 1,
+        "fileHash": "sha256-d87a5e9adbaf00ca03600c21cefb8a540ad641b72d1c29b65c2da30368b25c49"
+    }
+]

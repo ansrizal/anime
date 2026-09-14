@@ -420,33 +420,27 @@ class FilmApikProvider : MainAPI() {
         return count
     }
 
-    /**
+        /**
      * Solve PoW — format input: "$nonce:$counter"
      * Port 1:1 dari pow-DEJGtdh2.js. Sudah diverifikasi di Node.js.
+     * 
+     * Tidak pakai bitwise atau timeout sama sekali — hanya max counter.
      */
-    private fun solvePoW(nonce: String, difficulty: Int, timeoutMs: Long = 30_000): String? {
+    private fun solvePoW(nonce: String, difficulty: Int, maxTries: Long = 100_000_000L): String? {
         if (difficulty <= 0) return "0"
         val prefix = "$nonce:"
-        val startTime = System.currentTimeMillis()
         var counter = 0L
-
-        while (true) {
+        while (counter < maxTries) {
             val input = (prefix + counter).toByteArray(Charsets.UTF_8)
             val hash = powHash(input)
             if (leadingZeroBits(hash) >= difficulty) {
                 return counter.toString()
             }
-            counter++
-
-            if ((counter and 0xFFFL) == 0L) {
-                if (System.currentTimeMillis() - startTime > timeoutMs) {
-                    println("[FilmApik] solvePoW timeout after $counter tries")
-                    return null
-                }
-            }
+            counter += 1L
         }
+        println("[FilmApik] solvePoW exhausted $maxTries tries")
+        return null
     }
-
     // ========================================================================
     // KEY DERIVATION
     // ========================================================================

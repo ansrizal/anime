@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -15,6 +16,7 @@ import org.jsoup.nodes.Element
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.security.KeyPairGenerator
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
@@ -247,7 +249,7 @@ class FilmApikProvider : MainAPI() {
 
         println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
 
-        // Process each player
+        // === Process each player — try ALL ===
         for ((serverName, url) in playerUrls) {
             try {
                 val ok = when {
@@ -255,8 +257,20 @@ class FilmApikProvider : MainAPI() {
                         println("[FilmApik] >>> FILEMOON: $url")
                         extractByseqekaho(url, serverName, callback)
                     }
+                    url.contains("strp2p.site") -> {
+                        println("[FilmApik] >>> STREAMP2P: $url")
+                        extractGeneric(url, serverName, "strp2p", callback)
+                    }
+                    url.contains("abyssplayer.com") -> {
+                        println("[FilmApik] >>> HYDRAX: $url")
+                        extractGeneric(url, serverName, "abyss", callback)
+                    }
+                    url.contains("efek.stream") -> {
+                        println("[FilmApik] >>> VIP SERVER: $url")
+                        extractGeneric(url, serverName, "efek", callback)
+                    }
                     else -> {
-                        println("[FilmApik] >>> Built-in: $url")
+                        println("[FilmApik] >>> BUILTIN: $url")
                         loadExtractor(fixUrl(url), subtitleCallback, callback)
                     }
                 }
@@ -267,6 +281,88 @@ class FilmApikProvider : MainAPI() {
         }
 
         return found
+    }
+
+    // ========================================================================
+    // GENERIC EXTRACTOR — untuk STREAMP2P, HYDRAX, VIP SERVER
+    // ========================================================================
+
+    private suspend fun extractGeneric(
+        playerUrl: String,
+        serverName: String,
+        tag: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+            val playerHtml = try {
+                app.get(playerUrl, headers = mapOf("User-Agent" to ua, "Referer" to "$mainUrl/"), timeout = 30).text
+            } catch (t: Throwable) {
+                println("[FilmApik] $tag fetch failed: ${t.message}"); return false
+            }
+
+            println("[FilmApik] $tag HTML length=${playerHtml.length}")
+
+            val found = mutableListOf<String>()
+
+            // 1. Direct m3u8/mp4 URL di HTML
+            Regex("""https?://[^\s"'<>\\]+?\.(m3u8|mp4)[^\s"'<>\\]*""").findAll(playerHtml).forEach { m ->
+                found.add(m.value.replace("\\/", "/"))
+            }
+
+            // 2. JSON config — cari "file":"...", "source":"...", "src":"..."
+            Regex(""""(?:file|source|src|url|playlist|hls)"\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"""").findAll(playerHtml).forEach { m ->
+                val u = m.groupValues[1].replace("\\/", "/")
+                if (!found.contains(u)) found.add(u)
+            }
+
+            // 3. Escaped URL di JS
+            Regex("""(https?:)?\\?/\\?/[^\s"'<>\\]+?\.(?:m3u8|mp4)""").findAll(playerHtml).forEach { m ->
+                val u = m.value.replace("\\/", "/").replace("\\", "")
+                if (u.startsWith("http") && !found.contains(u)) found.add(u)
+            }
+
+            // 4. src= attribute
+            Regex("""(?:src|data-src)=["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE).findAll(playerHtml).forEach { m ->
+                val u = m.groupValues[1].replace("\\/", "/")
+                if (!found.contains(u)) found.add(u)
+            }
+
+            println("[FilmApik] $tag found ${found.size} url(s): ${found.take(5)}")
+
+            if (found.isEmpty()) return false
+
+            var any = false
+            for (videoUrl in found.distinct()) {
+                try {
+                    val type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    val referer = try { "${java.net.URI(playerUrl).scheme}://${java.net.URI(playerUrl).host}/" }
+                        catch (_: Throwable) { "$mainUrl/" }
+                    callback(
+                        newExtractorLink(
+                            source = this.name,
+                            name = "$name - $serverName",
+                            url = videoUrl,
+                            type = type
+                        ) {
+                            this.referer = referer
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mapOf(
+                                "User-Agent" to ua,
+                                "Referer" to referer
+                            )
+                        }
+                    )
+                    any = true
+                } catch (_: Throwable) {}
+            }
+            any
+        } catch (t: Throwable) {
+            println("[FilmApik] extractGeneric($tag) error: ${t.message}")
+            false
+        }
     }
 
     // ========================================================================
@@ -285,6 +381,37 @@ class FilmApikProvider : MainAPI() {
     private fun rand16(): String {
         val b = ByteArray(16); SecureRandom().nextBytes(b); return b64UrlEncode(b)
     }
+
+    private fun hexDecode(s: String): ByteArray {
+        val clean = s.replace(Regex("[^0-9a-fA-F]"), "")
+        val out = ByteArray(clean.length / 2)
+        for (i in out.indices) {
+            out[i] = ((Character.digit(clean[i * 2], 16) shl 4) +
+                      Character.digit(clean[i * 2 + 1], 16)).toByte()
+        }
+        return out
+    }
+
+    private fun u32LE(v: Long) = byteArrayOf(
+        (v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte(),
+        ((v shr 16) and 0xFF).toByte(), ((v shr 24) and 0xFF).toByte()
+    )
+    private fun u32BE(v: Long) = byteArrayOf(
+        ((v shr 24) and 0xFF).toByte(), ((v shr 16) and 0xFF).toByte(),
+        ((v shr 8) and 0xFF).toByte(), (v and 0xFF).toByte()
+    )
+    private fun u64LE(v: Long) = byteArrayOf(
+        (v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte(),
+        ((v shr 16) and 0xFF).toByte(), ((v shr 24) and 0xFF).toByte(),
+        ((v shr 32) and 0xFF).toByte(), ((v shr 40) and 0xFF).toByte(),
+        ((v shr 48) and 0xFF).toByte(), ((v shr 56) and 0xFF).toByte()
+    )
+    private fun u64BE(v: Long) = byteArrayOf(
+        ((v shr 56) and 0xFF).toByte(), ((v shr 48) and 0xFF).toByte(),
+        ((v shr 40) and 0xFF).toByte(), ((v shr 32) and 0xFF).toByte(),
+        ((v shr 24) and 0xFF).toByte(), ((v shr 16) and 0xFF).toByte(),
+        ((v shr 8) and 0xFF).toByte(), (v and 0xFF).toByte()
+    )
 
     private fun postJsonRaw(url: String, body: String, headers: Map<String, String>): String {
         return try {
@@ -310,129 +437,61 @@ class FilmApikProvider : MainAPI() {
         }
     }
 
-    // ========================================================================
-    // CUSTOM HASH — dari JS bundle (fungsi gr)
-    // ========================================================================
-
-    private fun rotl(x: Int, n: Int): Int = (x shl n) or (x ushr (32 - n))
-
-    private fun mixYe(t: IntArray) {
-        t[0] = t[0] + t[1]
-        t[3] = rotl(t[3] xor t[0], 16)
-        t[2] = t[2] + t[3]
-        t[1] = rotl(t[1] xor t[2], 12)
-        t[0] = t[0] + t[1]
-        t[3] = rotl(t[3] xor t[0], 8)
-        t[2] = t[2] + t[3]
-        t[1] = rotl(t[1] xor t[2], 7)
-    }
-
-    /**
-     * Custom hash dari JS bundle (gr function).
-     * Input: bytes, Output: 8 Int32 (Uint32 in JS).
-     */
-    private fun customHash(input: ByteArray): IntArray {
-        // BLAKE2s IV
-        val e = intArrayOf(
-            0x6A09E667,
-            0xBB67AE85.toInt(),
-            0x3C6EF372,
-            0xA54FF53A.toInt()
-        )
-        // Absorb input
-        for (b in input) {
-            e[0] = e[0] + (b.toInt() and 0xFF)
-            e[0] = rotl(e[0], 7)
-            mixYe(e)
-        }
-        for (i in 0 until 8) mixYe(e)
-
-        // Expand to 512 Int32
-        val r = IntArray(512)
-        for (i in 0 until 512) {
-            mixYe(e)
-            r[i] = e[0] xor e[2]
-        }
-
-        // 2 rounds of mixing
-        val LR = 0x9E3779B1.toInt() // 2654435761
-        for (round in 0 until 2) {
-            for (s in 0 until 512) {
-                val a = r[s] and 511
-                var c = r[s] + r[a]
-                c = rotl(c, 13)
-                c = c xor (r[(s + 1) and 511] * LR)
-                r[s] = c
-                e[0] = e[0] xor c
-                mixYe(e)
+    private fun hasLeadingZeroBits(hash: ByteArray, difficulty: Int): Boolean {
+        var bitsLeft = difficulty
+        for (b in hash) {
+            if (bitsLeft <= 0) break
+            val byte = b.toInt() and 0xFF
+            if (bitsLeft >= 8) {
+                if (byte != 0) return false
+                bitsLeft -= 8
+            } else {
+                val mask = (0xFF shl (8 - bitsLeft)) and 0xFF
+                if ((byte and mask) != 0) return false
+                bitsLeft = 0
             }
         }
-
-        // Final 8 Int32 output
-        val n = IntArray(8)
-        val HR = 0x85EBCA77.toInt() // 2246822519
-        for (i in 0 until 8) {
-            mixYe(e)
-            var s = e[0]
-            val a = i * 64
-            for (c in 0 until 64) {
-                val d = r[a + c]
-                s = s + d
-                s = rotl(s, 5)
-                s = s xor (d * HR)
-            }
-            n[i] = s xor e[2]
-        }
-        return n
-    }
-
-    /** Hitung leading zero bits dari output hash (8 x Int32). */
-    private fun countLeadingZeroBits(hash: IntArray): Int {
-        var count = 0
-        for (h in hash) {
-            if (h == 0) { count += 32; continue }
-            count += Integer.numberOfLeadingZeros(h)
-            return count
-        }
-        return count
+        return bitsLeft == 0
     }
 
     // ========================================================================
-    // POW SOLVER — sesuai JS asli: input "nonce:counter" → custom hash
+    // POW MULTI-FORMAT
     // ========================================================================
 
-    private fun solveCustomPoW(
-        nonce: String,
-        difficulty: Int,
-        timeoutMs: Long = 30000L
-    ): String? {
-        if (difficulty <= 0) return "0"
-
-        val start = System.currentTimeMillis()
+    private fun solveWithFormat(
+        nonce: String, difficulty: Int,
+        buildInput: (String, Long) -> ByteArray
+    ): Long? {
+        val md = MessageDigest.getInstance("SHA-256")
         var counter = 0L
-        var iterations = 0L
-
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            for (batch in 0 until 1024) {
-                val str = "$nonce:$counter"
-                val bytes = ByteArray(str.length) {
-                    (str[it].code and 0xFF).toByte()
-                }
-                val hash = customHash(bytes)
-                if (countLeadingZeroBits(hash) >= difficulty) {
-                    println("[FilmApik] PoW FOUND! counter=$counter (took $iterations iters)")
-                    return counter.toString()
-                }
-                counter++
-                iterations++
-            }
+        val limit = 15_000_000L
+        while (counter < limit) {
+            md.reset()
+            val hash = md.digest(buildInput(nonce, counter))
+            if (hasLeadingZeroBits(hash, difficulty)) return counter
+            counter++
         }
-        println("[FilmApik] PoW timeout after $iterations iters")
         return null
     }
 
+    private data class CaptchaData(val powNonce: String, val powToken: String, val powDiff: Int)
+
+    private fun fetchCaptcha(
+        apiBase: String, code: String,
+        apiHeaders: Map<String, String>, fingerprint: JSONObject
+    ): CaptchaData? {
+        val body = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
+        val raw = postJsonRaw("$apiBase/api/videos/$code/embed/captcha", body, apiHeaders)
+        val json = try { JSONObject(raw) } catch (_: Throwable) { return null }
+        val nonce = json.optString("pow_nonce", "")
+        val token = json.optString("pow_token", "")
+        val diff = json.optInt("pow_difficulty", 16)
+        if (nonce.isBlank() || token.isBlank()) return null
+        return CaptchaData(nonce, token, diff)
+    }
+
     // ========================================================================
-    // KEY DERIVATION — versi 17 → key_parts[16], key_parts[13]
+    // KEY DERIVATION
     // ========================================================================
 
     private fun pickKeyPartsByVersion(keyParts: List<String>, version: String?): List<String> {
@@ -459,6 +518,43 @@ class FilmApikProvider : MainAPI() {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
             cipher.doFinal(payload)
         } catch (_: Throwable) { null }
+    }
+
+    // ========================================================================
+    // M3U8 URL EXTRACTION — decode JSON escapes
+    // ========================================================================
+
+    private fun extractM3u8Url(plain: String): String? {
+        // Unescape \\/ dan \\uXXXX
+        var s = plain
+            .replace("\\/", "/")
+            .replace("\\u0026", "&")
+            .replace("\\u003d", "=")
+            .replace("\\u003f", "?")
+            .replace("\\u002F", "/")
+            .replace("\\u002f", "/")
+
+        s = Regex("""\\u([0-9a-fA-F]{4})""").replace(s) { m ->
+            try { m.groupValues[1].toInt(16).toChar().toString() } catch (_: Throwable) { m.value }
+        }
+
+        // Coba parse JSON → walk semua field string
+        try {
+            val json = JSONObject(s)
+            val found = mutableListOf<String>()
+            fun walk(o: Any?) {
+                when (o) {
+                    is JSONObject -> o.keys().forEach { k -> walk(o.opt(k)) }
+                    is JSONArray -> (0 until o.length()).forEach { i -> walk(o.opt(i)) }
+                    is String -> if (o.contains(".m3u8")) found.add(o)
+                }
+            }
+            walk(json)
+            if (found.isNotEmpty()) return found.first()
+        } catch (_: Throwable) {}
+
+        // Fallback regex
+        return Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""").find(s)?.value
     }
 
     // ========================================================================
@@ -505,16 +601,11 @@ class FilmApikProvider : MainAPI() {
                 "x-embed-referer" to "$mainUrl/"
             )
 
-            // === Step 1: Challenge ===
             val challengeJson = JSONObject(postJsonRaw("$apiBase/api/videos/access/challenge", "{}", apiHeaders))
             val challengeId = challengeJson.optString("challenge_id", "")
             val nonce = challengeJson.optString("nonce", "")
-            if (challengeId.isBlank() || nonce.isBlank()) {
-                println("[FilmApik] byseqekaho: challenge failed")
-                return false
-            }
+            if (challengeId.isBlank() || nonce.isBlank()) return false
 
-            // === Step 2: EC P-256 keypair + attest ===
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
@@ -581,10 +672,7 @@ class FilmApikProvider : MainAPI() {
             val fpToken = attestJson.optString("token", "")
             val realViewer = attestJson.optString("viewer_id", viewerId)
             val realDevice = attestJson.optString("device_id", deviceId)
-            if (fpToken.isBlank()) {
-                println("[FilmApik] byseqekaho: attest failed")
-                return false
-            }
+            if (fpToken.isBlank()) return false
 
             val fingerprint = JSONObject().apply {
                 put("token", fpToken)
@@ -593,70 +681,93 @@ class FilmApikProvider : MainAPI() {
                 put("confidence", 0.95)
             }
 
-            // === Step 3: Fetch captcha ===
-            val captchaBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
-            val captchaRaw = postJsonRaw(
-                "$apiBase/api/videos/$code/embed/captcha",
-                captchaBody, apiHeaders
+            // === MULTI-FORMAT PoW RETRY ===
+            val formats = listOf(
+                Triple("str_cat",
+                    { n: String, c: Long -> (n + c.toString()).toByteArray() },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_str_cat",
+                    { n: String, c: Long -> hexDecode(n) + c.toString().toByteArray() },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_u32le",
+                    { n: String, c: Long -> hexDecode(n) + u32LE(c) },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_u32be",
+                    { n: String, c: Long -> hexDecode(n) + u32BE(c) },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_u64le",
+                    { n: String, c: Long -> hexDecode(n) + u64LE(c) },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_u64be",
+                    { n: String, c: Long -> hexDecode(n) + u64BE(c) },
+                    { c: Long -> c.toString() }),
+                Triple("str_cat_colon",
+                    { n: String, c: Long -> "$n:$c".toByteArray() },
+                    { c: Long -> c.toString() }),
+                Triple("hex_nonce_hex_sol",
+                    { n: String, c: Long -> hexDecode(n) + c.toString().toByteArray() },
+                    { c: Long -> java.lang.Long.toHexString(c) }),
+                Triple("str_cat_hex_sol",
+                    { n: String, c: Long -> (n + c.toString()).toByteArray() },
+                    { c: Long -> java.lang.Long.toHexString(c) })
             )
-            println("[FilmApik] byseqekaho: captcha response=$captchaRaw")
 
-            val captchaJson = try { JSONObject(captchaRaw) } catch (_: Throwable) { return false }
-            val powNonce = captchaJson.optString("pow_nonce", "")
-            val powToken = captchaJson.optString("pow_token", "")
-            val powDiff = captchaJson.optInt("pow_difficulty", 16)
+            var captchaToken: String? = null
 
-            if (powNonce.isBlank() || powToken.isBlank()) {
-                println("[FilmApik] byseqekaho: captcha fields missing")
+            for ((formatName, buildInput, buildSolution) in formats) {
+                val captcha = fetchCaptcha(apiBase, code, apiHeaders, fingerprint)
+                if (captcha == null) {
+                    println("[FilmApik] byseqekaho: [$formatName] captcha fetch failed")
+                    continue
+                }
+
+                val counter = withContext(Dispatchers.Default) {
+                    solveWithFormat(captcha.powNonce, captcha.powDiff, buildInput)
+                }
+                if (counter == null) {
+                    println("[FilmApik] byseqekaho: [$formatName] timeout")
+                    continue
+                }
+
+                val solutionStr = buildSolution(counter)
+
+                val verifyBody = JSONObject().apply {
+                    put("pow_token", captcha.powToken)
+                    put("solution", solutionStr)
+                    put("fingerprint", fingerprint)
+                }.toString()
+
+                val verifyRaw = postJsonRaw(
+                    "$apiBase/api/videos/$code/embed/captcha/verify",
+                    verifyBody, apiHeaders
+                )
+
+                val verifyJson = try { JSONObject(verifyRaw) } catch (_: Throwable) { continue }
+                val token = verifyJson.optString("token", "")
+                val status = verifyJson.optString("status", "")
+
+                if (token.isNotBlank()) {
+                    println("[FilmApik] byseqekaho: >>> OK format=$formatName counter=$counter")
+                    captchaToken = token
+                    break
+                }
+                println("[FilmApik] byseqekaho: [$formatName] fail status=$status counter=$counter")
+                delay(250)
+            }
+
+            if (captchaToken == null) {
+                println("[FilmApik] byseqekaho: ALL FORMATS FAILED")
                 return false
             }
 
-            println("[FilmApik] byseqekaho: pow_nonce=$powNonce diff=$powDiff")
-
-            // === Step 4: Solve PoW ===
-            val solution = withContext(Dispatchers.Default) {
-                solveCustomPoW(powNonce, powDiff)
-            } ?: run {
-                println("[FilmApik] byseqekaho: PoW timeout")
-                return false
-            }
-
-            println("[FilmApik] byseqekaho: solution=$solution")
-
-            // === Step 5: Verify captcha ===
-            val verifyBody = JSONObject().apply {
-                put("pow_token", powToken)
-                put("solution", solution)
-                put("fingerprint", fingerprint)
-            }.toString()
-
-            val verifyRaw = postJsonRaw(
-                "$apiBase/api/videos/$code/embed/captcha/verify",
-                verifyBody, apiHeaders
-            )
-            println("[FilmApik] byseqekaho: verify=$verifyRaw")
-
-            val verifyJson = try { JSONObject(verifyRaw) } catch (_: Throwable) { return false }
-            val captchaToken = verifyJson.optString("token", "")
-            if (captchaToken.isBlank()) {
-                println("[FilmApik] byseqekaho: captcha failed")
-                return false
-            }
-            println("[FilmApik] byseqekaho: captcha OK!")
-
-            // === Step 6: Playback ===
+            // === PLAYBACK ===
             val playbackBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
             val playbackRaw = postJsonRaw(
                 "$apiBase/api/videos/$code/embed/playback",
                 playbackBody, apiHeaders + mapOf("x-captcha-token" to captchaToken)
             )
-            println("[FilmApik] byseqekaho: playback length=${playbackRaw.length}")
 
-            val playbackJson = JSONObject(playbackRaw).optJSONObject("playback") ?: run {
-                println("[FilmApik] byseqekaho: no playback object")
-                return false
-            }
-
+            val playbackJson = JSONObject(playbackRaw).optJSONObject("playback") ?: return false
             val version = playbackJson.optString("version", "")
             val iv = b64UrlDecode(playbackJson.optString("iv"))
             val payload = b64UrlDecode(playbackJson.optString("payload"))
@@ -665,22 +776,16 @@ class FilmApikProvider : MainAPI() {
 
             println("[FilmApik] byseqekaho: version=$version, parts=${allParts.size}")
 
-            // === Step 7: Decrypt ===
             var plainStr: String? = null
-
-            // Strategi 1: version-based
             val picked = pickKeyPartsByVersion(allParts, version)
             if (picked.isNotEmpty()) {
                 val key = buildKeyFromParts(picked)
-                println("[FilmApik] byseqekaho: picked ${picked.size} parts, key_len=${key.size}")
                 val pt = tryAesGcmDecrypt(key, iv, payload)
                 if (pt != null) {
                     plainStr = String(pt, Charsets.UTF_8)
-                    println("[FilmApik] byseqekaho: DECRYPT OK (v-based)")
+                    println("[FilmApik] byseqekaho: DECRYPT OK (v=$version)")
                 }
             }
-
-            // Strategi 2: fallback coba semua pair (n, 31-n)
             if (plainStr == null) {
                 for (n in 1..20) {
                     val pair = pickKeyPartsByVersion(allParts, n.toString())
@@ -692,23 +797,20 @@ class FilmApikProvider : MainAPI() {
                     break
                 }
             }
+            if (plainStr == null) return false
 
-            if (plainStr == null) {
-                println("[FilmApik] byseqekaho: DECRYPT FAILED")
+            // === EXTRACT M3U8 URL (decode JSON escapes!) ===
+            val m3u8 = extractM3u8Url(plainStr) ?: run {
+                println("[FilmApik] byseqekaho: no m3u8 in: ${plainStr.take(500)}")
                 return false
             }
 
-            // === Step 8: Find m3u8 URL ===
-            val m3u8 = Regex("""https?://[^\s"'\\]+?\.m3u8[^\s"'\\]*""")
-                .find(plainStr)?.value?.replace("\\/", "/") ?: run {
-                    println("[FilmApik] byseqekaho: no m3u8 in: ${plainStr.take(300)}")
-                    return false
-                }
-
             println("[FilmApik] byseqekaho: m3u8 = $m3u8")
+            println("[FilmApik] byseqekaho: m3u8 length = ${m3u8.length}")
 
             val apiHost = try { java.net.URI(apiBase).host } catch (_: Throwable) { "f7hyg4q.org" }
 
+            // === CALLBACK — minimal headers (hapus Origin) ===
             callback(
                 newExtractorLink(
                     source = this.name,
@@ -720,16 +822,14 @@ class FilmApikProvider : MainAPI() {
                     this.quality = Qualities.Unknown.value
                     this.headers = mapOf(
                         "User-Agent" to ua,
-                        "Referer" to "https://$apiHost/",
-                        "Origin" to "https://$apiHost"
+                        "Referer" to "https://$apiHost/"
                     )
                 }
             )
-            return true
+            true
         } catch (t: Throwable) {
             println("[FilmApik] extractByseqekaho error: ${t.message}")
-            t.printStackTrace()
-            return false
+            false
         }
     }
 }

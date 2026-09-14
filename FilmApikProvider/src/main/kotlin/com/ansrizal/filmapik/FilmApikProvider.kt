@@ -178,10 +178,6 @@ class FilmApikProvider : MainAPI() {
         }
     }
 
-    // ========================================================================
-    // LOAD LINKS
-    // ========================================================================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -342,8 +338,8 @@ class FilmApikProvider : MainAPI() {
     }
 
     // ========================================================================
-    // CUSTOM HASH — port dari pow-DEJGtdh2.js (verified via Node.js)
-    // Semua operasi pakai Int (32-bit).
+    // CUSTOM HASH — port dari pow-DEJGtdh2.js
+    // Semua konstanta sudah dalam bentuk SIGNED Int (untuk hindari Long).
     // ========================================================================
 
     private fun rotl32(x: Int, n: Int): Int {
@@ -362,7 +358,15 @@ class FilmApikProvider : MainAPI() {
     }
 
     private fun powHash(input: ByteArray): IntArray {
-        val state = intArrayOf(1779033703, 3144134277, 1013904242, 2773480762)
+        // SHA-256 IVs dalam bentuk SIGNED Int
+        // 1779033703, 3144134277, 1013904242, 2773480762 (unsigned)
+        // 1779033703, -1150833019, 1013904242, -1521486534 (signed)
+        val state = intArrayOf(
+            1779033703,
+            -1150833019,
+            1013904242,
+            -1521486534
+        )
 
         for (b in input) {
             state[0] = state[0] + (b.toInt() and 0xFF)
@@ -379,8 +383,9 @@ class FilmApikProvider : MainAPI() {
         }
 
         val mask = 511
-        val c1 = -1640531527
-        val c2 = -2054677989
+        // 2654435761, 2246822519 (unsigned) → signed Int
+        val c1 = -1640531527   // 2654435761
+        val c2 = -2048144777   // 2246822519
 
         repeat(2) {
             for (s in 0 until 512) {
@@ -522,7 +527,6 @@ class FilmApikProvider : MainAPI() {
                 "x-embed-referer" to "$mainUrl/"
             )
 
-            // Step 3: Challenge
             val challengeJson = JSONObject(postJsonRaw("$apiBase/api/videos/access/challenge", "{}", apiHeaders))
             val challengeId = challengeJson.optString("challenge_id", "")
             val nonce = challengeJson.optString("nonce", "")
@@ -531,7 +535,6 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 4: Attest (ECDSA P-256)
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
@@ -611,7 +614,6 @@ class FilmApikProvider : MainAPI() {
                 put("confidence", 0.95)
             }
 
-            // Step 5: Captcha
             val captchaBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
             val captchaRaw = postJsonRaw("$apiBase/api/videos/$code/embed/captcha", captchaBody, apiHeaders)
             val captchaJson = try { JSONObject(captchaRaw) } catch (_: Throwable) { return false }
@@ -623,7 +625,6 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 6: Solve PoW
             val solution = withContext(Dispatchers.Default) {
                 solvePoW(powNonce, powDiff)
             }
@@ -633,7 +634,6 @@ class FilmApikProvider : MainAPI() {
             }
             println("[FilmApik] byseqekaho: solution=$solution")
 
-            // Step 7: Verify
             val verifyBody = JSONObject().apply {
                 put("pow_token", powToken)
                 put("solution", solution)
@@ -647,7 +647,6 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 8: Playback
             val playbackBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
             val playbackRaw = postJsonRaw(
                 "$apiBase/api/videos/$code/embed/playback",
@@ -667,7 +666,6 @@ class FilmApikProvider : MainAPI() {
 
             println("[FilmApik] byseqekaho: version=$version, parts=${allParts.size}")
 
-            // Step 9: Decrypt
             var plainStr: String? = null
             val picked = pickKeyPartsByVersion(allParts, version)
             if (picked.isNotEmpty()) {
@@ -694,7 +692,6 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 10: Parse JSON — ambil .sources[].url
             var m3u8: String? = null
             try {
                 val json = JSONObject(plainStr)

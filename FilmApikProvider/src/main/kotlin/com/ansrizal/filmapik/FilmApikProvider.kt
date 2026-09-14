@@ -180,78 +180,118 @@ class FilmApikProvider : MainAPI() {
     // ========================================================================
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val response = request(data)
-        val html = response.text
-        var found = false
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+    val response = request(data)
+    val html = response.text
+    var found = false
 
-        // 1. Parse window.famvServers
-        val playerUrls = mutableListOf<Pair<String, String>>()
-        Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
-            .find(html)?.groupValues?.get(1)?.let { serversJson ->
-                Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"select"[^}]*?"url"\s*:\s*"([^"]+)"""")
-                    .findAll(serversJson).forEach { m ->
-                        val name = m.groupValues[1]
-                        val url = m.groupValues[2].replace("\\/", "/")
-                        if (url.startsWith("http")) playerUrls.add(name to url)
-                    }
-            }
+    // === DEBUG: Print HTML head ===
+    println("[FilmApik] HTML length=${html.length}")
+    println("[FilmApik] HTML HEAD:\n${html.take(1500)}")
+    println("[FilmApik] HTML contains famvServers=${html.contains("famvServers")}")
+    println("[FilmApik] HTML contains byseqekaho=${html.contains("byseqekaho")}")
+    println("[FilmApik] HTML contains iframe=${html.contains("<iframe")}")
 
-        // 2. Fallback: dari HTML player-list
-        if (playerUrls.isEmpty()) {
-            response.document.select("#player-list li a, .player-option, .famv-server-btn").forEach { a ->
-                val url = a.attr("data-url").ifBlank { a.attr("href") }
-                val name = a.attr("data-server").ifBlank { a.text().trim() }
-                if (url.startsWith("http")) playerUrls.add(name to url)
-            }
-        }
+    // === Collect player URLs ===
+    val playerUrls = mutableListOf<Pair<String, String>>() // (name, url)
+    val seenUrls = mutableSetOf<String>()
 
-        // 3. Fallback: iframes
-        if (playerUrls.isEmpty()) {
-            response.document.select("iframe").forEach { iframe ->
-                var src = iframe.attr("src")
-                if (src.startsWith("//")) src = "https:$src"
-                if (src.isNotBlank() &&
-                    !src.contains("facebook.com") &&
-                    !src.contains("twitter.com") &&
-                    !src.contains("google.com") &&
-                    !src.contains("youtube.com")
-                ) {
-                    playerUrls.add("iframe" to src)
-                }
-            }
-        }
-
-        println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
-
-        // 4. Proses tiap player
-        for ((serverName, url) in playerUrls) {
-            try {
-                when {
-                    url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
-                        println("[FilmApik] Trying custom byseqekaho: $serverName -> $url")
-                        if (extractByseqekaho(url, serverName, callback)) found = true
-                    }
-                    url.contains("buzzheavier.com") -> {
-                        if (loadExtractor(url, subtitleCallback, callback)) found = true
-                    }
-                    else -> {
-                        println("[FilmApik] Trying built-in: $serverName -> $url")
-                        if (loadExtractor(fixUrl(url), subtitleCallback, callback)) found = true
-                    }
-                }
-            } catch (t: Throwable) {
-                println("[FilmApik] Player $serverName failed: ${t.message}")
-            }
-        }
-
-        return found
+    fun addPlayer(name: String, url: String) {
+        val u = url.trim().replace("\\/", "/")
+        if (u.isBlank()) return
+        if (u.startsWith("//")) return addPlayer(name, "https:$u")
+        if (!u.startsWith("http")) return
+        // Skip known non-player domains
+        if (u.contains("facebook.com") || u.contains("twitter.com") ||
+            u.contains("google.com") || u.contains("youtube.com") ||
+            u.contains("gstatic.com") || u.contains("googleapis.com") ||
+            u.contains("instagram.com") || u.contains("sharethis.com") ||
+            u.contains("histats.com") || u.contains("cloudflareinsights.com") ||
+            u.contains("googletagmanager.com") || u.contains("wp-json") ||
+            u.contains("wp-content") || u.contains("wp-includes") ||
+            u.contains("admin-ajax")
+        ) return
+        if (!seenUrls.add(u)) return
+        playerUrls.add(name to u)
     }
 
+    // === Strategy 1: window.famvServers JSON ===
+    Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
+        .find(html)?.groupValues?.get(1)?.let { serversJson ->
+            println("[FilmApik] famvServers JSON found, length=${serversJson.length}")
+            Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"select"\s*:\s*"[^"]*"\s*,\s*"idioma"\s*:\s*"[^"]*"\s*,\s*"url"\s*:\s*"([^"]+)"""")
+                .findAll(serversJson).forEach { m ->
+                    addPlayer(m.groupValues[1], m.groupValues[2])
+                }
+            // Alternatif: parsing lebih longgar
+            if (playerUrls.isEmpty()) {
+                Regex(""""url"\s*:\s*"([^"]+)"""").findAll(serversJson).forEach { m ->
+                    addPlayer("player", m.groupValues[1])
+                }
+            }
+        }
+
+    // === Strategy 2: DOM anchors dengan data-url ===
+    if (playerUrls.isEmpty()) {
+        response.document.select("a[data-url], a.player-option, a.famv-server-btn, #player-list a, .player-option").forEach { a ->
+            val url = a.attr("data-url").ifBlank { a.attr("href") }
+            val name = a.attr("data-server").ifBlank { a.text().trim() }
+            addPlayer(name.ifBlank { "player" }, url)
+        }
+    }
+
+    // === Strategy 3: DOM iframes (dengan src asli) ===
+    if (playerUrls.isEmpty()) {
+        response.document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
+            addPlayer("iframe", src)
+        }
+    }
+
+    // === Strategy 4: Regex brutal — cari semua URL player di HTML mentah ===
+    if (playerUrls.isEmpty()) {
+        println("[FilmApik] Trying brutal regex fallback")
+        val patterns = listOf(
+            "byseqekaho", "f7hyg4q", "strp2p", "abyssplayer", "efek.stream",
+            "filemoon", "streamwish", "mixdrop", "doodstream", "voe.sx",
+            "vidoza", "upstream", "filelions", "mp4upload", "streamtape",
+            "turbovidhls", "netu", "waaw", "ok.ru", "buzzheavier"
+        )
+        val urlRegex = Regex("""https?://[^\s"'<>\\]+""")
+        urlRegex.findAll(html).forEach { m ->
+            val u = m.value
+            if (patterns.any { u.contains(it, ignoreCase = true) }) {
+                addPlayer("regex", u)
+            }
+        }
+    }
+
+    println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
+
+    // === Process each player ===
+    for ((serverName, url) in playerUrls) {
+        try {
+            when {
+                url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
+                    println("[FilmApik] Trying custom byseqekaho: $serverName -> $url")
+                    if (extractByseqekaho(url, serverName, callback)) found = true
+                }
+                else -> {
+                    println("[FilmApik] Trying built-in: $serverName -> $url")
+                    if (loadExtractor(fixUrl(url), subtitleCallback, callback)) found = true
+                }
+            }
+        } catch (t: Throwable) {
+            println("[FilmApik] Player $serverName failed: ${t.message}")
+        }
+    }
+
+    return found
+}
     // ========================================================================
     // Helpers
     // ========================================================================

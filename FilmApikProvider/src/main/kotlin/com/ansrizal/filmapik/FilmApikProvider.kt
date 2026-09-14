@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.NiceResponse
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -343,10 +342,13 @@ class FilmApikProvider : MainAPI() {
     }
 
     // ========================================================================
-    // CUSTOM HASH — port dari pow-DEJGtdh2.js (verified works!)
+    // CUSTOM HASH — port dari pow-DEJGtdh2.js (verified via Node.js)
+    // Semua operasi pakai Int (32-bit).
     // ========================================================================
 
-    private fun rotl32(x: Int, n: Int): Int = (x shl n) or (x ushr (32 - n))
+    private fun rotl32(x: Int, n: Int): Int {
+        return (x shl n) or (x ushr (32 - n))
+    }
 
     private fun powMixer(t: IntArray) {
         t[0] = t[0] + t[1]
@@ -360,14 +362,14 @@ class FilmApikProvider : MainAPI() {
     }
 
     private fun powHash(input: ByteArray): IntArray {
-        val state = intArrayOf(
-            1779033703, 3144134277, 1013904242, 2773480762
-        )
+        val state = intArrayOf(1779033703, 3144134277, 1013904242, 2773480762)
+
         for (b in input) {
             state[0] = state[0] + (b.toInt() and 0xFF)
             state[0] = rotl32(state[0], 7)
             powMixer(state)
         }
+
         repeat(8) { powMixer(state) }
 
         val r = IntArray(512)
@@ -377,8 +379,8 @@ class FilmApikProvider : MainAPI() {
         }
 
         val mask = 511
-        val c1 = 0x9E3779B1.toInt()
-        val c2 = 0x85EBCA77.toInt()
+        val c1 = -1640531527
+        val c2 = -2054677989
 
         repeat(2) {
             for (s in 0 until 512) {
@@ -399,7 +401,7 @@ class FilmApikProvider : MainAPI() {
             val base = i * 64
             for (c in 0 until 64) {
                 val d = r[base + c]
-                s += d
+                s = s + d
                 s = rotl32(s, 5)
                 s = s xor (d * c2)
             }
@@ -420,27 +422,23 @@ class FilmApikProvider : MainAPI() {
         return count
     }
 
-        /**
-     * Solve PoW — format input: "$nonce:$counter"
-     * Port 1:1 dari pow-DEJGtdh2.js. Sudah diverifikasi di Node.js.
-     * 
-     * Tidak pakai bitwise atau timeout sama sekali — hanya max counter.
-     */
-    private fun solvePoW(nonce: String, difficulty: Int, maxTries: Long = 100_000_000L): String? {
+    private fun solvePoW(nonce: String, difficulty: Int): String? {
         if (difficulty <= 0) return "0"
         val prefix = "$nonce:"
-        var counter = 0L
+        val maxTries = 100_000_000
+        var counter = 0
         while (counter < maxTries) {
             val input = (prefix + counter).toByteArray(Charsets.UTF_8)
             val hash = powHash(input)
             if (leadingZeroBits(hash) >= difficulty) {
                 return counter.toString()
             }
-            counter += 1L
+            counter += 1
         }
         println("[FilmApik] solvePoW exhausted $maxTries tries")
         return null
     }
+
     // ========================================================================
     // KEY DERIVATION
     // ========================================================================
@@ -533,7 +531,7 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 4: Attest
+            // Step 4: Attest (ECDSA P-256)
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
@@ -696,8 +694,7 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
 
-            // Step 10: Parse JSON response (bukan regex!)
-            // Response format: {"sources":[{"url":"...","mime_type":"application/vnd.apple.mpegurl",...}],"tracks":[...],...}
+            // Step 10: Parse JSON — ambil .sources[].url
             var m3u8: String? = null
             try {
                 val json = JSONObject(plainStr)
@@ -713,9 +710,7 @@ class FilmApikProvider : MainAPI() {
                     }
                 }
             } catch (t: Throwable) {
-                println("[FilmApik] byseqekaho: JSON parse failed, fallback regex: ${t.message}")
-                m3u8 = Regex(""""url"\s*:\s*"(https?:[^"]+\.m3u8[^"]*)"""")
-                    .find(plainStr)?.groupValues?.get(1)?.replace("\\/", "/")
+                println("[FilmApik] byseqekaho: JSON parse failed: ${t.message}")
             }
 
             if (m3u8.isNullOrBlank()) {

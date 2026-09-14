@@ -11,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
@@ -36,7 +37,24 @@ class FilmApikProvider : MainAPI() {
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Referer" to "$mainUrl/",
+        "Referer" to "$mainUrl/"
+    )
+
+    private val fullHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Cache-Control" to "max-age=0",
+        "DNT" to "1",
+        "Upgrade-Insecure-Requests" to "1",
+        "Sec-Fetch-Dest" to "document",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Site" to "same-origin",
+        "Sec-Fetch-User" to "?1",
+        "sec-ch-ua" to "\"Chromium\";v=\"128\", \"Not_A Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+        "sec-ch-ua-mobile" to "?0",
+        "sec-ch-ua-platform" to "\"Windows\"",
+        "Referer" to "$mainUrl/"
     )
 
     private suspend fun request(url: String): NiceResponse {
@@ -57,7 +75,7 @@ class FilmApikProvider : MainAPI() {
         "tvshows-genre/k-drama/" to "Drama Korea",
         "category/action/" to "Action",
         "category/comedy/" to "Comedy",
-        "category/horror/" to "Horror",
+        "category/horror/" to "Horror"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -175,10 +193,6 @@ class FilmApikProvider : MainAPI() {
         }
     }
 
-    // ========================================================================
-    // LOAD LINKS - Entry point
-    // ========================================================================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -186,46 +200,36 @@ class FilmApikProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
-    
-        // === Request 1: pakai header lengkap (Chrome-like) ===
-        println("[FilmApik] ===== loadLinks for $data =====")
+
+        println("[FilmApik] loadLinks for $data")
+
         val htmlFull = try {
-            app.get(
-                data,
-                headers = fullHeaders,
-                interceptor = turnstileInterceptor,
-                timeout = 60
-            ).text
+            app.get(data, headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
         } catch (t: Throwable) {
             println("[FilmApik] full-header request failed: ${t.message}")
             ""
         }
-    
-        // === Diagnosa HTML ===
-        println("[FilmApik] HTML_full length=${htmlFull.length}")
+
+        println("[FilmApik] HTML length=${htmlFull.length}")
         println("[FilmApik] has famvServers=${htmlFull.contains("famvServers")}")
         println("[FilmApik] has player-section=${htmlFull.contains("player-section")}")
         println("[FilmApik] has player-main=${htmlFull.contains("player-main")}")
         println("[FilmApik] has byseqekaho=${htmlFull.contains("byseqekaho")}")
         println("[FilmApik] has iframe=${htmlFull.contains("<iframe")}")
-        println("[FilmApik] has strp2p=${htmlFull.contains("strp2p")}")
-        println("[FilmApik] has abyssplayer=${htmlFull.contains("abyssplayer")}")
-        println("[FilmApik] has efek.stream=${htmlFull.contains("efek.stream")}")
-    
-        // === Kalau masih kosong, coba TANPA interceptor ===
+
         var html = htmlFull
+
         if (!html.contains("famvServers") && html.length < 50000) {
             println("[FilmApik] retry without interceptor")
             html = try {
                 app.get(data, headers = fullHeaders, timeout = 60).text
             } catch (t: Throwable) {
-                println("[FilmApik] no-interceptor request failed: ${t.message}")
-                ""
+                println("[FilmApik] no-interceptor failed: ${t.message}")
+                html
             }
-            println("[FilmApik] HTML_nointercept length=${html.length}, has famvServers=${html.contains("famvServers")}")
+            println("[FilmApik] no-interceptor length=${html.length}")
         }
-    
-        // === Kalau masih kosong, coba dengan UA mobile ===
+
         if (!html.contains("famvServers")) {
             println("[FilmApik] retry with mobile UA")
             val mobileUA = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
@@ -237,43 +241,43 @@ class FilmApikProvider : MainAPI() {
             }
             html = try {
                 app.get(data, headers = mobileHeaders, interceptor = turnstileInterceptor, timeout = 60).text
-            } catch (t: Throwable) { html }
-            println("[FilmApik] HTML_mobile length=${html.length}, has famvServers=${html.contains("famvServers")}")
+            } catch (t: Throwable) {
+                html
+            }
+            println("[FilmApik] mobile length=${html.length}")
         }
-    
-        // === Kalau masih kosong, coba tanpa trailing slash / pakai ?s= ===
+
         if (!html.contains("famvServers") && !data.contains("?")) {
-            println("[FilmApik] retry with ?nocache= parameter")
+            println("[FilmApik] retry with nocache param")
             html = try {
                 app.get("$data?nocache=${System.currentTimeMillis()}", headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
-            } catch (t: Throwable) { html }
-            println("[FilmApik] HTML_nocache length=${html.length}, has famvServers=${html.contains("famvServers")}")
+            } catch (t: Throwable) {
+                html
+            }
+            println("[FilmApik] nocache length=${html.length}")
         }
-    
-        // === Cari slug video untuk request WordPress REST API ===
+
         val slug = data.trimEnd('/').substringAfterLast('/')
         println("[FilmApik] slug=$slug")
-    
-        // === FALLBACK: WordPress REST API ===
+
         if (!html.contains("famvServers") && slug.isNotBlank()) {
-            println("[FilmApik] Trying WordPress REST API for slug=$slug")
+            println("[FilmApik] trying WP REST API for slug=$slug")
             try {
-                val wpApiUrl = "$mainUrl/wp-json/wp/v2/posts?slug=$slug&_fields=content"
-                val wpJson = app.get(wpApiUrl, headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
-                println("[FilmApik] WP API length=${wpJson.length}")
-                if (wpJson.contains("famvServers") || wpJson.contains("byseqekaho")) {
-                    html = wpJson
-                    println("[FilmApik] WP API contains player data!")
+                val wpUrl = "$mainUrl/wp-json/wp/v2/posts?slug=$slug&_fields=content"
+                val wpText = app.get(wpUrl, headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
+                println("[FilmApik] WP API length=${wpText.length}")
+                if (wpText.contains("famvServers") || wpText.contains("byseqekaho")) {
+                    html = wpText
+                    println("[FilmApik] WP API has player data!")
                 }
             } catch (t: Throwable) {
                 println("[FilmApik] WP API failed: ${t.message}")
             }
         }
-    
-        // === Cari player URL dari HTML ===
+
         val playerUrls = mutableListOf<Pair<String, String>>()
         val seen = mutableSetOf<String>()
-    
+
         fun addPlayer(name: String, url: String) {
             var u = url.trim().replace("\\/", "/")
             if (u.isBlank()) return
@@ -293,20 +297,18 @@ class FilmApikProvider : MainAPI() {
             if (!seen.add(u)) return
             playerUrls.add(name to u)
         }
-    
-        // Strategy 1: window.famvServers
+
         Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
             .find(html)?.groupValues?.get(1)?.let { serversJson ->
-                println("[FilmApik] famvServers JSON found, length=${serversJson.length}")
+                println("[FilmApik] famvServers found, length=${serversJson.length}")
                 Regex(""""url"\s*:\s*"([^"]+)"""").findAll(serversJson).forEach { m ->
                     addPlayer("player", m.groupValues[1])
                 }
             }
-    
-        // Strategy 2: DOM
+
         if (playerUrls.isEmpty() && html.isNotBlank()) {
             try {
-                val doc = org.jsoup.Jsoup.parse(html)
+                val doc = Jsoup.parse(html)
                 doc.select("a[data-url], a.player-option, a.famv-server-btn, #player-list a, .player-option").forEach { a ->
                     val url = a.attr("data-url").ifBlank { a.attr("href") }
                     val name = a.attr("data-server").ifBlank { a.text().trim() }
@@ -320,15 +322,14 @@ class FilmApikProvider : MainAPI() {
                 }
             } catch (_: Throwable) {}
         }
-    
-        // Strategy 3: brutal regex
+
         if (playerUrls.isEmpty()) {
-            println("[FilmApik] Trying brutal regex")
+            println("[FilmApik] brutal regex fallback")
             val knownPlayers = listOf(
                 "byseqekaho", "f7hyg4q", "strp2p", "abyssplayer", "efek.stream",
                 "filemoon", "streamwish", "mixdrop", "doodstream", "voe.sx",
                 "vidoza", "upstream", "filelions", "mp4upload", "streamtape",
-                "turbovidhls", "netu", "waaw", "ok.ru", "buzzheavier"
+                "turbovidhls", "netu", "waaw", "buzzheavier"
             )
             Regex("""https?://[^\s"'<>\\]+""").findAll(html).forEach { m ->
                 val u = m.value
@@ -337,51 +338,28 @@ class FilmApikProvider : MainAPI() {
                 }
             }
         }
-    
+
         println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
-    
-        for ((serverName, url) in playerUrls) {
+
+        for ((serverName, playerUrl) in playerUrls) {
             try {
                 when {
-                    url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
-                        println("[FilmApik] Custom byseqekaho: $serverName -> $url")
-                        if (extractByseqekaho(url, serverName, callback)) found = true
+                    playerUrl.contains("byseqekaho.com") || playerUrl.contains("f7hyg4q.org") -> {
+                        println("[FilmApik] Custom byseqekaho: $serverName -> $playerUrl")
+                        if (extractByseqekaho(playerUrl, serverName, callback)) found = true
                     }
                     else -> {
-                        println("[FilmApik] Built-in: $serverName -> $url")
-                        if (loadExtractor(fixUrl(url), subtitleCallback, callback)) found = true
+                        println("[FilmApik] Built-in: $serverName -> $playerUrl")
+                        if (loadExtractor(fixUrl(playerUrl), subtitleCallback, callback)) found = true
                     }
                 }
             } catch (t: Throwable) {
                 println("[FilmApik] Player $serverName failed: ${t.message}")
             }
         }
-    
+
         return found
     }
-    // === Process each player ===
-    for ((serverName, url) in playerUrls) {
-        try {
-            when {
-                url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
-                    println("[FilmApik] Trying custom byseqekaho: $serverName -> $url")
-                    if (extractByseqekaho(url, serverName, callback)) found = true
-                }
-                else -> {
-                    println("[FilmApik] Trying built-in: $serverName -> $url")
-                    if (loadExtractor(fixUrl(url), subtitleCallback, callback)) found = true
-                }
-            }
-        } catch (t: Throwable) {
-            println("[FilmApik] Player $serverName failed: ${t.message}")
-        }
-    }
-
-    return found
-}
-    // ========================================================================
-    // Helpers
-    // ========================================================================
 
     private fun b64UrlDecode(s: String): ByteArray {
         var t = s.replace('-', '+').replace('_', '/')
@@ -451,23 +429,6 @@ class FilmApikProvider : MainAPI() {
         }
     }
 
-    // ========================================================================
-    // KEY DERIVATION - Sesuai JS aslinya!
-    // ========================================================================
-
-    /**
-     * JS asli:
-     *   const Qa = () => {
-     *     const e = {};
-     *     for (let n = 1; n <= 20; n += 1) {
-     *       e[String(n)] = [n ^ 0, 31 - n ^ 0];
-     *     }
-     *     return e;
-     *   };
-     *
-     * Untuk version "17" → [17, 14] (1-indexed)
-     * Maka ambil key_parts[16] dan key_parts[13] (0-indexed)
-     */
     private fun pickKeyPartsByVersion(keyParts: List<String>, version: String?): List<String> {
         val v = version?.trim() ?: return emptyList()
         val n = v.toIntOrNull() ?: return emptyList()
@@ -479,24 +440,20 @@ class FilmApikProvider : MainAPI() {
 
         if (idx1 < 1 || idx2 < 1 || idx1 > size || idx2 > size) return emptyList()
 
-        val part1 = keyParts[idx1 - 1]  // 1-indexed → 0-indexed
+        val part1 = keyParts[idx1 - 1]
         val part2 = keyParts[idx2 - 1]
 
         if (part1.isEmpty() || part2.isEmpty()) return emptyList()
         return listOf(part1, part2)
     }
 
-    /**
-     * Base64url-decode tiap part lalu concat → byte key.
-     * Untuk v17: 2 parts × 16 bytes = 32 bytes = AES-256.
-     */
     private fun buildKeyFromParts(parts: List<String>): ByteArray {
         val baos = ByteArrayOutputStream()
         parts.forEach { p ->
             try {
                 baos.write(b64UrlDecode(p))
             } catch (t: Throwable) {
-                println("[FilmApik] b64 decode failed for part '${p.take(8)}...': ${t.message}")
+                println("[FilmApik] b64 decode failed for part: ${t.message}")
             }
         }
         return baos.toByteArray()
@@ -517,10 +474,6 @@ class FilmApikProvider : MainAPI() {
         }
     }
 
-    // ========================================================================
-    // Full extract flow byseqekaho
-    // ========================================================================
-
     private suspend fun extractByseqekaho(
         embedUrl: String,
         serverName: String,
@@ -537,10 +490,8 @@ class FilmApikProvider : MainAPI() {
             val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-            // Step 1: Buka halaman embed
             try { getRaw(fixed, mapOf("User-Agent" to ua)) } catch (_: Throwable) {}
 
-            // Step 2: GET details
             val embedHeaders = mapOf(
                 "User-Agent" to ua,
                 "accept" to "*/*",
@@ -571,16 +522,14 @@ class FilmApikProvider : MainAPI() {
                 "x-embed-referer" to "$mainUrl/"
             )
 
-            // Step 3: Challenge
             val challengeJson = JSONObject(postJsonRaw("$apiBase/api/videos/access/challenge", "{}", apiHeaders))
             val challengeId = challengeJson.optString("challenge_id", "")
             val nonce = challengeJson.optString("nonce", "")
             if (challengeId.isBlank() || nonce.isBlank()) {
-                println("[FilmApik] byseqekaho: challenge invalid: $challengeJson")
+                println("[FilmApik] byseqekaho: challenge invalid")
                 return false
             }
 
-            // Step 4: EC P-256 keypair
             val kpg = KeyPairGenerator.getInstance("EC")
             kpg.initialize(ECGenParameterSpec("secp256r1"))
             val kp = kpg.generateKeyPair()
@@ -605,31 +554,40 @@ class FilmApikProvider : MainAPI() {
 
             val clientObj = JSONObject().apply {
                 put("user_agent", ua)
-                put("architecture", "x86"); put("bitness", "64")
-                put("platform", "Windows"); put("platform_version", "10.0.0")
-                put("model", ""); put("ua_full_version", "128.0.0.0")
+                put("architecture", "x86")
+                put("bitness", "64")
+                put("platform", "Windows")
+                put("platform_version", "10.0.0")
+                put("model", "")
+                put("ua_full_version", "128.0.0.0")
                 put("brand_full_versions", JSONArray().apply {
                     put(JSONObject().apply {
-                        put("brand", "Google Chrome"); put("version", "128.0.0.0")
+                        put("brand", "Google Chrome")
+                        put("version", "128.0.0.0")
                     })
                 })
                 put("pixel_ratio", 1)
-                put("screen_width", 1366); put("screen_height", 768)
+                put("screen_width", 1366)
+                put("screen_height", 768)
                 put("color_depth", 24)
                 put("languages", JSONArray(listOf("en-GB", "en-US", "en")))
                 put("timezone", "Asia/Jakarta")
-                put("hardware_concurrency", 2); put("device_memory", 8)
+                put("hardware_concurrency", 2)
+                put("device_memory", 8)
                 put("touch_points", 0)
                 put("webgl_vendor", "Google Inc. (Intel)")
                 put("webgl_renderer", "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)")
             }
 
             val attestBody = JSONObject().apply {
-                put("viewer_id", viewerId); put("device_id", deviceId)
-                put("challenge_id", challengeId); put("nonce", nonce)
+                put("viewer_id", viewerId)
+                put("device_id", deviceId)
+                put("challenge_id", challengeId)
+                put("nonce", nonce)
                 put("signature", sig)
                 put("public_key", JSONObject().apply {
-                    put("crv", "P-256"); put("ext", true)
+                    put("crv", "P-256")
+                    put("ext", true)
                     put("key_ops", JSONArray(listOf("verify")))
                     put("kty", "EC")
                     put("x", b64UrlEncode(fixed32(pub.w.affineX)))
@@ -637,11 +595,14 @@ class FilmApikProvider : MainAPI() {
                 })
                 put("client", clientObj)
                 put("storage", JSONObject().apply {
-                    put("cookie", viewerId); put("local_storage", viewerId)
+                    put("cookie", viewerId)
+                    put("local_storage", viewerId)
                     put("indexed_db", "$viewerId:$deviceId")
                     put("cache_storage", "$viewerId:$deviceId")
                 })
-                put("attributes", JSONObject().apply { put("entropy", "high") })
+                put("attributes", JSONObject().apply {
+                    put("entropy", "high")
+                })
             }.toString()
 
             val attestJson = JSONObject(postJsonRaw("$apiBase/api/videos/access/attest", attestBody, apiHeaders))
@@ -649,7 +610,7 @@ class FilmApikProvider : MainAPI() {
             val realViewer = attestJson.optString("viewer_id", viewerId)
             val realDevice = attestJson.optString("device_id", deviceId)
             if (fpToken.isBlank()) {
-                println("[FilmApik] byseqekaho: attest failed: $attestJson")
+                println("[FilmApik] byseqekaho: attest failed")
                 return false
             }
 
@@ -660,33 +621,30 @@ class FilmApikProvider : MainAPI() {
                 put("confidence", 0.95)
             }
 
-            // Step 5: Captcha challenge
             val captchaBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
             val captchaJson = JSONObject(postJsonRaw("$apiBase/api/videos/$code/embed/captcha", captchaBody, apiHeaders))
             val powToken = captchaJson.optString("pow_token", "")
             val powDiff = captchaJson.optInt("pow_difficulty", 16)
             if (powToken.isBlank()) {
-                println("[FilmApik] byseqekaho: captcha invalid: $captchaJson")
+                println("[FilmApik] byseqekaho: captcha invalid")
                 return false
             }
 
-            // Step 6: Solve PoW
             val solution = withContext(Dispatchers.Default) { solvePowSync(powToken, powDiff) }
-            println("[FilmApik] byseqekaho: PoW solved nonce=$solution (diff=$powDiff)")
+            println("[FilmApik] byseqekaho: PoW nonce=$solution")
 
-            // Step 7: Verify captcha
             val verifyBody = JSONObject().apply {
-                put("pow_token", powToken); put("solution", solution)
+                put("pow_token", powToken)
+                put("solution", solution)
                 put("fingerprint", fingerprint)
             }.toString()
             val verifyJson = JSONObject(postJsonRaw("$apiBase/api/videos/$code/embed/captcha/verify", verifyBody, apiHeaders))
             val captchaToken = verifyJson.optString("token", "")
             if (captchaToken.isBlank()) {
-                println("[FilmApik] byseqekaho: captcha verify failed: $verifyJson")
+                println("[FilmApik] byseqekaho: captcha verify failed")
                 return false
             }
 
-            // Step 8: Playback
             val playbackBody = JSONObject().apply { put("fingerprint", fingerprint) }.toString()
             val playbackRoot = JSONObject(postJsonRaw(
                 "$apiBase/api/videos/$code/embed/playback",
@@ -706,15 +664,12 @@ class FilmApikProvider : MainAPI() {
                 return false
             }
             val allParts = (0 until kpArr.length()).map { kpArr.getString(it) }
-            println("[FilmApik] byseqekaho: version=$version, total_parts=${allParts.size}")
-
-            // Step 9: KEY DERIVATION yang BENAR
-            val pickedParts = pickKeyPartsByVersion(allParts, version)
-            println("[FilmApik] byseqekaho: picked ${pickedParts.size} parts (lengths=${pickedParts.map { it.length }})")
+            println("[FilmApik] byseqekaho: version=$version, parts=${allParts.size}")
 
             var plainStr: String? = null
 
-            // Strategi 1: sesuai JS asli (version-based pick + base64url decode + concat)
+            val pickedParts = pickKeyPartsByVersion(allParts, version)
+            println("[FilmApik] byseqekaho: picked ${pickedParts.size} parts")
             if (pickedParts.isNotEmpty()) {
                 val key = buildKeyFromParts(pickedParts)
                 println("[FilmApik] byseqekaho: derived key length=${key.size}")
@@ -725,48 +680,45 @@ class FilmApikProvider : MainAPI() {
                 }
             }
 
-            // Strategi fallback: coba semua pasangan (i, 31-i)
             if (plainStr == null) {
-                println("[FilmApik] byseqekaho: version-based failed, trying all pairs")
+                println("[FilmApik] byseqekaho: trying all version pairs")
                 for (n in 1..20) {
                     val pair = pickKeyPartsByVersion(allParts, n.toString())
                     if (pair.isEmpty()) continue
                     val key = buildKeyFromParts(pair)
                     val pt = tryAesGcmDecrypt(key, iv, payload) ?: continue
                     plainStr = String(pt, Charsets.UTF_8)
-                    println("[FilmApik] byseqekaho: DECRYPT OK (pair n=$n, keyLen=${key.size})")
+                    println("[FilmApik] byseqekaho: DECRYPT OK (n=$n)")
                     break
                 }
             }
 
-            // Strategi fallback terakhir: brute-force tiap part tunggal & pasangan
             if (plainStr == null) {
-                println("[FilmApik] byseqekaho: pair-based failed, brute-forcing")
+                println("[FilmApik] byseqekaho: brute-forcing all pairs")
                 outer@ for (i in allParts.indices) {
                     for (j in allParts.indices) {
                         if (i == j) continue
                         val key = buildKeyFromParts(listOf(allParts[i], allParts[j]))
                         val pt = tryAesGcmDecrypt(key, iv, payload) ?: continue
                         plainStr = String(pt, Charsets.UTF_8)
-                        println("[FilmApik] byseqekaho: DECRYPT OK (brute i=$i j=$j)")
+                        println("[FilmApik] byseqekaho: DECRYPT OK (i=$i j=$j)")
                         break@outer
                     }
                 }
             }
 
             if (plainStr == null) {
-                println("[FilmApik] byseqekaho: ALL KEY DERIVATION FAILED")
+                println("[FilmApik] byseqekaho: ALL DECRYPT FAILED")
                 return false
             }
 
-            // Step 10: Cari URL m3u8
             val m3u8Regex = Regex("""https?://[^\s"'\\]+?\.m3u8[^\s"'\\]*""")
             val m3u8 = m3u8Regex.find(plainStr)?.value?.replace("\\/", "/") ?: run {
                 println("[FilmApik] byseqekaho: no m3u8 in plaintext: ${plainStr.take(300)}")
                 return false
             }
 
-            println("[FilmApik] byseqekaho: m3u8 = $m3u8")
+            println("[FilmApik] byseqekaho: m3u8=$m3u8")
 
             val apiHost = try { java.net.URI(apiBase).host } catch (_: Throwable) { host }
 
@@ -789,7 +741,6 @@ class FilmApikProvider : MainAPI() {
             return true
         } catch (t: Throwable) {
             println("[FilmApik] extractByseqekaho error: ${t.message}")
-            t.printStackTrace()
             return false
         }
     }

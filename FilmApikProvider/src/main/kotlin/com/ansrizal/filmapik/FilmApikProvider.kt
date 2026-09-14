@@ -180,98 +180,185 @@ class FilmApikProvider : MainAPI() {
     // ========================================================================
 
     override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
-    val response = request(data)
-    val html = response.text
-    var found = false
-
-    // === DEBUG: Print HTML head ===
-    println("[FilmApik] HTML length=${html.length}")
-    println("[FilmApik] HTML HEAD:\n${html.take(1500)}")
-    println("[FilmApik] HTML contains famvServers=${html.contains("famvServers")}")
-    println("[FilmApik] HTML contains byseqekaho=${html.contains("byseqekaho")}")
-    println("[FilmApik] HTML contains iframe=${html.contains("<iframe")}")
-
-    // === Collect player URLs ===
-    val playerUrls = mutableListOf<Pair<String, String>>() // (name, url)
-    val seenUrls = mutableSetOf<String>()
-
-    fun addPlayer(name: String, url: String) {
-        val u = url.trim().replace("\\/", "/")
-        if (u.isBlank()) return
-        if (u.startsWith("//")) return addPlayer(name, "https:$u")
-        if (!u.startsWith("http")) return
-        // Skip known non-player domains
-        if (u.contains("facebook.com") || u.contains("twitter.com") ||
-            u.contains("google.com") || u.contains("youtube.com") ||
-            u.contains("gstatic.com") || u.contains("googleapis.com") ||
-            u.contains("instagram.com") || u.contains("sharethis.com") ||
-            u.contains("histats.com") || u.contains("cloudflareinsights.com") ||
-            u.contains("googletagmanager.com") || u.contains("wp-json") ||
-            u.contains("wp-content") || u.contains("wp-includes") ||
-            u.contains("admin-ajax")
-        ) return
-        if (!seenUrls.add(u)) return
-        playerUrls.add(name to u)
-    }
-
-    // === Strategy 1: window.famvServers JSON ===
-    Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
-        .find(html)?.groupValues?.get(1)?.let { serversJson ->
-            println("[FilmApik] famvServers JSON found, length=${serversJson.length}")
-            Regex(""""name"\s*:\s*"([^"]+)"\s*,\s*"select"\s*:\s*"[^"]*"\s*,\s*"idioma"\s*:\s*"[^"]*"\s*,\s*"url"\s*:\s*"([^"]+)"""")
-                .findAll(serversJson).forEach { m ->
-                    addPlayer(m.groupValues[1], m.groupValues[2])
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var found = false
+    
+        // === Request 1: pakai header lengkap (Chrome-like) ===
+        println("[FilmApik] ===== loadLinks for $data =====")
+        val htmlFull = try {
+            app.get(
+                data,
+                headers = fullHeaders,
+                interceptor = turnstileInterceptor,
+                timeout = 60
+            ).text
+        } catch (t: Throwable) {
+            println("[FilmApik] full-header request failed: ${t.message}")
+            ""
+        }
+    
+        // === Diagnosa HTML ===
+        println("[FilmApik] HTML_full length=${htmlFull.length}")
+        println("[FilmApik] has famvServers=${htmlFull.contains("famvServers")}")
+        println("[FilmApik] has player-section=${htmlFull.contains("player-section")}")
+        println("[FilmApik] has player-main=${htmlFull.contains("player-main")}")
+        println("[FilmApik] has byseqekaho=${htmlFull.contains("byseqekaho")}")
+        println("[FilmApik] has iframe=${htmlFull.contains("<iframe")}")
+        println("[FilmApik] has strp2p=${htmlFull.contains("strp2p")}")
+        println("[FilmApik] has abyssplayer=${htmlFull.contains("abyssplayer")}")
+        println("[FilmApik] has efek.stream=${htmlFull.contains("efek.stream")}")
+    
+        // === Kalau masih kosong, coba TANPA interceptor ===
+        var html = htmlFull
+        if (!html.contains("famvServers") && html.length < 50000) {
+            println("[FilmApik] retry without interceptor")
+            html = try {
+                app.get(data, headers = fullHeaders, timeout = 60).text
+            } catch (t: Throwable) {
+                println("[FilmApik] no-interceptor request failed: ${t.message}")
+                ""
+            }
+            println("[FilmApik] HTML_nointercept length=${html.length}, has famvServers=${html.contains("famvServers")}")
+        }
+    
+        // === Kalau masih kosong, coba dengan UA mobile ===
+        if (!html.contains("famvServers")) {
+            println("[FilmApik] retry with mobile UA")
+            val mobileUA = "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+            val mobileHeaders = fullHeaders.toMutableMap().apply {
+                put("User-Agent", mobileUA)
+                put("sec-ch-ua-mobile", "?1")
+                put("sec-ch-ua-platform", "\"Android\"")
+                put("Sec-Fetch-Site", "none")
+            }
+            html = try {
+                app.get(data, headers = mobileHeaders, interceptor = turnstileInterceptor, timeout = 60).text
+            } catch (t: Throwable) { html }
+            println("[FilmApik] HTML_mobile length=${html.length}, has famvServers=${html.contains("famvServers")}")
+        }
+    
+        // === Kalau masih kosong, coba tanpa trailing slash / pakai ?s= ===
+        if (!html.contains("famvServers") && !data.contains("?")) {
+            println("[FilmApik] retry with ?nocache= parameter")
+            html = try {
+                app.get("$data?nocache=${System.currentTimeMillis()}", headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
+            } catch (t: Throwable) { html }
+            println("[FilmApik] HTML_nocache length=${html.length}, has famvServers=${html.contains("famvServers")}")
+        }
+    
+        // === Cari slug video untuk request WordPress REST API ===
+        val slug = data.trimEnd('/').substringAfterLast('/')
+        println("[FilmApik] slug=$slug")
+    
+        // === FALLBACK: WordPress REST API ===
+        if (!html.contains("famvServers") && slug.isNotBlank()) {
+            println("[FilmApik] Trying WordPress REST API for slug=$slug")
+            try {
+                val wpApiUrl = "$mainUrl/wp-json/wp/v2/posts?slug=$slug&_fields=content"
+                val wpJson = app.get(wpApiUrl, headers = fullHeaders, interceptor = turnstileInterceptor, timeout = 60).text
+                println("[FilmApik] WP API length=${wpJson.length}")
+                if (wpJson.contains("famvServers") || wpJson.contains("byseqekaho")) {
+                    html = wpJson
+                    println("[FilmApik] WP API contains player data!")
                 }
-            // Alternatif: parsing lebih longgar
-            if (playerUrls.isEmpty()) {
+            } catch (t: Throwable) {
+                println("[FilmApik] WP API failed: ${t.message}")
+            }
+        }
+    
+        // === Cari player URL dari HTML ===
+        val playerUrls = mutableListOf<Pair<String, String>>()
+        val seen = mutableSetOf<String>()
+    
+        fun addPlayer(name: String, url: String) {
+            var u = url.trim().replace("\\/", "/")
+            if (u.isBlank()) return
+            if (u.startsWith("//")) u = "https:$u"
+            if (!u.startsWith("http")) return
+            if (u.contains("facebook.com") || u.contains("twitter.com") ||
+                u.contains("google.com") || u.contains("youtube.com") ||
+                u.contains("gstatic.com") || u.contains("googleapis.com") ||
+                u.contains("instagram.com") || u.contains("sharethis.com") ||
+                u.contains("histats.com") || u.contains("cloudflareinsights.com") ||
+                u.contains("googletagmanager.com") || u.contains("wp-json") ||
+                u.contains("wp-content") || u.contains("wp-includes") ||
+                u.contains("admin-ajax") || u.contains("cutt.ly") ||
+                u.contains("image.cdndrive") || u.contains("instarooliths") ||
+                u.contains("s10.histats")
+            ) return
+            if (!seen.add(u)) return
+            playerUrls.add(name to u)
+        }
+    
+        // Strategy 1: window.famvServers
+        Regex("""window\.famvServers\s*=\s*(\[.*?\]);""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)?.groupValues?.get(1)?.let { serversJson ->
+                println("[FilmApik] famvServers JSON found, length=${serversJson.length}")
                 Regex(""""url"\s*:\s*"([^"]+)"""").findAll(serversJson).forEach { m ->
                     addPlayer("player", m.groupValues[1])
                 }
             }
+    
+        // Strategy 2: DOM
+        if (playerUrls.isEmpty() && html.isNotBlank()) {
+            try {
+                val doc = org.jsoup.Jsoup.parse(html)
+                doc.select("a[data-url], a.player-option, a.famv-server-btn, #player-list a, .player-option").forEach { a ->
+                    val url = a.attr("data-url").ifBlank { a.attr("href") }
+                    val name = a.attr("data-server").ifBlank { a.text().trim() }
+                    addPlayer(name.ifBlank { "player" }, url)
+                }
+                if (playerUrls.isEmpty()) {
+                    doc.select("iframe").forEach { iframe ->
+                        val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
+                        addPlayer("iframe", src)
+                    }
+                }
+            } catch (_: Throwable) {}
         }
-
-    // === Strategy 2: DOM anchors dengan data-url ===
-    if (playerUrls.isEmpty()) {
-        response.document.select("a[data-url], a.player-option, a.famv-server-btn, #player-list a, .player-option").forEach { a ->
-            val url = a.attr("data-url").ifBlank { a.attr("href") }
-            val name = a.attr("data-server").ifBlank { a.text().trim() }
-            addPlayer(name.ifBlank { "player" }, url)
-        }
-    }
-
-    // === Strategy 3: DOM iframes (dengan src asli) ===
-    if (playerUrls.isEmpty()) {
-        response.document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
-            addPlayer("iframe", src)
-        }
-    }
-
-    // === Strategy 4: Regex brutal — cari semua URL player di HTML mentah ===
-    if (playerUrls.isEmpty()) {
-        println("[FilmApik] Trying brutal regex fallback")
-        val patterns = listOf(
-            "byseqekaho", "f7hyg4q", "strp2p", "abyssplayer", "efek.stream",
-            "filemoon", "streamwish", "mixdrop", "doodstream", "voe.sx",
-            "vidoza", "upstream", "filelions", "mp4upload", "streamtape",
-            "turbovidhls", "netu", "waaw", "ok.ru", "buzzheavier"
-        )
-        val urlRegex = Regex("""https?://[^\s"'<>\\]+""")
-        urlRegex.findAll(html).forEach { m ->
-            val u = m.value
-            if (patterns.any { u.contains(it, ignoreCase = true) }) {
-                addPlayer("regex", u)
+    
+        // Strategy 3: brutal regex
+        if (playerUrls.isEmpty()) {
+            println("[FilmApik] Trying brutal regex")
+            val knownPlayers = listOf(
+                "byseqekaho", "f7hyg4q", "strp2p", "abyssplayer", "efek.stream",
+                "filemoon", "streamwish", "mixdrop", "doodstream", "voe.sx",
+                "vidoza", "upstream", "filelions", "mp4upload", "streamtape",
+                "turbovidhls", "netu", "waaw", "ok.ru", "buzzheavier"
+            )
+            Regex("""https?://[^\s"'<>\\]+""").findAll(html).forEach { m ->
+                val u = m.value
+                if (knownPlayers.any { u.contains(it, ignoreCase = true) }) {
+                    addPlayer("regex", u)
+                }
             }
         }
+    
+        println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
+    
+        for ((serverName, url) in playerUrls) {
+            try {
+                when {
+                    url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
+                        println("[FilmApik] Custom byseqekaho: $serverName -> $url")
+                        if (extractByseqekaho(url, serverName, callback)) found = true
+                    }
+                    else -> {
+                        println("[FilmApik] Built-in: $serverName -> $url")
+                        if (loadExtractor(fixUrl(url), subtitleCallback, callback)) found = true
+                    }
+                }
+            } catch (t: Throwable) {
+                println("[FilmApik] Player $serverName failed: ${t.message}")
+            }
+        }
+    
+        return found
     }
-
-    println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
-
     // === Process each player ===
     for ((serverName, url) in playerUrls) {
         try {

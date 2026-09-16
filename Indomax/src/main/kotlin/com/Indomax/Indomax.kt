@@ -28,6 +28,7 @@ class Indomax : MainAPI() {
         "category/serial-tv/page/%d/" to "TV Series",
         "category/action/page/%d/" to "Action",
         "category/adventure/page/%d/" to "Adventure",
+        "category/fantasy/page/%d/" to "Fantasy",
         "category/animation/page/%d/" to "Animation",
         "category/anime/page/%d/" to "Anime",
         "category/comedy/page/%d/" to "Comedy",

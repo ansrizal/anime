@@ -1,5 +1,6 @@
 package com.bstation
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -98,7 +99,9 @@ class BStation : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer" to "$mainUrl/",
         "Accept" to "application/json, text/plain, */*",
-        "Origin" to mainUrl
+        "Accept-Language" to "en-US,en;q=0.9,id;q=0.8",
+        "Origin" to mainUrl,
+        "Priority" to "u=1, i"
     )
 
     private val TAG = "BStation"
@@ -185,12 +188,18 @@ class BStation : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Khusus tab "Populer" -> pakai API recommend biar infinite scroll
-        if (request.data == "$mainUrl/id/") {
+        println("$TAG: [MAIN] called page=$page name='${request.name}' data='${request.data}'")
+
+        // Robust match: Populer = name "Populer" atau URL /id/ (dengan/tanpa trailing slash)
+        val isPopular = request.name == "Populer" ||
+                request.data == "$mainUrl/id/" ||
+                request.data.trimEnd('/') == "$mainUrl/id"
+
+        if (isPopular) {
             return getPopularPage(page, request)
         }
 
-        // Tab lain (Anime, Trending, Dracin): fallback HTML scrape
+        // Tab lain: fallback HTML scrape
         val base = request.data
         val sep = if (base.contains("?")) "&" else "?"
         val urlWithPage = "$base${sep}page=$page"
@@ -199,7 +208,7 @@ class BStation : MainAPI() {
         val document = try {
             app.get(urlWithPage).document
         } catch (e: Exception) {
-            println("$TAG: [MAIN] err: ${e.message}")
+            println("$TAG: [MAIN] fallback err: ${e.message}")
             return newHomePageResponse(emptyList(), false)
         }
 
@@ -218,21 +227,45 @@ class BStation : MainAPI() {
     private suspend fun getPopularPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = "$apiUrl/intl/gateway/web/v2/home/recommend" +
                 "?s_locale=id_ID&platform=web&pn=$page&ps=20"
-        println("$TAG: [MAIN] popular page=$page url=$url")
+        println("$TAG: [MAIN] popular page=$page GET $url")
 
-        val resp = try {
-            app.get(url, headers = apiHeaders).parsedSafe<HomeRecommendResponse>()
+        val response = try {
+            app.get(url, headers = apiHeaders)
         } catch (e: Exception) {
-            println("$TAG: [MAIN] popular err: ${e.message}")
+            println("$TAG: [MAIN] popular fetch err: ${e.message}")
             return newHomePageResponse(emptyList(), false)
         }
 
-        val cards = resp?.data?.cards ?: emptyList()
+        // Log tekstual (potong) supaya bisa verifikasi response
+        val rawText = response.text
+        println("$TAG: [MAIN] popular raw len=${rawText.length} head=${rawText.take(300)}")
+
+        val resp = try {
+            response.parsedSafe<HomeRecommendResponse>()
+        } catch (e: Exception) {
+            println("$TAG: [MAIN] popular parse err: ${e.message}")
+            null
+        }
+
+        if (resp == null) {
+            println("$TAG: [MAIN] popular parsedSafe returned null")
+            return newHomePageResponse(emptyList(), false)
+        }
+
+        val cards = resp.data?.cards ?: emptyList()
+        val isEnd = resp.data?.isEnd == true
+
+        println("$TAG: [MAIN] popular page=$page cards=${cards.size} isEnd=$isEnd")
+
+        // Debug: print type of each card
+        cards.take(3).forEachIndexed { i, c ->
+            println("$TAG: [MAIN] card[$i] type=${c.type} aid=${c.aid} seasonId=${c.seasonId} title=${c.title?.take(40)}")
+        }
+
         val items = cards.mapNotNull { homeCardToSearchResult(it) }.distinctBy { it.url }
-        val isEnd = resp?.data?.isEnd == true
         val hasNext = !isEnd && items.isNotEmpty()
 
-        println("$TAG: [MAIN] popular page=$page cards=${cards.size} items=${items.size} isEnd=$isEnd")
+        println("$TAG: [MAIN] popular page=$page -> items=${items.size} hasNext=$hasNext")
 
         return newHomePageResponse(
             listOf(HomePageList(request.name, items)),
@@ -241,24 +274,39 @@ class BStation : MainAPI() {
     }
 
     private fun homeCardToSearchResult(card: HomeCard): SearchResponse? {
-        val title = card.title?.ifBlank { null } ?: return null
+        val title = card.title?.ifBlank { null } ?: run {
+            println("$TAG: [CARD] skip: title blank type=${card.type}")
+            return null
+        }
         val poster = card.cover.cleanImage()
 
-        return when (card.type) {
+        val result = when (card.type) {
             "ogv" -> {
-                val sid = card.seasonId?.ifBlank { null } ?: return null
+                val sid = card.seasonId?.ifBlank { null }
+                if (sid == null) {
+                    println("$TAG: [CARD] skip ogv tanpa seasonId: $title")
+                    return null
+                }
                 newAnimeSearchResponse(title, "$mainUrl/id/play/$sid", TvType.Anime) {
                     this.posterUrl = poster
                 }
             }
             "ugc" -> {
-                val aid = card.aid?.ifBlank { null } ?: return null
+                val aid = card.aid?.ifBlank { null }
+                if (aid == null) {
+                    println("$TAG: [CARD] skip ugc tanpa aid: $title")
+                    return null
+                }
                 newAnimeSearchResponse(title, "$mainUrl/id/video/$aid", TvType.Movie) {
                     this.posterUrl = poster
                 }
             }
-            else -> null
+            else -> {
+                println("$TAG: [CARD] skip unknown type='${card.type}' title=$title")
+                null
+            }
         }
+        return result
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
@@ -783,11 +831,21 @@ class BStation : MainAPI() {
     // ============================================================
     //  DATA CLASSES
     // ============================================================
-    data class HomeRecommendResponse(@JsonProperty("data") val data: HomeRecommendData?)
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    data class HomeRecommendResponse(
+        @JsonProperty("code") val code: Int?,
+        @JsonProperty("message") val message: String?,
+        @JsonProperty("ttl") val ttl: Int?,
+        @JsonProperty("data") val data: HomeRecommendData?
+    )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class HomeRecommendData(
         @JsonProperty("cards") val cards: List<HomeCard>?,
         @JsonProperty("is_end") val isEnd: Boolean?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class HomeCard(
         @JsonProperty("type") val type: String?,
         @JsonProperty("card_type") val cardType: String?,
@@ -799,27 +857,38 @@ class BStation : MainAPI() {
         @JsonProperty("index_show") val indexShow: String?
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SeriesApiResponse(@JsonProperty("data") val data: SeriesApiData?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SeriesApiData(
         @JsonProperty("sectionsList") val sectionsList: List<SeriesApiSection>?,
         @JsonProperty("sections") val sections: List<SeriesApiSection>?,
         @JsonProperty("seasons") val seasons: List<RelatedSeason>?,
         @JsonProperty("pagination") val pagination: PaginationInfo?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class RelatedSeason(
         @JsonProperty("season_id") val seasonId: Long?,
         @JsonProperty("title") val title: String?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PaginationInfo(
         @JsonProperty("page") val page: Int?,
         @JsonProperty("page_size") val pageSize: Int?,
         @JsonProperty("total") val total: Int?,
         @JsonProperty("has_next") val hasNext: Boolean?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SeriesApiSection(
         @JsonProperty("title") val title: String?,
         @JsonProperty("episodes") val episodes: List<SeriesApiEpisode>?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SeriesApiEpisode(
         @JsonProperty("cover") val cover: String?,
         @JsonProperty("episode_id") val episodeId: Long?,
@@ -828,16 +897,26 @@ class BStation : MainAPI() {
         @JsonProperty("title_display") val titleDisplay: String?
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ViewApiResponse(@JsonProperty("data") val data: ViewApiData?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ViewApiData(
         @JsonProperty("aid") val aid: Long?,
         @JsonProperty("cid") val cid: Long?,
         @JsonProperty("pages") val pages: List<ViewPage>?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ViewPage(@JsonProperty("cid") val cid: Long?)
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PlayUrlResponse(@JsonProperty("data") val data: PlayUrlData?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PlayUrlData(@JsonProperty("playurl") val playurl: PlayurlData?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PlayurlData(
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("duration") val duration: Long?,
@@ -845,15 +924,21 @@ class BStation : MainAPI() {
         @JsonProperty("video") val video: List<VideoItem>?,
         @JsonProperty("audio_resource") val audioResource: List<AudioResource>?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class Durl(
         @JsonProperty("url") val url: String?,
         @JsonProperty("backup_url") val backupUrl: List<String>?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class VideoItem(
         @JsonProperty("video_resource") val videoResource: VideoResource?,
         @JsonProperty("stream_info") val streamInfo: StreamInfo?,
         @JsonProperty("audio_quality") val audioQuality: Int?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class VideoResource(
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("bandwidth") val bandwidth: Int?,
@@ -863,14 +948,20 @@ class BStation : MainAPI() {
         @JsonProperty("width") val width: Int?,
         @JsonProperty("height") val height: Int?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SegmentBase(
         @JsonProperty("range") val range: String?,
         @JsonProperty("index_range") val indexRange: String?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class StreamInfo(
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("desc_words") val descWords: String?
     )
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AudioResource(
         @JsonProperty("quality") val quality: Int?,
         @JsonProperty("bandwidth") val bandwidth: Int?,
@@ -879,8 +970,13 @@ class BStation : MainAPI() {
         @JsonProperty("segment_base") val segmentBase: SegmentBase?
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SubtitleApiResponse(@JsonProperty("data") val data: SubtitleApiData?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SubtitleApiData(@JsonProperty("subtitles") val subtitles: List<SubtitleItem>?)
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SubtitleItem(
         @JsonProperty("lan") val lan: String?,
         @JsonProperty("url") val url: String?

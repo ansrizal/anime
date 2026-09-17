@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 
 class Rebahin : MainAPI() {
-    override var mainUrl = "https://rebahin.io"
+    override var mainUrl = "https://139.59.186.254"
     override var name = "Rebahin"
     override val hasMainPage = true
     override var lang = "id"

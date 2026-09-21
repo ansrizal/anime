@@ -1,5 +1,6 @@
 package com.indo
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -13,6 +14,8 @@ class Rebahin : MainAPI() {
     override var lang = "id"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    private val TAG = "Rebahin"
 
     override val mainPage = mainPageOf(
         "movies/" to "Movies",
@@ -124,7 +127,6 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // Scraper fallback
         val doc = app.get("$mainUrl/?s=$query").document
         return doc.select("div.listupd article, div.bsx, div.ml-item, article").asIterable().mapNotNull { el ->
             val title = el.selectFirst("a[title]")?.attr("title")
@@ -137,6 +139,7 @@ class Rebahin : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        Log.i(TAG, "load() called for $url")
         val resp = app.get(url)
         val doc = resp.document
         val raw = resp.text ?: ""
@@ -149,15 +152,14 @@ class Rebahin : MainAPI() {
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")?.ifBlank { null }
         val description = doc.selectFirst("meta[property=og:description]")?.attr("content")?.ifBlank { null }
         val year = Regex("(\\b20\\d{2}\\b)").find(html)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val tags = Regex("\"genres\":\\[([^\\]]+)\\]").find(html)?.let { m ->
-            Regex("\"name\":\"([^\"]+)\"").findAll(m.value).map { it.groupValues[1] }.toList()
-        } ?: doc.select("a[href*=genre], a[href*=category]").asIterable()
+        val tags = doc.select("a[href*=genre], a[href*=category]").asIterable()
             .map { it.text() }.filter { it.isNotBlank() }
 
         val voteAvg = Regex("\"voteAverage\":([0-9.]+)").find(html)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         val score = Score.from10(voteAvg)
 
         val isSeries = url.contains("/tv/")
+        Log.i(TAG, "load() isSeries=$isSeries, raw len=${raw.length}")
 
         if (!isSeries) {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -169,48 +171,81 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // --- TV Series ---
-        val episodeUrls = mutableListOf<Episode>()
-        val seenEpisodes = mutableSetOf<String>()
+        // --- TV Series: kumpulkan episode dari berbagai strategi ---
+        val episodes = mutableListOf<Pair<String, Int>>() // Pair(url, epNum)
+        val seenUrls = mutableSetOf<String>()
+        val seenEps = mutableSetOf<Int>()
 
-        Regex("\"episodes\"\\s*:\\s*\\[([^\\]]+)\\]").find(html)?.let { match ->
-            val epsJson = match.groupValues[1]
-            Regex("\"episodeNumber\"\\s*:\\s*(\\d+)[^}]*\"seasonNumber\"\\s*:\\s*(\\d+)").findAll(epsJson).forEach { ep ->
-                val epNum = ep.groupValues[1].toIntOrNull()
-                val seasonNum = ep.groupValues[2].toIntOrNull()
-                if (epNum != null) {
-                    val epUrl = if (seasonNum != null) "$url/season-$seasonNum/episode-$epNum"
-                    else "$url/season-1/episode-$epNum"
-                    if (seenEpisodes.add(epUrl)) {
-                        episodeUrls.add(newEpisode(epUrl) {
-                            this.name = "Eps $epNum"
-                            this.episode = epNum
-                            this.season = seasonNum ?: 1
-                        })
+        // Slug untuk konstruksi URL: "young-sherlock-2026" dari ".../tv/young-sherlock-2026/"
+        val slug = url.trimEnd('/').substringAfterLast('/')
+        Log.i(TAG, "load() slug=$slug")
+
+        // === Strategi A: HTML <a href=".../eps/...-episode-N/"> ===
+        val epLinkSelectors = listOf(
+            "a[href*=/eps/]",
+            "a[href*=/episode-]",
+            "a[href*=/episode/]",
+            "a[href*=/season-]"
+        )
+        for (sel in epLinkSelectors) {
+            doc.select(sel).asIterable().forEach { a ->
+                val href = a.attr("abs:href").ifBlank { a.attr("href") }
+                if (href.isBlank()) return@forEach
+                val fixed = fixUrl(href)
+                if (fixed == url || fixed.endsWith("#") || !seenUrls.add(fixed)) return@forEach
+                val epNum = Regex("""episode[-/](\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: Regex("""eps-(\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: (episodes.size + 1)
+                if (!seenEps.add(epNum)) return@forEach
+                episodes.add(fixed to epNum)
+            }
+            if (episodes.isNotEmpty()) {
+                Log.i(TAG, "load() episode detection via selector $sel -> ${episodes.size}")
+                break
+            }
+        }
+
+        // === Strategi B: JSON "episodes":[...] ===
+        if (episodes.isEmpty()) {
+            Regex("\"episodes\"\\s*:\\s*\\[([\\s\\S]*?)\\]\\s*[,}]").findAll(html).forEach { match ->
+                val epsJson = match.groupValues[1]
+                val epNums = Regex("\"episodeNumber\"\\s*:\\s*(\\d+)").findAll(epsJson)
+                    .mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+                val seasonNums = Regex("\"seasonNumber\"\\s*:\\s*(\\d+)").findAll(epsJson)
+                    .mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+                Log.i(TAG, "load() JSON episodes -> epNums=$epNums, seasonNums=$seasonNums")
+                epNums.forEachIndexed { i, epNum ->
+                    val seasonNum = seasonNums.getOrNull(i) ?: 1
+                    val epUrl = "$mainUrl/eps/$slug-season-$seasonNum-episode-$epNum/"
+                    if (seenUrls.add(epUrl) && seenEps.add(epNum)) {
+                        episodes.add(epUrl to epNum)
                     }
                 }
             }
         }
 
-        if (episodeUrls.isEmpty()) {
-            doc.select("a[href*=/episode-], a[href*=/episode/], a[href*=/season-], a[href*=/eps-]").asIterable().forEach { a ->
-                val href = a.attr("abs:href").ifBlank { a.attr("href") }
-                if (href.isBlank()) return@forEach
-                val fixed = fixUrl(href)
-                if (fixed == url || !seenEpisodes.add(fixed)) return@forEach
-                val epNum = Regex("""episode[-/](\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?: Regex("""eps-(\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                val seasonNum = Regex("""season[-/](\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                episodeUrls.add(newEpisode(fixed) {
-                    this.name = if (epNum != null) "Eps $epNum" else a.text().ifBlank { "Episode ${episodeUrls.size + 1}" }
-                    this.episode = epNum ?: (episodeUrls.size + 1)
-                    this.season = seasonNum ?: 1
-                })
+        Log.i(TAG, "load() total episodes=${episodes.size}")
+
+        val episodeUrls = episodes.map { (epUrl, epNum) ->
+            newEpisode(epUrl) {
+                this.name = "Eps $epNum"
+                this.episode = epNum
+                this.season = 1
             }
         }
 
+        // Selalu kembalikan TvSeriesLoadResponse untuk URL /tv/,
+        // walaupun tidak ada episode terdeteksi — supaya CloudStream tetap
+        // memperlakukan sebagai series (bukan memutar URL series sebagai movie).
         if (episodeUrls.isEmpty()) {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            Log.w(TAG, "load() no episodes detected, returning series with 1 dummy pointing to series URL")
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, listOf(
+                newEpisode(url) {
+                    this.name = "Play"
+                    this.episode = 1
+                    this.season = 1
+                }
+            )) {
                 posterUrl = poster
                 plot = description
                 this.tags = tags
@@ -237,13 +272,19 @@ class Rebahin : MainAPI() {
         var linkCount = 0
         val wrappedCallback: (ExtractorLink) -> Unit = { link ->
             linkCount++
+            Log.i(TAG, "loadLinks() emitting link: ${link.url}")
             callback(link)
         }
 
-        val resp = try { app.get(data) } catch (_: Exception) { return false }
+        Log.i(TAG, "loadLinks() START: $data")
+        val resp = try { app.get(data) } catch (e: Exception) {
+            Log.e(TAG, "loadLinks() app.get failed: ${e.message}")
+            return false
+        }
         val raw = resp.text ?: return false
         val html = raw.replace("\\\"", "\"")
         val doc = resp.document
+        Log.i(TAG, "loadLinks() page fetched, len=${raw.length}")
 
         // === 1. Kumpulkan URL iframe ===
         val embedUrls = mutableSetOf<String>()
@@ -272,24 +313,35 @@ class Rebahin : MainAPI() {
                 !url.contains("google.com/maps", true)
         }
 
-        // === 2. Coba built-in extractor (untuk extractor lain) ===
+        Log.i(TAG, "loadLinks() found ${filteredEmbeds.size} embed(s): $filteredEmbeds")
+
+        // === 2. Built-in extractor untuk semua embed ===
         for (embedUrl in filteredEmbeds) {
+            Log.i(TAG, "loadLinks() trying built-in loadExtractor on $embedUrl")
             try {
                 loadExtractor(embedUrl, data, subtitleCallback, wrappedCallback)
-            } catch (_: Exception) { }
-        }
-
-        // === 3. Custom VidHide / generic extractor ===
-        if (linkCount == 0) {
-            for (embedUrl in filteredEmbeds) {
-                try {
-                    extractVidHide(embedUrl, data, wrappedCallback)
-                } catch (_: Exception) { }
+                Log.i(TAG, "loadLinks() loadExtractor done, linkCount=$linkCount")
+            } catch (e: Exception) {
+                Log.e(TAG, "loadLinks() loadExtractor exception: ${e.message}")
             }
         }
 
-        // === 4. Fallback: parse JSON sources/playerSources di HTML ===
+        // === 3. Custom VidHide extractor (jika built-in gagal) ===
         if (linkCount == 0) {
+            for (embedUrl in filteredEmbeds) {
+                Log.i(TAG, "loadLinks() trying custom extractVidHide on $embedUrl")
+                try {
+                    extractVidHide(embedUrl, data, wrappedCallback)
+                    Log.i(TAG, "loadLinks() extractVidHide done, linkCount=$linkCount")
+                } catch (e: Exception) {
+                    Log.e(TAG, "loadLinks() extractVidHide exception: ${e.message}")
+                }
+            }
+        }
+
+        // === 4. Fallback: JSON sources/playerSources di HTML ===
+        if (linkCount == 0) {
+            Log.i(TAG, "loadLinks() trying JSON sources fallback")
             var pos = 0
             while (true) {
                 val srcIdx = html.indexOf("\"sources\":[", pos)
@@ -327,21 +379,19 @@ class Rebahin : MainAPI() {
             }
         }
 
+        Log.i(TAG, "loadLinks() DONE: total links=$linkCount")
         return linkCount > 0
     }
 
-    /**
-     * Extractor manual untuk VidHide dan sejenisnya.
-     * Fetch halaman embed, handle redirect, unpack Dean Edwards JS, cari m3u8/mp4.
-     */
     private suspend fun extractVidHide(
         embedUrl: String,
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
         val host = try { java.net.URL(embedUrl).host } catch (_: Exception) { "" }
+        Log.i(TAG, "extractVidHide() START host=$host")
 
-        // Beberapa varian header yang perlu dicoba
+        // Beberapa varian header
         val headersList = listOf(
             mapOf(
                 "Referer" to embedUrl,
@@ -356,29 +406,42 @@ class Rebahin : MainAPI() {
         )
 
         var pageText: String? = null
-        for (headers in headersList) {
+        for ((i, headers) in headersList.withIndex()) {
             try {
+                Log.i(TAG, "extractVidHide() fetch attempt #$i")
                 val r = app.get(embedUrl, headers = headers)
                 if (!r.text.isNullOrBlank()) {
                     pageText = r.text
+                    Log.i(TAG, "extractVidHide() got ${r.text.length} chars")
                     break
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                Log.e(TAG, "extractVidHide() fetch #$i failed: ${e.message}")
+            }
         }
 
-        val text = pageText ?: return
+        val text = pageText ?: run {
+            Log.e(TAG, "extractVidHide() could not fetch page")
+            return
+        }
+
         val candidates = mutableSetOf<String>()
 
-        // Cari langsung di text
+        // Langsung cari di raw
         collectVideoUrls(text, candidates)
+        Log.i(TAG, "extractVidHide() after raw collect: ${candidates.size} candidate(s)")
 
-        // Unpack Dean Edwards JS dulu
+        // Unpack JS
         val unpacked = unpackDeanEdwards(text)
         if (unpacked != text) {
+            Log.i(TAG, "extractVidHide() unpacked (${unpacked.length} chars)")
             collectVideoUrls(unpacked, candidates)
+            Log.i(TAG, "extractVidHide() after unpack: ${candidates.size} candidate(s)")
+        } else {
+            Log.w(TAG, "extractVidHide() unpack returned same string")
         }
 
-        // Kadang ada multiple eval bertingkat
+        // Unpack berulang (beberapa pakai nested)
         var current = unpacked
         var depth = 0
         while (depth < 3) {
@@ -389,12 +452,14 @@ class Rebahin : MainAPI() {
             depth++
         }
 
-        // Decode unicode escapes jika ada
         val decoded = decodeUnicodeEscapes(current)
         if (decoded != current) collectVideoUrls(decoded, candidates)
 
+        Log.i(TAG, "extractVidHide() total candidates=${candidates.size}")
+
         for (url in candidates) {
             val fixed = url.replace("\\/", "/")
+            Log.i(TAG, "extractVidHide() emitting: $fixed")
             callback(newExtractorLink("Rebahin", "Rebahin - $host", fixed) {
                 this.referer = embedUrl
                 this.quality = if (fixed.contains("1080")) 3 else if (fixed.contains("720")) 2 else 3
@@ -402,9 +467,6 @@ class Rebahin : MainAPI() {
         }
     }
 
-    /**
-     * Kumpulkan URL m3u8/mp4 dari string apapun.
-     */
     private fun collectVideoUrls(text: String, out: MutableSet<String>) {
         val patterns = listOf(
             Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)""""),
@@ -426,42 +488,46 @@ class Rebahin : MainAPI() {
 
     /**
      * Dean Edwards Packer unpacker.
-     * Format: eval(function(p,a,c,k,e,d){...}('PAYLOAD',RADIX,COUNT,'SYM|TAB'.split('|'),0,{}))
+     * Format khas: eval(function(p,a,c,k,e,d){...}('PAYLOAD',RADIX,COUNT,'SYM|TAB'.split('|'),0,{}))
      */
     private fun unpackDeanEdwards(input: String): String {
-        // Cari blok eval(...) yang diakhiri dengan pola khas packer
-        val regex = Regex("""\}\s*\(\s*['"]([^'"]*(?:\\.[^'"]*)*)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([^'"]*)['"]\s*\.split\s*\(\s*['"]\|['"]\s*\)""")
-        val match = regex.find(input) ?: return input
+        // Cari blok packer dengan lebih longgar
+        val regex = Regex(
+            """eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)[\s\S]*?\}\s*\(\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*\.split\s*\(\s*['"]\|['"]\s*\)""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val match = regex.find(input) ?: run {
+            Log.w(TAG, "unpackDeanEdwards() no match for packer signature")
+            return input
+        }
 
         val payloadRaw = match.groupValues[1]
         val radix = match.groupValues[2].toIntOrNull() ?: return input
         val count = match.groupValues[3].toIntOrNull() ?: return input
         val symtabRaw = match.groupValues[4]
 
-        // Unescape payload (\\' -> ', \\\\ -> \\, \n -> newline, dll)
+        Log.i(TAG, "unpackDeanEdwards() radix=$radix count=$count symtabLen=${symtabRaw.length}")
+
         val payload = payloadRaw
             .replace("\\'", "'")
+            .replace("\\\"", "\"")
             .replace("\\\\", "\\")
             .replace("\\n", "\n")
             .replace("\\r", "\r")
             .replace("\\t", "\t")
+            .replace("\\/", "/")
 
         val symtab = symtabRaw.split("|").toMutableList()
 
         fun unbase(c: Int): String {
-            if (c < radix) return ""
-            val head = unbase(c / radix)
+            val head = if (c < radix) "" else unbase(c / radix)
             val r = c % radix
             val ch = if (r > 35) (r + 29).toChar().toString() else r.toString(36)
             return head + ch
         }
 
-        // Isi symtab yang kosong
-        while (symtab.size < count) {
-            symtab.add(unbase(symtab.size))
-        }
+        while (symtab.size < count) symtab.add(unbase(symtab.size))
 
-        // Buat kamus kata
         val dict = HashMap<String, String>()
         for (i in symtab.indices) {
             val key = unbase(i)
@@ -469,10 +535,12 @@ class Rebahin : MainAPI() {
             dict[key] = if (v.isBlank()) key else v
         }
 
-        // Ganti semua token \w+ dengan padanannya
-        return Regex("""\b\w+\b""").replace(payload) { m ->
+        val result = Regex("""\b\w+\b""").replace(payload) { m ->
             dict[m.value] ?: m.value
         }
+
+        Log.i(TAG, "unpackDeanEdwards() unpacked payload: ${result.take(200)}")
+        return result
     }
 
     private fun decodeUnicodeEscapes(s: String): String {

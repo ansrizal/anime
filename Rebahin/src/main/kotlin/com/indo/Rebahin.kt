@@ -18,10 +18,12 @@ class Rebahin : MainAPI() {
     private val TAG = "Rebahin"
 
     override val mainPage = mainPageOf(
+        "" to "Film Terbaru",
         "movies/" to "Movies",
         "tv/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror"
+        "genre/horror/" to "Horror",
+        "genre/fantasy/" to "Fantasi"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -171,16 +173,11 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // --- TV Series: kumpulkan episode dari berbagai strategi ---
-        val episodes = mutableListOf<Pair<String, Int>>() // Pair(url, epNum)
+        val episodes = mutableListOf<Pair<String, Int>>()
         val seenUrls = mutableSetOf<String>()
         val seenEps = mutableSetOf<Int>()
-
-        // Slug untuk konstruksi URL: "young-sherlock-2026" dari ".../tv/young-sherlock-2026/"
         val slug = url.trimEnd('/').substringAfterLast('/')
-        Log.i(TAG, "load() slug=$slug")
 
-        // === Strategi A: HTML <a href=".../eps/...-episode-N/"> ===
         val epLinkSelectors = listOf(
             "a[href*=/eps/]",
             "a[href*=/episode-]",
@@ -205,7 +202,6 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // === Strategi B: JSON "episodes":[...] ===
         if (episodes.isEmpty()) {
             Regex("\"episodes\"\\s*:\\s*\\[([\\s\\S]*?)\\]\\s*[,}]").findAll(html).forEach { match ->
                 val epsJson = match.groupValues[1]
@@ -213,7 +209,6 @@ class Rebahin : MainAPI() {
                     .mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
                 val seasonNums = Regex("\"seasonNumber\"\\s*:\\s*(\\d+)").findAll(epsJson)
                     .mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
-                Log.i(TAG, "load() JSON episodes -> epNums=$epNums, seasonNums=$seasonNums")
                 epNums.forEachIndexed { i, epNum ->
                     val seasonNum = seasonNums.getOrNull(i) ?: 1
                     val epUrl = "$mainUrl/eps/$slug-season-$seasonNum-episode-$epNum/"
@@ -224,8 +219,6 @@ class Rebahin : MainAPI() {
             }
         }
 
-        Log.i(TAG, "load() total episodes=${episodes.size}")
-
         val episodeUrls = episodes.map { (epUrl, epNum) ->
             newEpisode(epUrl) {
                 this.name = "Eps $epNum"
@@ -234,11 +227,7 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // Selalu kembalikan TvSeriesLoadResponse untuk URL /tv/,
-        // walaupun tidak ada episode terdeteksi — supaya CloudStream tetap
-        // memperlakukan sebagai series (bukan memutar URL series sebagai movie).
         if (episodeUrls.isEmpty()) {
-            Log.w(TAG, "load() no episodes detected, returning series with 1 dummy pointing to series URL")
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, listOf(
                 newEpisode(url) {
                     this.name = "Play"
@@ -286,7 +275,6 @@ class Rebahin : MainAPI() {
         val doc = resp.document
         Log.i(TAG, "loadLinks() page fetched, len=${raw.length}")
 
-        // === 1. Kumpulkan URL iframe ===
         val embedUrls = mutableSetOf<String>()
 
         doc.select("iframe").asIterable().forEach { iframe ->
@@ -315,7 +303,7 @@ class Rebahin : MainAPI() {
 
         Log.i(TAG, "loadLinks() found ${filteredEmbeds.size} embed(s): $filteredEmbeds")
 
-        // === 2. Built-in extractor untuk semua embed ===
+        // === 1. Built-in extractor ===
         for (embedUrl in filteredEmbeds) {
             Log.i(TAG, "loadLinks() trying built-in loadExtractor on $embedUrl")
             try {
@@ -326,12 +314,12 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // === 3. Custom VidHide extractor (jika built-in gagal) ===
+        // === 2. Custom VidHide extractor ===
         if (linkCount == 0) {
             for (embedUrl in filteredEmbeds) {
                 Log.i(TAG, "loadLinks() trying custom extractVidHide on $embedUrl")
                 try {
-                    extractVidHide(embedUrl, data, wrappedCallback)
+                    extractVidHide(embedUrl, data, subtitleCallback, wrappedCallback)
                     Log.i(TAG, "loadLinks() extractVidHide done, linkCount=$linkCount")
                 } catch (e: Exception) {
                     Log.e(TAG, "loadLinks() extractVidHide exception: ${e.message}")
@@ -339,7 +327,7 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // === 4. Fallback: JSON sources/playerSources di HTML ===
+        // === 3. Fallback: JSON sources di HTML ===
         if (linkCount == 0) {
             Log.i(TAG, "loadLinks() trying JSON sources fallback")
             var pos = 0
@@ -383,174 +371,150 @@ class Rebahin : MainAPI() {
         return linkCount > 0
     }
 
+    /**
+     * Extractor VidHide:
+     * 1. GET /embed/{id}
+     * 2. Parse form action + input hidden
+     * 3. POST ke action URL
+     * 4. Cari URL m3u8/mp4 di response
+     */
     private suspend fun extractVidHide(
         embedUrl: String,
         referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val host = try { java.net.URL(embedUrl).host } catch (_: Exception) { "" }
-        Log.i(TAG, "extractVidHide() START host=$host")
+        Log.i(TAG, "extractVidHide() START embed=$embedUrl")
 
-        // Beberapa varian header
-        val headersList = listOf(
-            mapOf(
-                "Referer" to embedUrl,
+        // === 1. GET halaman embed ===
+        val pageResp = try {
+            app.get(embedUrl, referer = referer, headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-            ),
-            mapOf(
-                "Referer" to referer,
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-            ),
-            mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        )
-
-        var pageText: String? = null
-        for ((i, headers) in headersList.withIndex()) {
-            try {
-                Log.i(TAG, "extractVidHide() fetch attempt #$i")
-                val r = app.get(embedUrl, headers = headers)
-                if (!r.text.isNullOrBlank()) {
-                    pageText = r.text
-                    Log.i(TAG, "extractVidHide() got ${r.text.length} chars")
-                    break
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "extractVidHide() fetch #$i failed: ${e.message}")
-            }
-        }
-
-        val text = pageText ?: run {
-            Log.e(TAG, "extractVidHide() could not fetch page")
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "extractVidHide() GET failed: ${e.message}")
             return
         }
+        val pageHtml = pageResp.text ?: return
+        Log.i(TAG, "extractVidHide() GET ok, len=${pageHtml.length}")
+
+        // === 2. Ekstrak action form dan hidden inputs ===
+        val actionRegex = Regex("""<form[^>]+action=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val actionMatch = actionRegex.find(pageHtml)
+        val actionUrl = actionMatch?.groupValues?.get(1)?.let { toAbsolute(it, embedUrl) } ?: embedUrl
+        Log.i(TAG, "extractVidHide() actionUrl=$actionUrl")
+
+        val refRegex = Regex("""name=["']referer["'][^>]+value=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+        val refererValue = refRegex.find(pageHtml)?.groupValues?.get(1) ?: referer
+        Log.i(TAG, "extractVidHide() refererValue=$refererValue")
+
+        val postData = mutableMapOf<String, String>()
+        postData["referer"] = refererValue
+        Regex("""<input[^>]+name=["']([^"']+)["'][^>]+value=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            .findAll(pageHtml).forEach { m ->
+                val name = m.groupValues[1]
+                val value = m.groupValues[2]
+                if (name != "referer" && value.isNotBlank()) {
+                    postData[name] = value
+                }
+            }
+        Log.i(TAG, "extractVidHide() postData keys=${postData.keys}, referer=$refererValue")
+
+        // === 3. POST ke action URL ===
+        val postResp = try {
+            app.post(
+                actionUrl,
+                data = postData,
+                referer = embedUrl,
+                headers = mapOf(
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Accept" to "application/json, text/javascript, */*; q=0.01",
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "extractVidHide() POST failed: ${e.message}")
+            return
+        }
+        val postText = postResp.text ?: return
+        Log.i(TAG, "extractVidHide() POST status=${postResp.code}, len=${postText.length}")
+        Log.i(TAG, "extractVidHide() POST body first 1500: ${postText.take(1500).replace("\n", "\\n")}")
 
         val candidates = mutableSetOf<String>()
 
-        // Langsung cari di raw
-        collectVideoUrls(text, candidates)
-        Log.i(TAG, "extractVidHide() after raw collect: ${candidates.size} candidate(s)")
+        // === 4a. Parse JSON ===
+        try {
+            val json = JSONObject(postText)
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = json.optString(k, "")
+                if (v.length > 5 && (v.contains("http") || v.contains("m3u8") || v.contains(".mp4") || v.startsWith("//"))) {
+                    Log.i(TAG, "extractVidHide() JSON key=$k -> $v")
+                    candidates.add(v)
+                }
+                val nested = json.optJSONObject(k)
+                if (nested != null) {
+                    val nk = nested.keys()
+                    while (nk.hasNext()) {
+                        val n = nk.next()
+                        val nv = nested.optString(n, "")
+                        if (nv.length > 5 && (nv.contains("http") || nv.contains("m3u8") || nv.contains(".mp4") || nv.startsWith("//"))) {
+                            Log.i(TAG, "extractVidHide() JSON nested $k.$n -> $nv")
+                            candidates.add(nv)
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) { }
 
-        // Unpack JS
-        val unpacked = unpackDeanEdwards(text)
-        if (unpacked != text) {
-            Log.i(TAG, "extractVidHide() unpacked (${unpacked.length} chars)")
-            collectVideoUrls(unpacked, candidates)
-            Log.i(TAG, "extractVidHide() after unpack: ${candidates.size} candidate(s)")
-        } else {
-            Log.w(TAG, "extractVidHide() unpack returned same string")
+        // === 4b. Ekstrak URL langsung dari body ===
+        Regex("""(https?:)?//[^\s"'<>\\]+\.(m3u8|mp4)[^\s"'<>\\]*""").findAll(postText).forEach { m ->
+            candidates.add(m.value)
         }
 
-        // Unpack berulang (beberapa pakai nested)
-        var current = unpacked
-        var depth = 0
-        while (depth < 3) {
-            val next = unpackDeanEdwards(current)
-            if (next == current) break
-            collectVideoUrls(next, candidates)
-            current = next
-            depth++
+        // === 4c. Value string yang mengandung m3u8/mp4/hls ===
+        Regex(""""([^"]{10,})"""").findAll(postText).forEach { m ->
+            val v = m.groupValues[1]
+            if (v.contains("m3u8") || v.contains(".mp4") || v.contains("/hls/") || v.contains("/stream/")) {
+                candidates.add(v)
+            }
         }
 
-        val decoded = decodeUnicodeEscapes(current)
-        if (decoded != current) collectVideoUrls(decoded, candidates)
+        // === 4d. Plain "sources" / "file" ===
+        Regex(""""sources?"\s*:\s*"([^"]+)"""").findAll(postText).forEach { candidates.add(it.groupValues[1]) }
+        Regex(""""file"\s*:\s*"([^"]+)"""").findAll(postText).forEach { candidates.add(it.groupValues[1]) }
 
-        Log.i(TAG, "extractVidHide() total candidates=${candidates.size}")
+        // === 4e. Base64 yang decode-nya mengandung URL ===
+        Regex("""["']([A-Za-z0-9+/=]{60,})["']""").findAll(postText).forEach { m ->
+            try {
+                val decoded = String(android.util.Base64.decode(m.groupValues[1], android.util.Base64.DEFAULT))
+                if (decoded.contains("http") || decoded.contains("m3u8") || decoded.contains("/hls/")) {
+                    Regex("""(https?:)?//[^\s"'<>\\]+\.(m3u8|mp4)[^\s"'<>\\]*""").findAll(decoded).forEach { mm ->
+                        candidates.add(mm.value)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
 
-        for (url in candidates) {
-            val fixed = url.replace("\\/", "/")
-            Log.i(TAG, "extractVidHide() emitting: $fixed")
-            callback(newExtractorLink("Rebahin", "Rebahin - $host", fixed) {
+        Log.i(TAG, "extractVidHide() total candidates=${candidates.size}: $candidates")
+
+        // === 5. Emit ===
+        for (c in candidates) {
+            val fixed = c.replace("\\/", "/").replace("\\u0026", "&")
+            if (fixed.length < 10) continue
+            val url = if (fixed.startsWith("//")) "https:$fixed" else fixed
+            Log.i(TAG, "extractVidHide() emit=$url")
+            callback(newExtractorLink("Rebahin", "Rebahin - VidHide", url) {
                 this.referer = embedUrl
-                this.quality = if (fixed.contains("1080")) 3 else if (fixed.contains("720")) 2 else 3
+                this.quality = 3
             })
         }
-    }
 
-    private fun collectVideoUrls(text: String, out: MutableSet<String>) {
-        val patterns = listOf(
-            Regex(""""file"\s*:\s*"([^"]+\.m3u8[^"]*)""""),
-            Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']"""),
-            Regex(""""file"\s*:\s*"([^"]+\.mp4[^"]*)""""),
-            Regex("""file\s*:\s*["']([^"']+\.mp4[^"']*)["']"""),
-            Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']"""),
-            Regex("""["'](https?://[^"']+\.mp4[^"']*)["']"""),
-            Regex("""(https?://[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)"""),
-            Regex("""(https?://[^\s"'<>\\]+\.mp4[^\s"'<>\\]*)""")
-        )
-        for (p in patterns) {
-            p.findAll(text).forEach { m ->
-                val u = m.groupValues[1].trim()
-                if (u.isNotBlank()) out.add(u)
-            }
-        }
-    }
-
-    /**
-     * Dean Edwards Packer unpacker.
-     * Format khas: eval(function(p,a,c,k,e,d){...}('PAYLOAD',RADIX,COUNT,'SYM|TAB'.split('|'),0,{}))
-     */
-    private fun unpackDeanEdwards(input: String): String {
-        // Cari blok packer dengan lebih longgar
-        val regex = Regex(
-            """eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)[\s\S]*?\}\s*\(\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*\.split\s*\(\s*['"]\|['"]\s*\)""",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val match = regex.find(input) ?: run {
-            Log.w(TAG, "unpackDeanEdwards() no match for packer signature")
-            return input
-        }
-
-        val payloadRaw = match.groupValues[1]
-        val radix = match.groupValues[2].toIntOrNull() ?: return input
-        val count = match.groupValues[3].toIntOrNull() ?: return input
-        val symtabRaw = match.groupValues[4]
-
-        Log.i(TAG, "unpackDeanEdwards() radix=$radix count=$count symtabLen=${symtabRaw.length}")
-
-        val payload = payloadRaw
-            .replace("\\'", "'")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-            .replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t")
-            .replace("\\/", "/")
-
-        val symtab = symtabRaw.split("|").toMutableList()
-
-        fun unbase(c: Int): String {
-            val head = if (c < radix) "" else unbase(c / radix)
-            val r = c % radix
-            val ch = if (r > 35) (r + 29).toChar().toString() else r.toString(36)
-            return head + ch
-        }
-
-        while (symtab.size < count) symtab.add(unbase(symtab.size))
-
-        val dict = HashMap<String, String>()
-        for (i in symtab.indices) {
-            val key = unbase(i)
-            val v = symtab[i]
-            dict[key] = if (v.isBlank()) key else v
-        }
-
-        val result = Regex("""\b\w+\b""").replace(payload) { m ->
-            dict[m.value] ?: m.value
-        }
-
-        Log.i(TAG, "unpackDeanEdwards() unpacked payload: ${result.take(200)}")
-        return result
-    }
-
-    private fun decodeUnicodeEscapes(s: String): String {
-        val re = Regex("""\\u([0-9a-fA-F]{4})""")
-        return re.replace(s) { m ->
-            try {
-                m.groupValues[1].toInt(16).toChar().toString()
-            } catch (_: Exception) {
-                m.value
-            }
+        if (candidates.isEmpty()) {
+            Log.w(TAG, "extractVidHide() NO CANDIDATES. Full POST body:")
+            Log.w(TAG, postText.take(3000))
         }
     }
 

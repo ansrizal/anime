@@ -18,10 +18,12 @@ class Rebahin : MainAPI() {
     private val TAG = "Rebahin"
 
     override val mainPage = mainPageOf(
+        "" to "Film Terbaru",
         "movies/" to "Movies",
         "tv/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror"
+        "genre/horror/" to "Horror",
+        "genre/fantasy/" to "Fantasi"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -161,7 +163,6 @@ class Rebahin : MainAPI() {
         val episodes = mutableListOf<Pair<String, Int>>()
         val seenUrls = mutableSetOf<String>()
         val seenEps = mutableSetOf<Int>()
-        val slug = url.trimEnd('/').substringAfterLast('/')
 
         for (sel in listOf("a[href*=/eps/]", "a[href*=/episode-]", "a[href*=/episode/]", "a[href*=/season-]")) {
             doc.select(sel).asIterable().forEach { a ->
@@ -286,6 +287,9 @@ class Rebahin : MainAPI() {
         return linkCount > 0
     }
 
+    /**
+     * Extractor VidHide v4.6.6. Mencoba banyak endpoint AJAX.
+     */
     private suspend fun extractVidHide(
         embedUrl: String,
         referer: String,
@@ -295,77 +299,103 @@ class Rebahin : MainAPI() {
         val baseHost = try { "${java.net.URL(embedUrl).protocol}://${java.net.URL(embedUrl).host}" } catch (_: Exception) { "" }
         val embedId = Regex("""/embed/([A-Za-z0-9]+)""").find(embedUrl)?.groupValues?.getOrNull(1) ?: ""
 
-        Log.i(TAG, "extractVidHide: START base=$baseHost id=$embedId")
+        Log.i(TAG, "extractVidHide: base=$baseHost id=$embedId")
 
         val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        val commonHeaders = mapOf(
+            "User-Agent" to ua,
+            "Referer" to embedUrl,
+            "Origin" to baseHost,
+            "X-Requested-With" to "XMLHttpRequest",
+            "Accept" to "application/json, text/javascript, */*; q=0.01"
+        )
 
-        val text = try {
-            app.get(
-                embedUrl,
-                headers = mapOf(
-                    "User-Agent" to ua,
-                    "Referer" to referer,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                )
-            ).text
+        // 1. GET halaman embed (untuk cookie sesi)
+        try {
+            val r = app.get(embedUrl, headers = mapOf(
+                "User-Agent" to ua,
+                "Referer" to referer,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            ))
+            val text = r.text ?: ""
+            Log.i(TAG, "extractVidHide: GET len=${text.length}")
+            collectVideoUrls(text, candidates)
         } catch (e: Exception) {
-            Log.e(TAG, "extractVidHide: GET failed ${e.message}"); null
-        } ?: return
-        Log.i(TAG, "extractVidHide: GET len=${text.length}")
+            Log.e(TAG, "extractVidHide: GET failed ${e.message}")
+        }
 
-        collectVideoUrls(text, candidates)
-
-        if (candidates.isEmpty()) {
-            val unpacked = tryUnpack(text)
-            if (unpacked != text) {
-                collectVideoUrls(unpacked, candidates)
-                Log.i(TAG, "extractVidHide: after unpack=${candidates.size}")
+        // 2. Coba semua endpoint AJAX VidHide yang dikenal
+        if (candidates.isEmpty() && embedId.isNotBlank()) {
+            val endpoints = listOf(
+                "$baseHost/dl?op=view&id=$embedId&referer=$referer",
+                "$baseHost/dl?op=view&id=$embedId",
+                "$baseHost/dl?op=view&id=$embedId&referer=$embedUrl",
+                "$baseHost/stream/$embedId",
+                "$baseHost/api/v1/video/$embedId",
+                "$baseHost/api/v1/stream/$embedId"
+            )
+            for (ep in endpoints) {
+                try {
+                    Log.i(TAG, "extractVidHide: GET $ep")
+                    val r = app.get(ep, headers = commonHeaders)
+                    val body = r.text ?: ""
+                    Log.i(TAG, "extractVidHide: resp ${r.code} len=${body.length}")
+                    if (body.isNotBlank()) {
+                        collectVideoUrls(body, candidates)
+                        if (candidates.isEmpty()) parseJsonUrl(body, candidates)
+                    }
+                    if (candidates.isNotEmpty()) break
+                } catch (_: Exception) { }
             }
         }
 
+        // 3. POST ke /dl?op=view
+        if (candidates.isEmpty() && embedId.isNotBlank()) {
+            val postEndpoints = listOf(
+                "$baseHost/dl?op=view&id=$embedId",
+                "$baseHost/dl"
+            )
+            for (ep in postEndpoints) {
+                try {
+                    Log.i(TAG, "extractVidHide: POST $ep")
+                    val r = app.post(
+                        ep,
+                        data = mapOf("op" to "view", "id" to embedId, "referer" to referer),
+                        headers = commonHeaders
+                    )
+                    val body = r.text ?: ""
+                    Log.i(TAG, "extractVidHide: POST resp ${r.code} len=${body.length}")
+                    if (body.isNotBlank()) {
+                        collectVideoUrls(body, candidates)
+                        if (candidates.isEmpty()) parseJsonUrl(body, candidates)
+                    }
+                    if (candidates.isNotEmpty()) break
+                } catch (_: Exception) { }
+            }
+        }
+
+        // 4. POST ke /embed/{id} dengan referer (form validation)
         if (candidates.isEmpty() && embedId.isNotBlank()) {
             try {
-                Log.i(TAG, "extractVidHide: POST /dl?op=view&id=$embedId")
-                val apiResp = app.post(
-                    "$baseHost/dl?op=view&id=$embedId",
+                val r = app.post(
+                    "$baseHost/embed/$embedId",
                     data = mapOf("referer" to referer),
                     headers = mapOf(
-                        "X-Requested-With" to "XMLHttpRequest",
+                        "User-Agent" to ua,
                         "Referer" to embedUrl,
-                        "User-Agent" to ua
+                        "Origin" to baseHost,
+                        "Content-Type" to "application/x-www-form-urlencoded"
                     )
                 )
-                val apiText = apiResp.text ?: ""
-                Log.i(TAG, "extractVidHide: POST response len=${apiText.length}")
-                collectVideoUrls(apiText, candidates)
-
-                if (candidates.isEmpty()) {
-                    try {
-                        val json = JSONObject(apiText)
-                        val f1 = json.optString("file", "")
-                        if (f1.isNotBlank()) candidates.add(f1)
-                        val f2 = json.optString("url", "")
-                        if (f2.isNotBlank()) candidates.add(f2)
-                        val f3 = json.optString("src", "")
-                        if (f3.isNotBlank()) candidates.add(f3)
-                    } catch (_: Exception) { }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "extractVidHide: POST failed ${e.message}")
-            }
-        }
-
-        if (candidates.isEmpty() && embedId.isNotBlank()) {
-            try {
-                val streamResp = app.get(
-                    "$baseHost/stream/$embedId",
-                    headers = mapOf("Referer" to embedUrl, "User-Agent" to ua)
-                )
-                collectVideoUrls(streamResp.text ?: "", candidates)
+                val body = r.text ?: ""
+                Log.i(TAG, "extractVidHide: POST /embed resp ${r.code} len=${body.length}")
+                collectVideoUrls(body, candidates)
+                if (candidates.isEmpty()) parseJsonUrl(body, candidates)
             } catch (_: Exception) { }
         }
 
-        Log.i(TAG, "extractVidHide: total candidates=${candidates.size}: $candidates")
+        Log.i(TAG, "extractVidHide: total=${candidates.size}: $candidates")
+
         for (url in candidates) {
             val fixed = url.replace("\\/", "/")
             val finalUrl = if (fixed.startsWith("//")) "https:$fixed" else fixed
@@ -374,6 +404,26 @@ class Rebahin : MainAPI() {
                 this.quality = if (finalUrl.contains("1080")) 3 else if (finalUrl.contains("720")) 2 else 3
             })
         }
+    }
+
+    private fun parseJsonUrl(body: String, out: MutableSet<String>) {
+        try {
+            val json = JSONObject(body)
+            for (key in listOf("file", "url", "src", "m3u8", "hls", "link")) {
+                val v = json.optString(key, "")
+                if (v.isNotBlank() && (v.contains(".m3u8") || v.contains(".mp4") || v.startsWith("http"))) {
+                    out.add(v)
+                }
+            }
+            // Nested: data.file
+            val data = json.optJSONObject("data")
+            if (data != null) {
+                for (key in listOf("file", "url", "src", "m3u8", "hls", "link")) {
+                    val v = data.optString(key, "")
+                    if (v.isNotBlank() && v.startsWith("http")) out.add(v)
+                }
+            }
+        } catch (_: Exception) { }
     }
 
     private fun collectVideoUrls(text: String, out: MutableSet<String>) {
@@ -386,8 +436,7 @@ class Rebahin : MainAPI() {
             Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']"""),
             Regex("""["'](https?://[^"']+\.mp4[^"']*)["']"""),
             Regex("""(https?://[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)"""),
-            Regex("""(https?://[^\s"'<>\\]+\.mp4[^\s"'<>\\]*)"""),
-            Regex("""["'](/[^"']+\.m3u8[^"']*)["']""")
+            Regex("""(https?://[^\s"'<>\\]+\.mp4[^\s"'<>\\]*)""")
         )
         for (p in patterns) {
             p.findAll(text).forEach { m ->
@@ -395,45 +444,6 @@ class Rebahin : MainAPI() {
                 if (u.isNotBlank() && !u.contains(" ") && u.length < 500) out.add(u)
             }
         }
-    }
-
-    private fun tryUnpack(input: String): String {
-        val regex = Regex(
-            """\}\s*\(\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]((?:\\[\s\S]|[^'"])*?)['"]\s*\.split\s*\(\s*['"]\|['"]\s*\)""",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val match = regex.find(input) ?: return input
-        val payloadRaw = match.groupValues[1]
-        val radix = match.groupValues[2].toIntOrNull() ?: return input
-        val count = match.groupValues[3].toIntOrNull() ?: return input
-        val symtabRaw = match.groupValues[4]
-
-        Log.i(TAG, "tryUnpack: radix=$radix count=$count symtabLen=${symtabRaw.length}")
-
-        val payload = payloadRaw
-            .replace("\\'", "'").replace("\\\"", "\"")
-            .replace("\\\\", "\\").replace("\\n", "\n")
-            .replace("\\r", "\r").replace("\\t", "\t").replace("\\/", "/")
-
-        val symtab = symtabRaw.split("|").toMutableList()
-
-        fun unbase(c: Int): String {
-            val head = if (c < radix) "" else unbase(c / radix)
-            val r = c % radix
-            val ch = if (r > 35) (r + 29).toChar().toString() else r.toString(36)
-            return head + ch
-        }
-
-        while (symtab.size < count) symtab.add(unbase(symtab.size))
-
-        val dict = HashMap<String, String>()
-        for (i in symtab.indices) {
-            val key = unbase(i)
-            val v = symtab[i]
-            dict[key] = if (v.isBlank()) key else v
-        }
-
-        return Regex("""\b\w+\b""").replace(payload) { m -> dict[m.value] ?: m.value }
     }
 
     private fun toAbsolute(url: String, base: String): String {

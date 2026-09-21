@@ -18,12 +18,10 @@ class Rebahin : MainAPI() {
     private val TAG = "Rebahin"
 
     override val mainPage = mainPageOf(
-        "" to "Film Terbaru",
         "movies/" to "Movies",
         "tv/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror",
-        "genre/fantasy/" to "Fantasi"
+        "genre/horror/" to "Horror"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -288,14 +286,6 @@ class Rebahin : MainAPI() {
         return linkCount > 0
     }
 
-    /**
-     * Ekstraktor VidHide v4.6.6 (PlayerX).
-     * Strategi:
-     *  1. Cari m3u8 langsung di HTML embed.
-     *  2. POST ke /dl?op=view&id={id} dengan referer.
-     *  3. GET /stream/{id}.
-     *  4. Unpack eval packer (jika ada).
-     */
     private suspend fun extractVidHide(
         embedUrl: String,
         referer: String,
@@ -307,11 +297,17 @@ class Rebahin : MainAPI() {
 
         Log.i(TAG, "extractVidHide: START base=$baseHost id=$embedId")
 
-        // 1. Fetch halaman embed
+        val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
         val text = try {
-            app.get(embedUrl, referer = referer, headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )).text
+            app.get(
+                embedUrl,
+                headers = mapOf(
+                    "User-Agent" to ua,
+                    "Referer" to referer,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                )
+            ).text
         } catch (e: Exception) {
             Log.e(TAG, "extractVidHide: GET failed ${e.message}"); null
         } ?: return
@@ -319,7 +315,6 @@ class Rebahin : MainAPI() {
 
         collectVideoUrls(text, candidates)
 
-        // 2. Unpack eval packer kalau ada
         if (candidates.isEmpty()) {
             val unpacked = tryUnpack(text)
             if (unpacked != text) {
@@ -328,7 +323,6 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // 3. POST ke /dl?op=view
         if (candidates.isEmpty() && embedId.isNotBlank()) {
             try {
                 Log.i(TAG, "extractVidHide: POST /dl?op=view&id=$embedId")
@@ -338,20 +332,22 @@ class Rebahin : MainAPI() {
                     headers = mapOf(
                         "X-Requested-With" to "XMLHttpRequest",
                         "Referer" to embedUrl,
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        "User-Agent" to ua
                     )
                 )
                 val apiText = apiResp.text ?: ""
                 Log.i(TAG, "extractVidHide: POST response len=${apiText.length}")
                 collectVideoUrls(apiText, candidates)
 
-                // Coba parse sebagai JSON
                 if (candidates.isEmpty()) {
                     try {
                         val json = JSONObject(apiText)
-                        json.optString("file").takeIf { it.isNotBlank() }?.let { candidates.add(it) }
-                        json.optString("url").takeIf { it.isNotBlank() }?.let { candidates.add(it) }
-                        json.optString("src").takeIf { it.isNotBlank() }?.let { candidates.add(it) }
+                        val f1 = json.optString("file", "")
+                        if (f1.isNotBlank()) candidates.add(f1)
+                        val f2 = json.optString("url", "")
+                        if (f2.isNotBlank()) candidates.add(f2)
+                        val f3 = json.optString("src", "")
+                        if (f3.isNotBlank()) candidates.add(f3)
                     } catch (_: Exception) { }
                 }
             } catch (e: Exception) {
@@ -359,29 +355,24 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // 4. GET /stream/{id}
         if (candidates.isEmpty() && embedId.isNotBlank()) {
             try {
-                val streamResp = app.get("$baseHost/stream/$embedId", referer = embedUrl)
-                val streamText = streamResp.text ?: ""
-                collectVideoUrls(streamText, candidates)
+                val streamResp = app.get(
+                    "$baseHost/stream/$embedId",
+                    headers = mapOf("Referer" to embedUrl, "User-Agent" to ua)
+                )
+                collectVideoUrls(streamResp.text ?: "", candidates)
             } catch (_: Exception) { }
         }
 
         Log.i(TAG, "extractVidHide: total candidates=${candidates.size}: $candidates")
         for (url in candidates) {
             val fixed = url.replace("\\/", "/")
-            if (fixed.startsWith("//")) {
-                callback(newExtractorLink("Rebahin", "Rebahin - VidHide", "https:$fixed") {
-                    this.referer = embedUrl
-                    this.quality = if (fixed.contains("1080")) 3 else if (fixed.contains("720")) 2 else 3
-                })
-            } else {
-                callback(newExtractorLink("Rebahin", "Rebahin - VidHide", fixed) {
-                    this.referer = embedUrl
-                    this.quality = if (fixed.contains("1080")) 3 else if (fixed.contains("720")) 2 else 3
-                })
-            }
+            val finalUrl = if (fixed.startsWith("//")) "https:$fixed" else fixed
+            callback(newExtractorLink("Rebahin", "Rebahin - VidHide", finalUrl) {
+                this.referer = embedUrl
+                this.quality = if (finalUrl.contains("1080")) 3 else if (finalUrl.contains("720")) 2 else 3
+            })
         }
     }
 

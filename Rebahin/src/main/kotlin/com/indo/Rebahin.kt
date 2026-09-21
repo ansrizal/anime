@@ -3,6 +3,7 @@ package com.indo
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import org.json.JSONObject
 
 class Rebahin : MainAPI() {
@@ -97,7 +98,7 @@ class Rebahin : MainAPI() {
         val resp = try { app.get("$mainUrl/api/search?q=$query") } catch(_: Exception) { null }
         val text = resp?.text
         val data = if (text != null) try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { null } else null
-        
+
         if (data != null) {
             return (0 until data.length()).mapNotNull { i ->
                 val item = data.optJSONObject(i) ?: return@mapNotNull null
@@ -196,12 +197,32 @@ class Rebahin : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val resp = app.get(data)
-        val raw = resp.text ?: return true
+        val raw = resp.text ?: return false
         val html = raw.replace("\\\"", "\"")
         val doc = resp.document
         var found = false
 
-        // Strategy 1: JSON "sources" / "playerSources"
+        // Kumpulkan semua URL iframe embed (vidhide, dll)
+        val embedUrls = mutableSetOf<String>()
+        doc.select("iframe").asIterable().forEach { iframe ->
+            val src = iframe.attr("abs:src").ifBlank {
+                iframe.attr("abs:data-src").ifBlank {
+                    iframe.attr("abs:data-litespeed-src").ifBlank {
+                        iframe.attr("src").ifBlank { iframe.attr("data-src") }
+                    }
+                }
+            }
+            if (src.isNotBlank() &&
+                !src.contains("youtube", true) &&
+                !src.contains("youtu.be", true) &&
+                !src.contains("google.com/maps", true)
+            ) {
+                val fixed = if (src.startsWith("//")) "https:$src" else src
+                embedUrls.add(fixed)
+            }
+        }
+
+        // Fallback: parse JSON "sources"/"playerSources" kalau ada
         var pos = 0
         while (true) {
             val srcIdx = html.indexOf("\"sources\":[", pos)
@@ -238,84 +259,13 @@ class Rebahin : MainAPI() {
             }
         }
 
-        // Strategy 2: iframe embed langsung di halaman
-        doc.select("iframe[src]").asIterable().forEach { iframe ->
-            val src = iframe.attr("abs:src").ifBlank { iframe.attr("src") }
-            if (src.isNotBlank() &&
-                !src.contains("youtube", true) &&
-                !src.contains("youtu.be", true) &&
-                !src.contains("google", true)
-            ) {
-                val fixed = if (src.startsWith("//")) "https:$src" else fixUrl(src)
-                callback(newExtractorLink("Rebahin", "Rebahin - Embed", fixed) {
-                    this.referer = "$mainUrl/"
-                    this.isEmbed = true
-                })
+        // Serahkan URL embed ke extractor bawaan Cloudstream (VidHide, dll)
+        for (embedUrl in embedUrls) {
+            try {
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
                 found = true
-            }
-        }
-
-        // Strategy 3: atribut data-url / data-src / data-embed / data-video
-        doc.select("[data-url], [data-src], [data-embed], [data-video]").asIterable().forEach { el ->
-            val url = el.attr("data-url").ifBlank {
-                el.attr("data-src").ifBlank {
-                    el.attr("data-embed").ifBlank {
-                        el.attr("data-video")
-                    }
-                }
-            }
-            if (url.isNotBlank() && (url.startsWith("http") || url.startsWith("//"))) {
-                val fixed = if (url.startsWith("//")) "https:$url" else url
-                if (!fixed.contains("youtube", true) && !fixed.contains("youtu.be", true)) {
-                    callback(newExtractorLink("Rebahin", "Rebahin - Server", fixed) {
-                        this.referer = "$mainUrl/"
-                        this.isEmbed = true
-                    })
-                    found = true
-                }
-            }
-        }
-
-        // Strategy 4: pola server muvipro (data-id + data-server) via AJAX
-        val serverEls = doc.select("a[data-id][data-server], li[data-id][data-server], a[data-post][data-nume]")
-        serverEls.asIterable().forEach { el ->
-            val serverId = el.attr("data-id").ifBlank { el.attr("data-post") }
-            val serverNum = el.attr("data-server").ifBlank { el.attr("data-nume") }
-            val postType = el.attr("data-type").ifBlank { "movie" }
-            if (serverId.isNotBlank()) {
-                val actions = listOf("muvipro_player", "player_ajax", "idmuvi_player", "get_player")
-                for (action in actions) {
-                    try {
-                        val ajaxResp = app.post(
-                            "$mainUrl/wp-admin/admin-ajax.php",
-                            data = mapOf(
-                                "action" to action,
-                                "id" to serverId,
-                                "post" to serverId,
-                                "nume" to serverNum,
-                                "server" to serverNum,
-                                "type" to postType
-                            )
-                        )
-                        val ajaxText = ajaxResp.text ?: continue
-                        val embedUrl = Regex("""src=["']([^"']+)["']""").find(ajaxText)?.groupValues?.getOrNull(1)
-                            ?: Regex("""(https?:)?//[^\s"'<>]+\.(mp4|m3u8)[^\s"'<>]*""").find(ajaxText)?.value
-                        if (!embedUrl.isNullOrBlank() &&
-                            !embedUrl.contains("youtube", true) &&
-                            !embedUrl.contains("youtu.be", true)
-                        ) {
-                            val fixed = if (embedUrl.startsWith("//")) "https:$embedUrl" else fixUrl(embedUrl)
-                            callback(newExtractorLink("Rebahin", "Rebahin - Server $serverNum", fixed) {
-                                this.referer = "$mainUrl/"
-                                this.isEmbed = !fixed.contains(".mp4") && !fixed.contains(".m3u8")
-                            })
-                            found = true
-                            break
-                        }
-                    } catch (_: Exception) {
-                        // coba action berikutnya
-                    }
-                }
+            } catch (_: Exception) {
+                // lanjut ke embed berikutnya
             }
         }
 

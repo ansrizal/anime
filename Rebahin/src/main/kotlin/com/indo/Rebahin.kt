@@ -15,10 +15,12 @@ class Rebahin : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     override val mainPage = mainPageOf(
+        "" to "Film Terbaru",
         "movies/" to "Movies",
         "tv/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror"
+        "genre/horror/" to "Horror",
+        "genre/fantasy/" to "Fantasi"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -38,7 +40,9 @@ class Rebahin : MainAPI() {
             val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}page/$page/"
             val doc = app.get(url.replace("//page", "/page")).document
             val items = doc.select("div.listupd article, div.bsx, div.ml-item, article").asIterable().mapNotNull { el ->
-                val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
+                val title = el.selectFirst("a[title]")?.attr("title")
+                    ?: el.selectFirst("h2, h3")?.text()
+                    ?: return@mapNotNull null
                 val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
                 val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }
                 newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
@@ -50,7 +54,7 @@ class Rebahin : MainAPI() {
     }
 
     private suspend fun getApiSection(name: String, page: Int, apiPath: String): HomePageList? {
-        val resp = try { app.get("$mainUrl/$apiPath?page=$page&limit=24") } catch(_: Exception) { return null }
+        val resp = try { app.get("$mainUrl/$apiPath?page=$page&limit=24") } catch (_: Exception) { return null }
         val text = resp.text ?: return null
         val data = try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { return null }
         if (data == null) return null
@@ -95,7 +99,7 @@ class Rebahin : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val resp = try { app.get("$mainUrl/api/search?q=$query") } catch(_: Exception) { null }
+        val resp = try { app.get("$mainUrl/api/search?q=$query") } catch (_: Exception) { null }
         val text = resp?.text
         val data = if (text != null) try { JSONObject(text).optJSONArray("data") } catch (e: Exception) { null } else null
 
@@ -111,17 +115,22 @@ class Rebahin : MainAPI() {
                 val voteAvg = if (item.has("voteAverage")) item.optDouble("voteAverage", -1.0).let { if (it < 0) null else it } else null
                 val href = if (type == "tv") "/tv/$id" else "/movies/$id"
                 if (type == "tv") {
-                    newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
+                    newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) {
+                        this.posterUrl = poster; this.score = Score.from10(voteAvg)
+                    }
                 } else {
-                    newMovieSearchResponse(title, fixUrl(href), TvType.Movie) { this.posterUrl = poster; this.score = Score.from10(voteAvg) }
+                    newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
+                        this.posterUrl = poster; this.score = Score.from10(voteAvg)
+                    }
                 }
             }
         }
 
-        // Scraper fallback
         val doc = app.get("$mainUrl/?s=$query").document
         return doc.select("div.listupd article, div.bsx, div.ml-item, article").asIterable().mapNotNull { el ->
-            val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
+            val title = el.selectFirst("a[title]")?.attr("title")
+                ?: el.selectFirst("h2, h3")?.text()
+                ?: return@mapNotNull null
             val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
             val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }
             newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = poster }
@@ -143,23 +152,38 @@ class Rebahin : MainAPI() {
         val year = Regex("(\\b20\\d{2}\\b)").find(html)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val tags = Regex("\"genres\":\\[([^\\]]+)\\]").find(html)?.let { m ->
             Regex("\"name\":\"([^\"]+)\"").findAll(m.value).map { it.groupValues[1] }.toList()
-        } ?: doc.select("a[href*=genre], a[href*=category]").asIterable().map { it.text() }.filter { it.isNotBlank() }
+        } ?: doc.select("a[href*=genre], a[href*=category]").asIterable()
+            .map { it.text() }.filter { it.isNotBlank() }
 
         val voteAvg = Regex("\"voteAverage\":([0-9.]+)").find(html)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
         val score = Score.from10(voteAvg)
 
         val isSeries = url.contains("/tv/")
-        return if (isSeries) {
-            val episodeUrls = mutableListOf<Episode>()
-            val episodesMatch = Regex("\"episodes\":\\[([^\\]]+)\\]").find(html)
-            if (episodesMatch != null) {
-                val epsJson = episodesMatch.groupValues[1]
-                Regex("\"episodeNumber\":(\\d+),\"seasonNumber\":(\\d+)").findAll(epsJson).forEach { ep ->
-                    val epNum = ep.groupValues[1].toIntOrNull()
-                    val seasonNum = ep.groupValues[2].toIntOrNull()
-                    if (epNum != null) {
-                        val epUrl = if (seasonNum != null) "$url/season-$seasonNum/episode-$epNum"
-                        else "$url/season-1/episode-$epNum"
+
+        if (!isSeries) {
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                posterUrl = poster
+                plot = description
+                this.tags = tags
+                this.year = year
+                this.score = score
+            }
+        }
+
+        // === TV Series: deteksi episode ===
+        val episodeUrls = mutableListOf<Episode>()
+        val seenEpisodes = mutableSetOf<String>()
+
+        // Pola 1: JSON "episodes":[...]
+        Regex("\"episodes\"\\s*:\\s*\\[([^\\]]+)\\]").find(html)?.let { match ->
+            val epsJson = match.groupValues[1]
+            Regex("\"episodeNumber\"\\s*:\\s*(\\d+)[^}]*?\"seasonNumber\"\\s*:\\s*(\\d+)").findAll(epsJson).forEach { ep ->
+                val epNum = ep.groupValues[1].toIntOrNull()
+                val seasonNum = ep.groupValues[2].toIntOrNull()
+                if (epNum != null) {
+                    val epUrl = if (seasonNum != null) "$url/season-$seasonNum/episode-$epNum"
+                    else "$url/season-1/episode-$epNum"
+                    if (seenEpisodes.add(epUrl)) {
                         episodeUrls.add(newEpisode(epUrl) {
                             this.name = "Eps $epNum"
                             this.episode = epNum
@@ -168,25 +192,45 @@ class Rebahin : MainAPI() {
                     }
                 }
             }
-            if (episodeUrls.isEmpty()) {
-                doc.select("a[href*=/episode-]").asIterable().forEach { a ->
-                    val href = a.attr("href").ifBlank { return@forEach }
-                    val epNum = Regex("episode-(\\d+)$").find(href)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    if (epNum != null) {
-                        episodeUrls.add(newEpisode(fixUrl(href)) {
-                            this.name = "Eps $epNum"
-                            this.episode = epNum
-                        })
-                    }
+        }
+
+        // Pola 2: <a href="...episode...">
+        if (episodeUrls.isEmpty()) {
+            doc.select("a[href*=/episode], a[href*=/eps-], a[href*=/season-], a[href*=-episode-], a[href*=-eps-]")
+                .asIterable().forEach { a ->
+                    val href = a.attr("abs:href").ifBlank { a.attr("href") }
+                    if (href.isBlank()) return@forEach
+                    val fixed = fixUrl(href)
+                    if (fixed == url || !seenEpisodes.add(fixed)) return@forEach
+                    val epNum = Regex("""(?:episode|eps)[-/](\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    val seasonNum = Regex("""season[-/](\d+)""").find(fixed)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    episodeUrls.add(newEpisode(fixed) {
+                        this.name = if (epNum != null) "Eps $epNum" else a.text().ifBlank { "Episode ${episodeUrls.size + 1}" }
+                        this.episode = epNum ?: (episodeUrls.size + 1)
+                        this.season = seasonNum ?: 1
+                    })
                 }
+        }
+
+        // Fallback: tidak ada episode terdeteksi → jadikan Movie response
+        // supaya tombol Play tetap muncul
+        if (episodeUrls.isEmpty()) {
+            println("Rebahin: no episodes found for $url, treating as movie")
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+                posterUrl = poster
+                plot = description
+                this.tags = tags
+                this.year = year
+                this.score = score
             }
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodeUrls) {
-                posterUrl = poster; plot = description; this.tags = tags; this.year = year; this.score = score
-            }
-        } else {
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
-                posterUrl = poster; plot = description; this.tags = tags; this.year = year; this.score = score
-            }
+        }
+
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodeUrls) {
+            posterUrl = poster
+            plot = description
+            this.tags = tags
+            this.year = year
+            this.score = score
         }
     }
 
@@ -196,80 +240,151 @@ class Rebahin : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val resp = app.get(data)
-        val raw = resp.text ?: return false
-        val html = raw.replace("\\\"", "\"")
-        val doc = resp.document
-        var found = false
+        var count = 0
+        val wrappedCallback: (ExtractorLink) -> Unit = { link ->
+            count++
+            callback(link)
+        }
 
-        // Kumpulkan semua URL iframe embed (vidhide, dll)
-        val embedUrls = mutableSetOf<String>()
-        doc.select("iframe").asIterable().forEach { iframe ->
-            val src = iframe.attr("abs:src").ifBlank {
-                iframe.attr("abs:data-src").ifBlank {
-                    iframe.attr("abs:data-litespeed-src").ifBlank {
-                        iframe.attr("src").ifBlank { iframe.attr("data-src") }
+        println("Rebahin: loadLinks start for $data")
+
+        val resp = try {
+            app.get(data)
+        } catch (e: Exception) {
+            println("Rebahin: fetch failed: ${e.message}")
+            return false
+        }
+        val html = resp.text ?: run {
+            println("Rebahin: empty response body")
+            return false
+        }
+        val doc = resp.document
+
+        // === 1. Kumpulkan URL iframe ===
+        val embedUrls = linkedSetOf<String>()
+        doc.select("iframe").forEach { iframe ->
+            listOf("abs:src", "src", "abs:data-src", "data-src",
+                   "abs:data-litespeed-src", "data-litespeed-src",
+                   "abs:data-lazy-src", "data-lazy-src").forEach { attr ->
+                val v = iframe.attr(attr)
+                if (v.isNotBlank()) {
+                    val abs = toAbsolute(v, data)
+                    if (!abs.contains("youtube", true) && !abs.contains("youtu.be", true)) {
+                        embedUrls.add(abs)
                     }
                 }
             }
-            if (src.isNotBlank() &&
-                !src.contains("youtube", true) &&
-                !src.contains("youtu.be", true) &&
-                !src.contains("google.com/maps", true)
-            ) {
-                val fixed = if (src.startsWith("//")) "https:$src" else src
-                embedUrls.add(fixed)
-            }
         }
-
-        // Fallback: parse JSON "sources"/"playerSources" kalau ada
-        var pos = 0
-        while (true) {
-            val srcIdx = html.indexOf("\"sources\":[", pos)
-            val playIdx = html.indexOf("\"playerSources\":[", pos)
-            val idx = when {
-                srcIdx >= 0 && playIdx >= 0 -> minOf(srcIdx, playIdx)
-                srcIdx >= 0 -> srcIdx
-                playIdx >= 0 -> playIdx
-                else -> break
-            }
-            pos = idx + 1
-            val arrayStart = html.indexOf('[', idx) + 1
-            if (arrayStart <= 0) continue
-            val arrayEnd = findMatchingBraceAny(html, arrayStart - 1, ']')
-            if (arrayEnd < 0) continue
-            val arrayContent = html.substring(arrayStart, arrayEnd)
-            var objPos = 0
-            while (true) {
-                val objStart = arrayContent.indexOf('{', objPos)
-                if (objStart < 0) break
-                val objEnd = findMatchingBraceAny(arrayContent, objStart, '}')
-                if (objEnd < 0) break
-                val obj = arrayContent.substring(objStart, objEnd + 1)
-                val videoUrl = Regex("\"playbackUrl\":\"([^\"]+)\"").find(obj)?.groupValues?.getOrNull(1)
-                val quality = Regex("\"quality\":\"([^\"]+)\"").find(obj)?.groupValues?.getOrNull(1) ?: "FHD"
-                if (videoUrl != null) {
-                    callback(newExtractorLink("Rebahin", "Rebahin - $quality", videoUrl) {
-                        this.quality = parseQuality(quality)
-                        this.referer = "$mainUrl/"
-                    })
-                    found = true
+        // Regex fallback pada raw HTML
+        Regex("""<iframe[^>]*?\s(?:src|data-src|data-litespeed-src|data-lazy-src)=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html).forEach { m ->
+                val abs = toAbsolute(m.groupValues[1], data)
+                if (!abs.contains("youtube", true) && !abs.contains("youtu.be", true)) {
+                    embedUrls.add(abs)
                 }
-                objPos = objEnd + 1
             }
-        }
 
-        // Serahkan URL embed ke extractor bawaan Cloudstream (VidHide, dll)
+        println("Rebahin: found ${embedUrls.size} embed url(s): $embedUrls")
+
         for (embedUrl in embedUrls) {
+            println("Rebahin: trying embed=$embedUrl")
+
+            // Langsung link? (mp4/m3u8)
+            if (embedUrl.contains(".mp4") || embedUrl.contains(".m3u8")) {
+                wrappedCallback(newExtractorLink("Rebahin", "Direct", embedUrl) {
+                    this.referer = data
+                })
+                continue
+            }
+
+            // (a) Coba extractor bawaan Cloudstream
             try {
-                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
-                found = true
-            } catch (_: Exception) {
-                // lanjut ke embed berikutnya
+                loadExtractor(embedUrl, data, subtitleCallback, wrappedCallback)
+                println("Rebahin: loadExtractor done, count=$count")
+            } catch (e: Exception) {
+                println("Rebahin: loadExtractor failed: ${e.message}")
+            }
+            if (count > 0) continue
+
+            // (b) Coba domain alternatif VidHide
+            if (embedUrl.contains("vidhide", true)) {
+                val alts = listOf("vidhide.com", "vidhide.pro", "vidhide.to", "vidhide.su")
+                for (alt in alts) {
+                    val altUrl = embedUrl
+                        .replace("vidhide.org", alt)
+                        .replace("vidhide.com", alt)
+                        .replace("vidhide.pro", alt)
+                        .replace("vidhide.to", alt)
+                    if (altUrl == embedUrl) continue
+                    try {
+                        loadExtractor(altUrl, data, subtitleCallback, wrappedCallback)
+                        println("Rebahin: loadExtractor($alt) done, count=$count")
+                    } catch (_: Exception) {}
+                    if (count > 0) break
+                }
+            }
+            if (count > 0) continue
+
+            // (c) Manual extraction (cari m3u8 langsung di halaman embed)
+            try {
+                manualExtract(embedUrl, data, wrappedCallback)
+                println("Rebahin: manual done, count=$count")
+            } catch (e: Exception) {
+                println("Rebahin: manual failed: ${e.message}")
             }
         }
 
-        return found
+        println("Rebahin: loadLinks done, total=$count")
+        return count > 0
+    }
+
+    private suspend fun manualExtract(
+        embedUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val resp = try { app.get(embedUrl, referer = referer) } catch (_: Exception) { return }
+        val text = resp.text ?: return
+        val unescaped = text.replace("\\/", "/")
+
+        val patterns = listOf(
+            Regex(""""hls4"\s*:\s*"([^"]+)""""),
+            Regex(""""hls2"\s*:\s*"([^"]+)""""),
+            Regex(""""hls"\s*:\s*"([^"]+)""""),
+            Regex(""""file"\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)""""),
+            Regex("""file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']"""),
+            Regex("""https?://[^"'\s\\]+\.m3u8[^"'\s\\]*"""),
+            Regex("""https?://[^"'\s\\]+\.mp4[^"'\s\\]*""")
+        )
+
+        for (p in patterns) {
+            for (source in listOf(text, unescaped)) {
+                val m = p.find(source) ?: continue
+                val url = if (m.groupValues.size > 1) m.groupValues[1] else m.value
+                if (url.isNotBlank() && (url.contains("m3u8") || url.contains("mp4"))) {
+                    println("Rebahin: manual found -> $url")
+                    callback(newExtractorLink("Rebahin", "Manual", url) {
+                        this.referer = embedUrl
+                    })
+                    return
+                }
+            }
+        }
+    }
+
+    private fun toAbsolute(url: String, base: String): String {
+        if (url.startsWith("http://") || url.startsWith("https://")) return url
+        if (url.startsWith("//")) return "https:$url"
+        if (url.startsWith("/")) {
+            return try {
+                val u = java.net.URL(base)
+                val port = if (u.port > 0) ":${u.port}" else ""
+                "${u.protocol}://${u.host}$port$url"
+            } catch (_: Exception) {
+                "$mainUrl$url"
+            }
+        }
+        return url
     }
 
     private fun parseQuality(q: String): Int {

@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.json.JSONObject
 
 class Rebahin : MainAPI() {
-    override var mainUrl = "https://139.59.186.254"
+    override var mainUrl = "http://138.68.182.147"
     override var name = "Rebahin"
     override val hasMainPage = true
     override var lang = "id"
@@ -14,15 +14,17 @@ class Rebahin : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
     override val mainPage = mainPageOf(
+        "" to "Film Terbaru",
         "movies/" to "Movies",
         "tv/" to "TV Series",
         "genre/action/" to "Action",
-        "genre/horror/" to "Horror"
+        "genre/horror/" to "Horror",
+        "genre/fantasy/" to "Fantasy"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val sections = mutableListOf<HomePageList>()
-        
+
         val apiPath = when (request.data) {
             "movies/" -> "api/movies"
             "tv/" -> "api/tv"
@@ -119,7 +121,7 @@ class Rebahin : MainAPI() {
 
         // Scraper fallback
         val doc = app.get("$mainUrl/?s=$query").document
-        return doc.select("div.listupd article, div.bsx, div.ml-item").asIterable().mapNotNull { el ->
+        return doc.select("div.listupd article, div.bsx, div.ml-item, article").asIterable().mapNotNull { el ->
             val title = el.selectFirst("a[title]")?.attr("title") ?: el.selectFirst("h2, h3")?.text() ?: return@mapNotNull null
             val href = fixUrl(el.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
             val poster = el.selectFirst("img")?.let { it.attr("abs:data-src").ifBlank { it.attr("abs:src") } }

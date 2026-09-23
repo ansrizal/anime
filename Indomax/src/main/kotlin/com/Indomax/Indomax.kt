@@ -24,7 +24,7 @@ class Indomax : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "page/%d/" to "Update Terbaru"
+        "page/%d/" to "Update Terbaru", 
         "category/box-office/page/%d/" to "Box Office",
         "category/serial-tv/page/%d/" to "TV Series",
         "category/action/page/%d/" to "Action",

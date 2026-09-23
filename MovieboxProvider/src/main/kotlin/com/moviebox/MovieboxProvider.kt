@@ -108,7 +108,7 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     // ================================================================
-    //  SEARCH — pakai endpoint BARU di h5-api.aoneroom.com (dengan JWT)
+    //  SEARCH â€” pakai endpoint BARU di h5-api.aoneroom.com (dengan JWT)
     //  Endpoint lama filmboom.top/web/subject/search sudah tidak bisa.
     // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
@@ -128,7 +128,7 @@ class MovieboxProvider : MainAPI() {
     }
 
     // ================================================================
-    //  LOAD — tetap pakai endpoint LAMA (filmboom.top) yang terbukti
+    //  LOAD â€” tetap pakai endpoint LAMA (filmboom.top) yang terbukti
     //  berhasil memuat detail film.
     // ================================================================
     override suspend fun load(url: String): LoadResponse {
@@ -209,7 +209,7 @@ class MovieboxProvider : MainAPI() {
     }
 
     // ================================================================
-    //  LOAD LINKS — tetap pakai endpoint LAMA (filmboom.top)
+    //  LOAD LINKS â€” tetap pakai endpoint LAMA (filmboom.top)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -226,7 +226,7 @@ class MovieboxProvider : MainAPI() {
             referer = referer
         ).parsedSafe<Media>()?.data?.streams
 
-        streams?.reversed()?.distinctBy { it.url }?.map { source -> ... }
+        streams?.reversed()?.distinctBy { it.url }?.map { source ->
             callback.invoke(
                 newExtractorLink(
                     this.name,

@@ -2,7 +2,6 @@ package com.indomax
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
@@ -70,7 +69,8 @@ class Indomax : MainAPI() {
         val poster = fixUrlNull(selectFirst("img.wp-post-image")?.getImageAttr())?.fixImageQuality()
 
         val quality = selectFirst(".gmr-quality-item a")?.text()?.trim().orEmpty()
-        val rating = selectFirst(".gmr-rating-item")?.ownText()?.toFloatOrNull()
+        // FIX: konversi langsung ke Double? agar cocok dengan Score.from10(Double?)
+        val rating = selectFirst(".gmr-rating-item")?.ownText()?.toDoubleOrNull()
 
         val isSeries = selectFirst(".gmr-numbeps span") != null
         val eps = selectFirst(".gmr-numbeps span")?.text()?.toIntOrNull()

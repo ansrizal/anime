@@ -24,7 +24,7 @@ class Indomax : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "page/%d/" to "Update Terbaru", 
+        "page/%d/" to "Update Terbaru",
         "category/box-office/page/%d/" to "Box Office",
         "category/serial-tv/page/%d/" to "TV Series",
         "category/action/page/%d/" to "Action",
@@ -83,7 +83,7 @@ class Indomax : MainAPI() {
                     addSub(eps)
                 } else {
                     if (rating != null) this.score = Score.from10(rating)
-                }               
+                }
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
@@ -206,29 +206,41 @@ class Indomax : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         loadMainUrlIfNeeded()
-        val doc = app.get(data).document
 
-        // 1. Ambil iframe aktif langsung dari halaman utama
-        doc.select("div.gmr-embed-responsive iframe").asIterable().forEach { iframe ->
-            iframe.getIframeAttr()?.let { httpsify(it) }?.let { url ->
-                if (url.isNotBlank()) loadExtractor(url, "$directUrl/", subtitleCallback, callback)
+        // Ambil halaman utama (Server 1 / default)
+        val mainFetch = app.get(data)
+        val mainDoc = mainFetch.document
+        val baseUrl = getBaseUrl(mainFetch.url)
+        directUrl = baseUrl
+
+        // Kumpulkan semua URL server dari tab (Server 1 = halaman itu sendiri)
+        val serverUrls = linkedSetOf<String>()
+        serverUrls.add(data)
+
+        mainDoc.select("ul.muvipro-player-tabs li a, .muvipro-player-tabs a").forEach { tab ->
+            val href = tab.attr("href")
+            if (href.isNotBlank() && !href.startsWith("javascript")) {
+                serverUrls.add(fixUrl(href))
             }
         }
 
-        // 2. Loop ke tab server lain (lewati yang active)
-        doc.select("ul.muvipro-player-tabs li a").asIterable().forEach { server ->
-            if (!server.hasClass("active")) {
-                val serverHref = server.attr("href")
-                if (serverHref.isNotBlank() && !serverHref.startsWith("javascript")) {
-                    val serverUrl = fixUrl(serverHref)
-                    val iframe = app.get(serverUrl).document
-                        .selectFirst("div.gmr-embed-responsive iframe")
-                        ?.getIframeAttr()
-                        ?.let { httpsify(it) }
+        // Proses tiap server
+        serverUrls.forEach { serverUrl ->
+            val doc = try {
+                if (serverUrl == data) mainDoc else app.get(serverUrl, referer = data).document
+            } catch (_: Exception) {
+                return@forEach
+            }
 
-                    if (!iframe.isNullOrEmpty()) {
-                        loadExtractor(iframe, "$directUrl/", subtitleCallback, callback)
-                    }
+            // Ambil semua iframe/embed (termasuk yang lazy-load pakai data-*)
+            doc.select(
+                "div.gmr-embed-responsive iframe, " +
+                "div.gmr-embed-responsive embed, " +
+                "iframe[data-litespeed-src], iframe[data-src], iframe[src]"
+            ).forEach { iframe ->
+                val src = iframe.getIframeAttr()?.let { httpsify(it) }
+                if (!src.isNullOrBlank()) {
+                    loadExtractor(src, "$baseUrl/", subtitleCallback, callback)
                 }
             }
         }
@@ -244,7 +256,9 @@ class Indomax : MainAPI() {
     }
 
     private fun Element?.getIframeAttr(): String? =
-        this?.attr("data-litespeed-src").takeIf { !it.isNullOrEmpty() } ?: this?.attr("src")
+        this?.attr("data-litespeed-src").takeIf { !it.isNullOrEmpty() }
+            ?: this?.attr("data-src").takeIf { !it.isNullOrEmpty() }
+            ?: this?.attr("src")
 
     private fun String?.fixImageQuality(): String? {
         if (this == null) return null

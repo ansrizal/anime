@@ -35,9 +35,14 @@ class NomatProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
     override val mainPage = mainPageOf(
+        "slug/film-baru-terpopuler" to "film baru terpopuler",
+        "slug/film-serial-baru-terpopuler" to "film serial baru terpopuler",
         "slug/film-terbaru" to "Latest Movies",
         "slug/film-terfavorit" to "Favorite Movies",
-        "slug/film-box-office" to "Box Office Movies"
+        "slug/film-box-office-terkini" to "Box Office Movies",
+        "slug/kumpulan-film-indoxxi" to "kumpulan film indoxxi",
+        "slug/rekomendasi-film-lk21" to "rekomendasi film lk21",
+        "slug/film-spesial-rebahin" to "film spesial rebahin"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

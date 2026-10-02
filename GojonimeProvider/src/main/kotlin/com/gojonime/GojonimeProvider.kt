@@ -311,15 +311,11 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // Final fallback
+        // Final fallback — langsung invoke link dari loadExtractor,
+        // TIDAK pakai newExtractorLink karena callback-nya non-suspend.
         try {
             loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
-                callback.invoke(newExtractorLink(serverName, link.name, link.url, link.type) {
-                    this.referer = link.referer
-                    this.headers = link.headers
-                    this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
-                    this.extractorData = link.extractorData
-                })
+                callback.invoke(link)
             }
         } catch (e: Exception) {
             println("Gojonime: [$serverName] loadExtractor gagal - ${e.message}")
@@ -346,8 +342,7 @@ class GojonimeProvider : MainAPI() {
         println("Gojonime: [$serverName] encrypted len=${encrypted.length}")
 
         return try {
-            // POST JSON sama persis dengan cURL yang berhasil:
-            // curl -X POST .../dec-abyss -H "Content-Type: application/json" -d "{\"text\":\"...\"}"
+            // POST JSON sama persis dengan cURL yang berhasil
             val response = app.post(
                 "https://enc-dec.app/api/dec-abyss",
                 json = mapOf("text" to encrypted),
@@ -436,7 +431,10 @@ class GojonimeProvider : MainAPI() {
             "short.icu", "short.ink"
         ).any { url.contains(it, true) }
 
-    private fun emitVideo(
+    // ============================================================
+    // emitVideo — dijadikan suspend karena newExtractorLink suspend
+    // ============================================================
+    private suspend fun emitVideo(
         videoUrl: String, referer: String, serverName: String,
         quality: Int, callback: (ExtractorLink) -> Unit
     ) {

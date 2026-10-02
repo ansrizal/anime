@@ -274,57 +274,25 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
+            // Also check main default iframe if present
+            val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
+            if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
+                loadExtractor(defaultIframe, mainUrl, subtitleCallback, callback)
+            }
+
             val options = document.select(".mobius > .mirror > option, select.mirror option")
             
-            if (options.isEmpty()) {
-                val iframe = document.selectFirst("iframe[src]")?.attr("src")
-                if (!iframe.isNullOrBlank()) {
-                    val fixedIframe = fixUrl(iframe)
-                    if (fixedIframe.endsWith(".mp4") || fixedIframe.endsWith(".m3u8")) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = name,
-                                url = fixedIframe,
-                                type = if (fixedIframe.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                }
-                return true
-            }
-            
-            for (element in options) {
+            options.amap { element ->
                 val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) continue
+                if (encodedData.isBlank()) return@amap
 
                 try {
                     val decoded = base64Decode(encodedData)
-                    val iframe = fixUrl(Jsoup.parse(decoded).select("iframe").attr("src"))
-                    if (iframe.isBlank() || iframe.contains("statistic")) continue
+                    val parsed = Jsoup.parse(decoded)
+                    val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
+                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
 
-                    val rawText = element.text().trim()
-                    val quality = getIndexQuality(rawText)
-                    val serverName = rawText.split(" ").firstOrNull()?.replaceFirstChar { 
-                        if (it.isLowerCase()) it.titlecase() else it.toString() 
-                    } ?: name
-
-                    if (iframe.endsWith(".mp4") || iframe.endsWith(".m3u8")) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = serverName,
-                                name = serverName,
-                                url = iframe,
-                                type = if (iframe.endsWith(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = quality
-                            }
-                        )
-                    }
+                    loadExtractor(iframe, mainUrl, subtitleCallback, callback)
                 } catch (e: Exception) {
                     println("AnimeSail: Error processing link: ${e.message}")
                 }
@@ -336,8 +304,5 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
-    private fun getIndexQuality(str: String): Int {
-        return Regex("(\\d{3,4})[pP]").find(str)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            ?: Qualities.Unknown.value
-    }
+
 }

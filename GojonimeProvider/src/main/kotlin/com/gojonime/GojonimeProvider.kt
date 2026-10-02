@@ -275,12 +275,10 @@ class GojonimeProvider : MainAPI() {
                 val html = res.text
                 println("Gojonime: [$serverName] HTML len=${html.length}")
 
-                // Coba decode via enc-dec.app
                 if (decodeAbyss(html, targetUrl, serverName, quality, callback)) {
                     return
                 }
 
-                // Fallback: cari iframe di HTML
                 Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
                     .find(html)?.groupValues?.get(1)?.let { iframeSrc ->
                         val fixed = fixUrl(iframeSrc)
@@ -311,8 +309,7 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // Final fallback — langsung invoke link dari loadExtractor,
-        // TIDAK pakai newExtractorLink karena callback-nya non-suspend.
+        // Final fallback
         try {
             loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
                 callback.invoke(link)
@@ -342,7 +339,6 @@ class GojonimeProvider : MainAPI() {
         println("Gojonime: [$serverName] encrypted len=${encrypted.length}")
 
         return try {
-            // POST JSON sama persis dengan cURL yang berhasil
             val response = app.post(
                 "https://enc-dec.app/api/dec-abyss",
                 json = mapOf("text" to encrypted),
@@ -362,26 +358,34 @@ class GojonimeProvider : MainAPI() {
                 return false
             }
 
-            val result = root.optJSONObject("result")
-                ?: run {
-                    println("Gojonime: [$serverName] no 'result' in response")
-                    return false
-                }
-            val sources = result.optJSONArray("sources")
-                ?: run {
-                    println("Gojonime: [$serverName] no 'sources' in result")
-                    return false
-                }
+            val result = root.optJSONObject("result") ?: run {
+                println("Gojonime: [$serverName] no 'result'")
+                return false
+            }
+            val sources = result.optJSONArray("sources") ?: run {
+                println("Gojonime: [$serverName] no 'sources'")
+                return false
+            }
+
+            val abyssHeaders = mapOf(
+                "User-Agent" to ua,
+                "Origin" to "https://abyssplayer.com/",
+                "Referer" to "https://abyssplayer.com/",
+                "Accept" to "*/*"
+            )
 
             var emitted = false
             for (i in 0 until sources.length()) {
                 val src = sources.optJSONObject(i) ?: continue
                 if (!src.optBoolean("status", false)) continue
 
-                val url = src.optString("url")
-                if (url.isBlank()) continue
+                val rawUrl = src.optString("url")
+                if (rawUrl.isBlank()) continue
 
-                val typeStr = src.optString("type").lowercase()   // "360p", "720p", ...
+                // URL abyss butuh suffix .m3u8 untuk route ke tunnel Cloudflare
+                val finalUrl = "$rawUrl.m3u8"
+
+                val typeStr = src.optString("type").lowercase()
                 val q = when {
                     typeStr.contains("1080") -> Qualities.P1080.value
                     typeStr.contains("720")  -> Qualities.P720.value
@@ -391,25 +395,26 @@ class GojonimeProvider : MainAPI() {
                     else -> quality
                 }
 
-                println("Gojonime: [$serverName] source[$i] $typeStr -> ${url.take(80)}")
+                println("Gojonime: [$serverName] source[$i] $typeStr -> $finalUrl")
 
-                // URL abyss (sssrr.org / sora path) TIDAK punya ekstensi .m3u8,
-                // tapi ini HLS. Emit sebagai M3U8.
+                // WARM-UP: request pertama untuk bikin tunnel Cloudflare ready.
+                // Diabaikan hasilnya, yang penting tunnel jadi warm.
+                runCatching {
+                    app.get(finalUrl, headers = abyssHeaders, timeout = 5)
+                }
+                println("Gojonime: [$serverName] warm-up done untuk $typeStr")
+
+                // Emit sebagai VIDEO (bukan M3U8) — content-type aslinya video/mp4
                 callback.invoke(
                     newExtractorLink(
                         source = "$serverName $typeStr",
                         name = "$serverName $typeStr",
-                        url = url,
-                        type = ExtractorLinkType.M3U8
+                        url = finalUrl,
+                        type = ExtractorLinkType.VIDEO
                     ) {
                         this.referer = "https://abyssplayer.com/"
                         this.quality = q
-                        this.headers = mapOf(
-                            "User-Agent" to ua,
-                            "Origin" to "https://abyssplayer.com/",
-                            "Referer" to "https://abyssplayer.com/",
-                            "Accept" to "*/*"
-                        )
+                        this.headers = abyssHeaders
                     }
                 )
                 emitted = true
@@ -431,9 +436,6 @@ class GojonimeProvider : MainAPI() {
             "short.icu", "short.ink"
         ).any { url.contains(it, true) }
 
-    // ============================================================
-    // emitVideo — dijadikan suspend karena newExtractorLink suspend
-    // ============================================================
     private suspend fun emitVideo(
         videoUrl: String, referer: String, serverName: String,
         quality: Int, callback: (ExtractorLink) -> Unit

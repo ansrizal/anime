@@ -1,200 +1,288 @@
-package com.gojonime
+package com.animesail
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
-import kotlinx.coroutines.runBlocking
+import java.net.URLDecoder
 
-class GojonimeProvider : MainAPI() {
-    override var mainUrl = "https://gojonime.net"
-    override var name = "Gojonime"
+class AnimeSailProvider : MainAPI() {
+    override var mainUrl = "https://v1.animesail.xyz"
+    override var name = "AnimeSail"
     override val hasMainPage = true
-    override val hasQuickSearch = true
     override var lang = "id"
     override val hasDownloadSupport = true
+    override val hasChromecastSupport = true
+
+    private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
+
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
-        TvType.OVA,
+        TvType.OVA
     )
 
     override val mainPage = mainPageOf(
-        "on-going-anime/page/%d/" to "On-Going Anime",
-        "completed-anime/page/%d/" to "Completed Anime",
-        "movie/page/%d/" to "Movie Anime",
-        "anime/page/%d/?order=update" to "Latest Update",
-        "anime/page/%d/?order=popular" to "Most Popular",
-        "anime/list-mode/" to "List Anime"
+        "" to "Update Terbaru",
+        "movie-terbaru/" to "Movie Terbaru",
+        "rilisan-anime-terbaru/" to "Anime Ongoing",
+        "rilisan-donghua-terbaru/" to "Donghua Ongoing",
+        "anime/" to "Daftar Anime"
     )
 
+    private suspend fun request(url: String, ref: String? = null): NiceResponse {
+        return app.get(
+            url,
+            headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Cache-Control" to "no-cache",
+                "Pragma" to "no-cache"
+            ),
+            referer = ref ?: mainUrl,
+            interceptor = turnstileInterceptor
+        )
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val path = request.data.format(page)
-        val url = if (page <= 1) {
-            "$mainUrl/${path.replace("page/1/", "")}"
-        } else {
-            "$mainUrl/$path"
+        val url = when {
+            page <= 1 && request.data.isEmpty() -> mainUrl
+            page <= 1 -> "$mainUrl/${request.data}"
+            else -> {
+                val data = request.data.ifEmpty { "" }.trim('/')
+                if (data.isEmpty()) {
+                    "$mainUrl/page/$page/"
+                } else {
+                    "$mainUrl/$data/page/$page/"
+                }
+            }
         }
 
-        val doc = app.get(url).document
-        val home = doc.select("div.listupd article, div.bsx, article.bs, article.stylefor")
-            .asSequence()
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
-            .toList()
+        return try {
+            val response = request(url)
+            val document = response.document
 
-        return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = home,
-                isHorizontalImages = false
-            ),
-            hasNext = home.isNotEmpty()
-        )
+            val items = if (request.data == "anime/") {
+                document.select("a[href*='/anime/']").mapNotNull { it.toDaftarAnimeResult() }.distinctBy { it.url }
+            } else {
+                val selectors = listOf(
+                    "article.bs",
+                    "article.bsz",
+                    ".listupd article",
+                    ".postbody article",
+                    "div.bsx",
+                    "div.bs",
+                    "div.animposx",
+                    "div.animepost",
+                    ".venz ul li"
+                )
+
+                var foundItems = emptyList<AnimeSearchResponse>()
+                for (selector in selectors) {
+                    foundItems = document.select(selector).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+                    if (foundItems.isNotEmpty()) break
+                }
+                foundItems
+            }
+
+            newHomePageResponse(request.name, items)
+        } catch (e: Exception) {
+            println("AnimeSail: Error loading main page: ${e.message}")
+            newHomePageResponse(request.name, emptyList())
+        }
     }
 
     private fun Element.toSearchResult(): AnimeSearchResponse? {
         val a = this.selectFirst("a[href]") ?: return null
-        val href = fixUrlNull(a.attr("href")) ?: return null
-        if (href.isBlank() || href.contains("/page/")) return null
+        val href = fixUrl(a.attr("href"))
 
-        val rawTitle = this.selectFirst("h2, .tt h2, .entry-title")?.text()
+        if (href.isBlank() || href.contains("/page/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+
+        val rawTitle = this.selectFirst(".tt h2, h3, h4, .title, h2.jdlflm")?.text()
             ?: a.attr("title")
-        if (rawTitle.isBlank()) return null
+            ?: return null
 
         val title = rawTitle
             .replace(Regex("(?i)Episode\\s*\\d+"), "")
-            .replace(Regex("(?i)Subtitle\\s+Indonesia"), "")
-            .replace(Regex("(?i)Sub\\s+Indo"), "")
-            .replace(Regex("(?i)\\[END]"), "")
+            .replace(Regex("(?i)Subtitle Indonesia"), "")
+            .replace(Regex("(?i)Sub Indo"), "")
+            .replace(Regex("\\(\\d{4}\\)"), "")
             .trim()
             .removeSuffix("-")
             .trim()
 
         val img = this.selectFirst("img")
-        val rawImg = img?.attr("data-src").takeIf { !it.isNullOrBlank() }
-            ?: img?.attr("data-lazy-src").takeIf { !it.isNullOrBlank() }
-            ?: img?.attr("src")
+        val posterUrl = fixImageUrl(
+            img?.attr("src")?.takeIf { !it.startsWith("data:") }
+                ?: img?.attr("data-src")
+                ?: img?.attr("data-lazy-src")
+        )
 
-        val posterUrl = fixImageUrl(rawImg)
-
-        val typeStr = this.selectFirst(".typez, .eggtype, .bt .typez, span i")?.text().orEmpty()
-        val tvType = when {
-            href.contains("/movie/") || typeStr.contains("Movie", ignoreCase = true) || title.contains("Movie", ignoreCase = true) -> TvType.AnimeMovie
-            typeStr.contains("OVA", ignoreCase = true) || typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
+        val type = when {
+            this.hasClass("bsz") || href.contains("/movie/") || rawTitle.contains("Movie", true) -> TvType.AnimeMovie
             else -> TvType.Anime
         }
 
-        val epNum = this.selectFirst(".epx, .eggepisode, .bt .epx")?.text()
-            ?.let { Regex("""\d+""").find(it)?.value?.toIntOrNull() }
+        val epNum = Regex("(?i)Episode\\s*(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: Regex("(?i)Ep\\s*(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-        return newAnimeSearchResponse(title, href, tvType) {
+        return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
             addSub(epNum)
         }
     }
 
-    private fun fixImageUrl(url: String?): String? {
-        if (url == null || url.startsWith("data:")) return null
-        val cleanUrl = url.substringBefore("?")
-        return fixUrlNull(cleanUrl)
+    private fun Element.toDaftarAnimeResult(): AnimeSearchResponse? {
+        val href = fixUrl(attr("href"))
+        if (href.isBlank() || !href.contains("/anime/") || href.contains("/page/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+
+        val title = text().trim().ifEmpty { attr("title").trim() }
+        if (title.isBlank() || title.lowercase() == "daftar anime" || title.lowercase() == "update terbaru" || title.lowercase() == "movie" || title.lowercase() == "genre" || title.lowercase() == "jadwal") return null
+
+        val cleanTitle = title
+            .replace(Regex("(?i)Subtitle Indonesia"), "")
+            .replace(Regex("(?i)Sub Indo"), "")
+            .trim()
+
+        return newAnimeSearchResponse(cleanTitle, href, TvType.Anime) {
+            this.posterUrl = null
+        }
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
-
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=$query"
-        val doc = app.get(url).document
-        return doc.select("div.listupd article, div.bsx, article.bs, article.stylefor")
-            .asSequence()
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
-            .toList()
+        val link = "$mainUrl/?s=$query"
+        return try {
+            val document = request(link).document
+            document.select("article.bs, article.bsz, div.bsx, div.bs, div.animposx, div.animepost, .venz ul li").mapNotNull {
+                it.toSearchResult()
+            }.distinctBy { it.url }
+        } catch (e: Exception) {
+            println("AnimeSail: Search error: ${e.message}")
+            emptyList()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        var animeUrl = fixUrl(url)
-        var doc = app.get(animeUrl).document
+        var currentUrl = url
+        var res = request(currentUrl)
+        var document = res.document
 
-        if (!animeUrl.contains("/anime/")) {
-            val parentLink = doc.selectFirst(".ts-breadcrumb a[href*=\"/anime/\"], .year a[href*=\"/anime/\"], .naveps a[href*=\"/anime/\"]")?.attr("href")
-            if (parentLink != null) {
-                animeUrl = fixUrl(parentLink)
-                doc = app.get(animeUrl).document
+        if (currentUrl.contains("-episode-") && !currentUrl.contains("/anime/")) {
+            val seriesLink = document.selectFirst(".breadcrumb a[href*='/anime/']")?.attr("href")
+                ?: document.selectFirst("div.entry-content i a[href*='/anime/']")?.attr("href")
+                ?: document.selectFirst("a[href*='/anime/'][rel='tag']")?.attr("href")
+                ?: document.selectFirst("a[href*='/anime/']")?.attr("href")
+
+            if (seriesLink != null) {
+                currentUrl = fixUrl(seriesLink)
+                res = request(currentUrl)
+                document = res.document
             }
         }
 
-        val title = doc.selectFirst("h1.entry-title")?.text()?.trim()
-            ?: doc.selectFirst(".entry-title")?.text()?.trim()
-            ?: "Unknown"
+        val title = document.selectFirst("h1.entry-title")?.text()
+            ?: document.selectFirst("h1")?.text()
+            ?: document.title()
+            ?: "AnimeSail"
+
+        val cleanTitle = title
+            .replace(Regex("(?i)Subtitle Indonesia"), "")
+            .replace(Regex("(?i)Sub Indo"), "")
+            .trim()
 
         val poster = fixImageUrl(
-            doc.selectFirst("div.thumb img, div.thumbook img")?.attr("src")
-                ?: doc.selectFirst("meta[property=\"og:image\"]")?.attr("content")
+            document.selectFirst(".thumb img")?.attr("src")
+                ?: document.selectFirst(".entry-content img")?.attr("src")
+                ?: document.selectFirst(".post-thumbnail img")?.attr("src")
+                ?: document.selectFirst("img.attachment-post-thumbnail")?.attr("src")
+                ?: document.selectFirst("meta[property='og:image']")?.attr("content")
         )
 
-        val synopsis = doc.select("div.entry-content p, div.desc p, div.mindesc").text().trim()
-        val genres = doc.select(".genxed a").map { it.text().trim() }
-        val rating = doc.selectFirst("div.rating strong")?.text()?.replace("Rating", "")?.trim()?.toDoubleOrNull()
+        var type = TvType.Anime
+        var year: Int? = null
+        var status = ShowStatus.Completed
+        var plot: String? = null
+        val tags = mutableListOf<String>()
 
-        val statusStr = doc.select("div.spe span:contains(Status)").text()
-        val showStatus = when {
-            statusStr.contains("Completed", ignoreCase = true) -> ShowStatus.Completed
-            statusStr.contains("Ongoing", ignoreCase = true) -> ShowStatus.Ongoing
-            else -> ShowStatus.Completed
+        document.select("tr").forEach { row ->
+            val th = row.selectFirst("th")?.text()?.lowercase() ?: return@forEach
+            val td = row.selectFirst("td")?.text()?.trim() ?: return@forEach
+
+            when {
+                th.contains("type") || th.contains("tipe") -> {
+                    type = if (td.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
+                }
+                th.contains("dirilis") || th.contains("released") || th.contains("tahun") || th.contains("year") -> {
+                    year = Regex("\\d{4}").find(td)?.value?.toIntOrNull()
+                }
+                th.contains("status") -> {
+                    status = if (td.lowercase().contains("ongoing") || td.lowercase().contains("airing"))
+                        ShowStatus.Ongoing
+                    else
+                        ShowStatus.Completed
+                }
+                th.contains("genre") || th.contains("genres") -> {
+                    tags.addAll(td.split(",").map { it.trim() }.filter { it.isNotEmpty() })
+                }
+            }
         }
 
-        val typeStr = doc.select("div.spe span:contains(Tipe), div.spe span:contains(Type)").text()
-        val tvType = when {
-            typeStr.contains("Movie", ignoreCase = true) || animeUrl.contains("/movie/") -> TvType.AnimeMovie
-            typeStr.contains("OVA", ignoreCase = true) || typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
-            else -> TvType.Anime
+        if (tags.isEmpty()) {
+            document.select("a[href*='/genres/']").forEach { genreLink ->
+                val genre = genreLink.text().trim()
+                if (genre.isNotEmpty() && !tags.contains(genre)) {
+                    tags.add(genre)
+                }
+            }
         }
 
-        val episodes = doc.select(".eplister ul li, div.bxcl.epcheck ul li, div.bxcl ul li").mapNotNull { ep ->
-            val a = ep.selectFirst("a[href]") ?: return@mapNotNull null
-            val epHref = fixUrl(a.attr("href"))
-            val epNumStr = ep.selectFirst(".epl-num")?.text()?.trim()
-            val epNum = epNumStr?.let { Regex("""\d+""").find(it)?.value?.toIntOrNull() }
-            val epName = ep.selectFirst(".epl-title")?.text()?.trim() ?: "Episode $epNumStr"
-            val epDate = ep.selectFirst(".epl-date")?.text()?.trim()
+        plot = document.selectFirst(".entry-content p")?.text()
+            ?: document.selectFirst(".sinopsis")?.text()
+            ?: document.selectFirst(".desc")?.text()
+            ?: document.selectFirst(".entry-content")?.text()
 
-            newEpisode(epHref) {
-                this.name = epName
+        if (currentUrl.contains("/movie/")) {
+            type = TvType.AnimeMovie
+        }
+
+        val episodes = document.select(".eplister ul li, .eplist ul li, ul.daftar li").mapNotNull { li ->
+            val a = li.selectFirst("a[href]") ?: return@mapNotNull null
+            val epUrl = fixUrl(a.attr("href"))
+
+            val epTitle = a.selectFirst(".epl-title")?.text()
+                ?: a.text().trim()
+
+            if (epTitle.isBlank()) return@mapNotNull null
+
+            val epNum = Regex("(?i)Episode\\s*(\\d+)").find(epTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: Regex("(\\d+)").find(li.selectFirst(".epl-num")?.text() ?: "")?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: if (type == TvType.AnimeMovie) 1 else null
+
+            newEpisode(epUrl) {
+                this.name = epTitle
                 this.episode = epNum
-                this.posterUrl = poster
-                if (!epDate.isNullOrBlank()) {
-                    this.description = "Rilis: $epDate"
-                }
             }
-        }.reversed()
+        }.distinctBy { it.data }.sortedByDescending { it.episode }
 
-        val finalEpisodes = episodes.ifEmpty {
-            listOf(
-                newEpisode(animeUrl) {
-                    this.name = title
-                    this.episode = 1
-                    this.posterUrl = poster
-                }
-            )
+        return newAnimeLoadResponse(cleanTitle, currentUrl, type) {
+            this.posterUrl = poster
+            this.year = year
+            addEpisodes(DubStatus.Subbed, episodes)
+            this.showStatus = status
+            this.plot = plot
+            this.tags = tags
         }
+    }
 
-        return if (tvType == TvType.AnimeMovie && finalEpisodes.size <= 1) {
-            newMovieLoadResponse(title, animeUrl, TvType.AnimeMovie, finalEpisodes.first().data) {
-                this.posterUrl = poster
-                this.plot = synopsis
-                this.tags = genres
-                this.score = Score.from10(rating)
-            }
-        } else {
-            newAnimeLoadResponse(title, animeUrl, tvType) {
-                this.posterUrl = poster
-                this.plot = synopsis
-                this.tags = genres
-                this.showStatus = showStatus
-                this.score = Score.from10(rating)
-                addEpisodes(DubStatus.Subbed, finalEpisodes)
-            }
+    private fun fixImageUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> mainUrl + url
+            url.startsWith("http") -> url
+            else -> "$mainUrl/$url"
         }
     }
 
@@ -204,205 +292,230 @@ class GojonimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(fixUrl(data)).document
+        try {
+            val document = request(data).document
 
-        val postId = doc.selectFirst("input[name=post_id], input[name=postid]")?.attr("value")
-            ?: doc.selectFirst("[data-postid]")?.attr("data-postid")
-            ?: doc.selectFirst("article[id^=post-]")?.attr("id")?.removePrefix("post-")
-            ?: Regex("""post_id\s*[:=]\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
-            ?: Regex("""postId\s*[:=]\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
-            ?: Regex("""id\s*:\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
-            ?: Regex("""[?&]p=(\d+)""").find(data)?.groupValues?.getOrNull(1)
-
-        val documents = mutableListOf(doc)
-        if (!postId.isNullOrBlank()) {
-            listOf("$mainUrl/usotsuki-neko/admin-ajax.php", "$mainUrl/wp-admin/admin-ajax.php").forEach { ajaxUrl ->
-                try {
-                    val res = app.post(
-                        ajaxUrl,
-                        data = mapOf(
-                            "action" to "dynamic_view_ajax",
-                            "post_id" to postId
-                        ),
-                        headers = mapOf(
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"
-                        ),
-                        referer = fixUrl(data)
+            // ==== PATCH 1: Default iframe dari player utama ====
+            val defaultIframe = fixUrl(
+                document.selectFirst("#pembed iframe[src], .player-embed iframe[src], iframe[src]")?.attr("src") ?: ""
+            )
+            if (defaultIframe.isNotBlank() &&
+                !defaultIframe.contains("statistic") &&
+                !defaultIframe.contains("error.php")
+            ) {
+                runCatching {
+                    resolveAndLoadIframe(
+                        defaultIframe,
+                        "Default",
+                        Qualities.Unknown.value,
+                        subtitleCallback,
+                        callback
                     )
-                    val text = res.text
-                    if (text.isNotBlank()) {
-                        documents.add(Jsoup.parse(text))
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-
-        for (document in documents) {
-            val options = document.select("#selectserver option, select.mirror option, .mobius option, .select-server option, .mirrorstream option, select#changeServer option, .server-item")
-            for (option in options) {
-                val serverName = option.text().trim().takeIf { it.isNotBlank() && !it.contains("Pilih Server", ignoreCase = true) } ?: "Server"
-                val value = option.attr("value").trim()
-                    .ifBlank { option.attr("data-link") }
-                    .ifBlank { option.attr("data-embed") }
-                    .ifBlank { option.attr("data-value") }
-                if (value.isNotBlank() && value != "#") {
-                    var rawIframeOrUrl = ""
-                    if (value.startsWith("http://") || value.startsWith("https://")) {
-                        rawIframeOrUrl = value
-                    } else if (value.contains("<iframe")) {
-                        rawIframeOrUrl = Jsoup.parse(value).selectFirst("iframe")?.attr("src") ?: ""
-                    } else {
-                        try {
-                            val decoded = base64Decode(value)
-                            rawIframeOrUrl = if (decoded.contains("<iframe")) {
-                                Jsoup.parse(decoded).selectFirst("iframe")?.attr("src") ?: decoded
-                            } else {
-                                decoded
-                            }
-                        } catch (_: Exception) {
-                            rawIframeOrUrl = value
-                        }
-                    }
-
-                    if (rawIframeOrUrl.isNotBlank()) {
-                        val streamUrl = fixStreamUrl(rawIframeOrUrl)
-                        processStreamUrl(streamUrl, serverName, subtitleCallback, callback)
-                    }
                 }
             }
 
-            val items = document.select("ul#playeroptionsul > li, .player-servers li, [data-link], [data-embed]")
-            for (item in items) {
-                val serverName = item.text().trim().takeIf { it.isNotBlank() } ?: "Server"
-                val link = item.attr("data-link")
-                    .ifBlank { item.attr("data-embed") }
-                    .ifBlank { item.selectFirst("iframe")?.attr("src") ?: "" }
-                if (link.isNotBlank()) {
-                    val streamUrl = fixStreamUrl(link)
-                    processStreamUrl(streamUrl, serverName, subtitleCallback, callback)
+            // ==== PATCH 2: Selector diperbaiki, dan ambil base64 dari attr `value`, bukan `data-em` ====
+            val options = document.select(".mobius select.mirror option, select.mirror option")
+
+            options.amap { element ->
+                val encodedData = element.attr("value").trim()
+                if (encodedData.isBlank()) return@amap  // skip "Pilih Server Video"
+
+                try {
+                    var decoded = base64Decode(encodedData).trim()
+
+                    // ==== PATCH 3: Replikasi domain mapping dari loadMi() di website ====
+                    val domainMappings = linkedMapOf(
+                        "short.ink" to "short.icu",
+                        "desustream.me/otakuhade/baru/" to "desustream.info/dstream/otakustream/index.php",
+                        "desustream.me/moedesu/stream/hd/" to "desustream.info/dstream/moedesu/hd/index.php",
+                        "desustream.com/moedesu/hd/" to "desustream.info/dstream/moedesu/index.php",
+                        "desustream.me/beta/stream/hd/" to "desustream.info/dstream/otakuwatch2/hd/index.php",
+                        "desustream.me/ondesu/hd/index.php" to "desustream.info/dstream/ondesu/hd/index.php",
+                        "desustream.me/arcg/done/" to "desustream.info/dstream/arcg/",
+                        "desustream.me/otakustream/?" to "desustream.info/dstream/otakustream/index.php?",
+                        "desustream.me/desudrive/player.php" to "desustream.info/dstream/desudrive/player.php",
+                        "desustream.me/desudesuhd/" to "desustream.info/dstream/desudesuhd/index.php",
+                        "desustream.me/desudesuhd3/" to "desustream.info/dstream/desudesuhd3/index.php",
+                        "desustream.me/arcg" to "desustream.info/dstream/arcg"
+                    )
+                    for ((oldDomain, newDomain) in domainMappings) {
+                        decoded = decoded.replace(oldDomain, newDomain)
+                    }
+
+                    // Ambil src dari tag <iframe> hasil decode base64
+                    val iframeSrc = Regex("""src=["']([^"']+)["']""")
+                        .find(decoded)?.groupValues?.getOrNull(1)?.trim()
+                        ?: decoded.takeIf { it.startsWith("http") }
+
+                    if (iframeSrc.isNullOrBlank() ||
+                        iframeSrc.contains("statistic") ||
+                        iframeSrc.contains("error.php")
+                    ) return@amap
+
+                    val iframe = fixUrl(iframeSrc)
+
+                    // ==== PATCH 4: Deteksi kualitas dari teks opsi ====
+                    val rawText = element.text().trim()
+                    val quality = when {
+                        rawText.contains("1080", true) -> Qualities.P1080.value
+                        rawText.contains("720", true)  -> Qualities.P720.value
+                        rawText.contains("480", true)  -> Qualities.P480.value
+                        rawText.contains("360", true)  -> Qualities.P360.value
+                        rawText.contains("240", true)  -> Qualities.P240.value
+                        rawText.contains("HD", true)   -> Qualities.P720.value
+                        else -> Regex("(\\d{3,4})[pP]").find(rawText)
+                            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+                            ?: Qualities.Unknown.value
+                    }
+
+                    val indexAttr = element.attr("data-index").ifBlank { "?" }
+                    val serverName = rawText
+                        .replace(Regex("(?i)\\d+[pP]"), "")
+                        .replace("Server", "")
+                        .trim()
+                        .ifBlank { "Server $indexAttr" }
+                        .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
+                    resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
+
+                } catch (e: Exception) {
+                    println("AnimeSail: Error processing server option '${element.text()}': ${e.message}")
                 }
             }
 
-            val defaultIframeSrc = document.selectFirst("#pembed iframe, #embed_holder iframe, .player-embed iframe, iframe")?.attr("src")
-            if (!defaultIframeSrc.isNullOrBlank()) {
-                val streamUrl = fixStreamUrl(defaultIframeSrc)
-                processStreamUrl(streamUrl, "Server 1", subtitleCallback, callback)
-            }
+            return true
+        } catch (e: Exception) {
+            println("AnimeSail: Error in loadLinks: ${e.message}")
+            return false
         }
-
-        return true
     }
 
-    private suspend fun processStreamUrl(
-        streamUrl: String,
+    private suspend fun resolveAndLoadIframe(
+        iframeUrl: String,
         serverName: String,
+        quality: Int,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var targetUrl = streamUrl
+        try {
+            var currentUrl = iframeUrl
 
-        if (streamUrl.contains("berkasdrive.com")) {
-            if (streamUrl.contains("id=")) {
-                val base64Id = streamUrl.substringAfter("id=").substringBefore("&")
-                try {
-                    val decodedUrl = base64Decode(base64Id)
-                    if (decodedUrl.startsWith("http")) {
-                        targetUrl = fixStreamUrl(decodedUrl)
+            // ==== PATCH 5: Normalisasi mirror drop ====
+            currentUrl = currentUrl.replace("miiiixdrop.net", "mixdrop.co", true)
+
+            // ==== PATCH 6: Decode base64 di query ?id= (kasus dl.berkasdrive.com/streaming/?id=aHR0cHM6...) ====
+            Regex("""[?&]id=([A-Za-z0-9+/=]+)""").find(currentUrl)?.let { m ->
+                runCatching {
+                    val decoded = base64Decode(m.groupValues[1])
+                    if (decoded.startsWith("http")) {
+                        currentUrl = decoded
                     }
-                } catch (_: Exception) {}
-            } else if (streamUrl.contains("backup=")) {
-                val base64Backup = streamUrl.substringAfter("backup=").substringBefore("&")
-                try {
-                    val decodedUrl = base64Decode(base64Backup)
-                    if (decodedUrl.startsWith("http")) {
-                        targetUrl = fixStreamUrl(decodedUrl)
-                    }
-                } catch (_: Exception) {}
-            } else {
-                try {
-                    val berkasDoc = app.get(streamUrl, referer = mainUrl).document
-                    val berkasIframe = berkasDoc.selectFirst("iframe")?.attr("src")
-                    if (!berkasIframe.isNullOrBlank()) {
-                        targetUrl = fixStreamUrl(berkasIframe)
-                    } else {
-                        val videoSrc = berkasDoc.selectFirst("video source, source")?.attr("src")
-                        if (!videoSrc.isNullOrBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    serverName,
-                                    serverName,
-                                    fixUrl(videoSrc)
-                                ) {
-                                    this.referer = streamUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                            return
+                }
+            }
+
+            // ==== Cek ?url= parameter (popup player) ====
+            if (currentUrl.contains("url=")) {
+                var targetUrl = Regex("url=([^&]+)").find(currentUrl)?.groupValues?.getOrNull(1)?.let {
+                    URLDecoder.decode(it, "UTF-8")
+                }
+                if (!targetUrl.isNullOrBlank()) {
+                    if (targetUrl.contains("pixeldrain.com")) {
+                        val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(targetUrl)?.groupValues?.getOrNull(1)
+                        if (fileId != null) {
+                            targetUrl = "https://pixeldrain.com/api/file/$fileId"
                         }
                     }
-                } catch (_: Exception) {}
-            }
-        }
 
-        if (targetUrl.contains("short.icu") || targetUrl.contains("short.ink") ||
-            targetUrl.contains("yihdraplay") || targetUrl.contains("gojonime.my.id")
-        ) {
-            try {
-                ShortIcuExtractor().apply { name = serverName }.getUrl(targetUrl, mainUrl, subtitleCallback) { link ->
-                    callback.invoke(link)
+                    if (targetUrl.contains("pixeldrain.com/api/file/")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = serverName,
+                                name = serverName,
+                                url = targetUrl,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://pixeldrain.com/"
+                                this.quality = quality
+                            }
+                        )
+                        return
+                    }
+
+                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+                    return
                 }
-                return
-            } catch (_: Exception) {}
-        }
+            }
 
-        loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
-            runBlocking {
+            // ==== Domain extractor yang umum dikenal ====
+            val knownExtractors = listOf(
+                "mixdrop", "mp4upload", "krakenfiles", "dood", "filemoon",
+                "mega.nz", "abyss.to", "acefile.co", "vikingfile",
+                "blogger.com", "berkasdrive"
+            )
+            if (knownExtractors.any { currentUrl.contains(it, true) }) {
+                loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
+                return
+            }
+
+            // ==== Fetch HTML iframe ====
+            val res = request(currentUrl, mainUrl)
+            val doc = res.document
+            val html = res.text
+
+            // Cek pixeldrain di HTML
+            if (html.contains("pixeldrain.com")) {
+                val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
+                if (fileId != null) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = serverName,
+                            name = serverName,
+                            url = "https://pixeldrain.com/api/file/$fileId",
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://pixeldrain.com/"
+                            this.quality = quality
+                        }
+                    )
+                    return
+                }
+            }
+
+            // 1. Video / source tags
+            val videoSrc = doc.selectFirst("video source, video")?.attr("src")
+                ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""src\s*=\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
+
+            if (!videoSrc.isNullOrBlank()) {
+                val finalVideoUrl = fixUrl(videoSrc)
+                val type = if (finalVideoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
                     newExtractorLink(
-                        "$serverName - ${link.name}",
-                        link.name,
-                        link.url,
-                        link.type
+                        source = serverName,
+                        name = serverName,
+                        url = finalVideoUrl,
+                        type = type
                     ) {
-                        this.referer = link.referer
-                        this.headers = link.headers
-                        this.quality = link.quality
-                        this.extractorData = link.extractorData
+                        this.referer = currentUrl
+                        this.quality = quality
                     }
                 )
+                return
             }
-        }
-    }
 
-    private fun fixStreamUrl(rawUrl: String): String {
-        var url = fixUrl(rawUrl)
-        val domainMappings = mapOf(
-            "short.ink" to "short.icu",
-            "desustream.me/otakuhade/baru/" to "desustream.info/dstream/otakustream/index.php",
-            "desustream.me/moedesu/stream/hd/" to "desustream.info/dstream/moedesu/hd/index.php",
-            "desustream.com/moedesu/hd/" to "desustream.info/dstream/moedesu/index.php",
-            "desustream.me/beta/stream/hd/" to "desustream.info/dstream/otakuwatch2/hd/index.php",
-            "desustream.me/ondesu/hd/index.php" to "desustream.info/dstream/ondesu/hd/index.php",
-            "desustream.me/arcg/done/" to "desustream.info/dstream/arcg/",
-            "desustream.me/otakustream/?" to "desustream.info/dstream/otakustream/index.php?",
-            "desustream.me/desudrive/player.php" to "desustream.info/dstream/desudrive/player.php",
-            "desustream.me/desudesuhd/" to "desustream.info/dstream/desudesuhd/index.php",
-            "desustream.me/desudesuhd3/" to "desustream.info/dstream/desudesuhd3/index.php",
-            "desustream.me/arcg" to "desustream.info/dstream/arcg"
-        )
-        domainMappings.forEach { (old, new) ->
-            url = url.replace(old, new)
+            // 2. Inner iframe
+            val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
+            if (!innerIframe.isNullOrBlank()) {
+                val fixedInner = fixUrl(innerIframe)
+                resolveAndLoadIframe(fixedInner, serverName, quality, subtitleCallback, callback)
+                return
+            }
+
+            // 3. Fallback
+            loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
+        } catch (e: Exception) {
+            println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
         }
-        if (url.contains("short.ink")) {
-            url = url.replace("short.ink", "gojonime.my.id")
-        }
-        if (url.contains("short.icu")) {
-            url = url.replace("short.icu", "yihdraplay.my.id")
-        }
-        if (Regex("""https?://(player\.|play\.)?abyssplayer\.com""").containsMatchIn(url)) {
-            url = url.replace(Regex("""https?://(player\.|play\.)?abyssplayer\.com"""), "https://harenchidesu.my.id")
-        }
-        return url
     }
 }

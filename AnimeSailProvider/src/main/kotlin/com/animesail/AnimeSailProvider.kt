@@ -7,7 +7,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class AnimeSailProvider : MainAPI() {
-    override var mainUrl = "https://anisail.com/"
+    override var mainUrl = "https://anisail.com"
     override var name = "AnimeSail"
     override val hasMainPage = true
     override var lang = "id"
@@ -22,10 +22,10 @@ class AnimeSailProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "" to "Update Terbaru",
-        "movie-terbaru/" to "Movie Terbaru",
-        "rilisan-anime-terbaru/" to "Anime Ongoing",
-        "rilisan-donghua-terbaru/" to "Donghua Ongoing",
-        "anime/" to "Daftar Anime"
+        "movie-terbaru" to "Movie Terbaru",
+        "rilisan-anime-terbaru" to "Anime Ongoing",
+        "rilisan-donghua-terbaru" to "Donghua Ongoing",
+        "anime" to "Daftar Anime"
     )
 
     private suspend fun request(url: String, ref: String? = null): NiceResponse {

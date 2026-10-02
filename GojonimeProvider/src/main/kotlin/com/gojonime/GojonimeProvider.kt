@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import kotlinx.coroutines.runBlocking
 
 class GojonimeProvider : MainAPI() {
     override var mainUrl = "https://gojonime.net"
@@ -237,9 +238,10 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        documents.forEach { document ->
+        for (document in documents) {
             val options = document.select("#selectserver option, select.mirror option, .mobius option, .select-server option, .mirrorstream option, select#changeServer option, .server-item")
-            options.forEach { option ->
+            for (option in options) {
+                val serverName = option.text().trim().takeIf { it.isNotBlank() && !it.contains("Pilih Server", ignoreCase = true) } ?: "Server"
                 val value = option.attr("value").trim()
                     .ifBlank { option.attr("data-link") }
                     .ifBlank { option.attr("data-embed") }
@@ -265,25 +267,27 @@ class GojonimeProvider : MainAPI() {
 
                     if (rawIframeOrUrl.isNotBlank()) {
                         val streamUrl = fixStreamUrl(rawIframeOrUrl)
-                        processStreamUrl(streamUrl, subtitleCallback, callback)
+                        processStreamUrl(streamUrl, serverName, subtitleCallback, callback)
                     }
                 }
             }
 
-            document.select("ul#playeroptionsul > li, .player-servers li, [data-link], [data-embed]").forEach { item ->
+            val items = document.select("ul#playeroptionsul > li, .player-servers li, [data-link], [data-embed]")
+            for (item in items) {
+                val serverName = item.text().trim().takeIf { it.isNotBlank() } ?: "Server"
                 val link = item.attr("data-link")
                     .ifBlank { item.attr("data-embed") }
                     .ifBlank { item.selectFirst("iframe")?.attr("src") ?: "" }
                 if (link.isNotBlank()) {
                     val streamUrl = fixStreamUrl(link)
-                    processStreamUrl(streamUrl, subtitleCallback, callback)
+                    processStreamUrl(streamUrl, serverName, subtitleCallback, callback)
                 }
             }
 
             val defaultIframeSrc = document.selectFirst("#pembed iframe, #embed_holder iframe, .player-embed iframe, iframe")?.attr("src")
             if (!defaultIframeSrc.isNullOrBlank()) {
                 val streamUrl = fixStreamUrl(defaultIframeSrc)
-                processStreamUrl(streamUrl, subtitleCallback, callback)
+                processStreamUrl(streamUrl, "Server 1", subtitleCallback, callback)
             }
         }
 
@@ -292,62 +296,83 @@ class GojonimeProvider : MainAPI() {
 
     private suspend fun processStreamUrl(
         streamUrl: String,
+        serverName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        var targetUrl = streamUrl
+
         if (streamUrl.contains("berkasdrive.com")) {
             if (streamUrl.contains("id=")) {
                 val base64Id = streamUrl.substringAfter("id=").substringBefore("&")
                 try {
                     val decodedUrl = base64Decode(base64Id)
                     if (decodedUrl.startsWith("http")) {
-                        val fixedDecoded = fixStreamUrl(decodedUrl)
-                        loadExtractor(fixedDecoded, subtitleCallback, callback)
+                        targetUrl = fixStreamUrl(decodedUrl)
                     }
                 } catch (_: Exception) {}
-            }
-            if (streamUrl.contains("backup=")) {
+            } else if (streamUrl.contains("backup=")) {
                 val base64Backup = streamUrl.substringAfter("backup=").substringBefore("&")
                 try {
                     val decodedUrl = base64Decode(base64Backup)
                     if (decodedUrl.startsWith("http")) {
-                        val fixedDecoded = fixStreamUrl(decodedUrl)
-                        loadExtractor(fixedDecoded, subtitleCallback, callback)
+                        targetUrl = fixStreamUrl(decodedUrl)
+                    }
+                } catch (_: Exception) {}
+            } else {
+                try {
+                    val berkasDoc = app.get(streamUrl, referer = mainUrl).document
+                    val berkasIframe = berkasDoc.selectFirst("iframe")?.attr("src")
+                    if (!berkasIframe.isNullOrBlank()) {
+                        targetUrl = fixStreamUrl(berkasIframe)
+                    } else {
+                        val videoSrc = berkasDoc.selectFirst("video source, source")?.attr("src")
+                        if (!videoSrc.isNullOrBlank()) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    serverName,
+                                    serverName,
+                                    fixUrl(videoSrc)
+                                ) {
+                                    this.referer = streamUrl
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                            return
+                        }
                     }
                 } catch (_: Exception) {}
             }
-            try {
-                val berkasDoc = app.get(streamUrl, referer = mainUrl).document
-                val berkasIframe = berkasDoc.selectFirst("iframe")?.attr("src")
-                if (!berkasIframe.isNullOrBlank()) {
-                    val fixedBerkas = fixStreamUrl(berkasIframe)
-                    loadExtractor(fixedBerkas, subtitleCallback, callback)
-                }
-                val videoSrc = berkasDoc.selectFirst("video source, source")?.attr("src")
-                if (!videoSrc.isNullOrBlank()) {
-                    callback.invoke(
-                        newExtractorLink(
-                            "Berkasdrive",
-                            "Berkasdrive",
-                            fixUrl(videoSrc)
-                        ) {
-                            this.referer = streamUrl
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-            } catch (_: Exception) {}
         }
 
-        if (streamUrl.contains("short.icu") || streamUrl.contains("short.ink") ||
-            streamUrl.contains("yihdraplay") || streamUrl.contains("gojonime.my.id")
+        if (targetUrl.contains("short.icu") || targetUrl.contains("short.ink") ||
+            targetUrl.contains("yihdraplay") || targetUrl.contains("gojonime.my.id")
         ) {
             try {
-                ShortIcuExtractor().getUrl(streamUrl, mainUrl, subtitleCallback, callback)
+                ShortIcuExtractor().apply { name = serverName }.getUrl(targetUrl, mainUrl, subtitleCallback) { link ->
+                    callback.invoke(link)
+                }
+                return
             } catch (_: Exception) {}
         }
 
-        loadExtractor(streamUrl, subtitleCallback, callback)
+        loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
+            runBlocking {
+                callback.invoke(
+                    newExtractorLink(
+                        "$serverName - ${link.name}",
+                        link.name,
+                        link.url,
+                        link.type
+                    ) {
+                        this.referer = link.referer
+                        this.headers = link.headers
+                        this.quality = link.quality
+                        this.extractorData = link.extractorData
+                    }
+                )
+            }
+        }
     }
 
     private fun fixStreamUrl(rawUrl: String): String {

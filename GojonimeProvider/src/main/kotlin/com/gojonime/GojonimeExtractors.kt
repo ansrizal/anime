@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.USER_AGENT
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.extractors.StreamWishExtractor
+import kotlinx.coroutines.runBlocking
 
 open class ShortIcuExtractor : StreamWishExtractor() {
     override var name = "Server 1"
@@ -27,6 +28,8 @@ open class ShortIcuExtractor : StreamWishExtractor() {
             "Accept-Language" to "en-US,en;q=0.9,id;q=0.8"
         )
 
+        val serverName = name
+
         try {
             val responseText = app.get(url, headers = headers).text
 
@@ -44,11 +47,25 @@ open class ShortIcuExtractor : StreamWishExtractor() {
             m3u8Regex.findAll(contentToSearch).forEach { match ->
                 val m3u8Url = match.groupValues[1].replace("\\/", "/")
                 M3u8Helper.generateM3u8(
-                    name,
+                    serverName,
                     m3u8Url,
                     referer = url,
                     headers = headers
-                ).forEach(callback)
+                ).forEach { link ->
+                    callback.invoke(
+                        newExtractorLink(
+                            "$serverName - ${link.name}",
+                            link.name,
+                            link.url,
+                            link.type
+                        ) {
+                            this.referer = link.referer
+                            this.headers = link.headers
+                            this.quality = link.quality
+                            this.extractorData = link.extractorData
+                        }
+                    )
+                }
                 found = true
             }
 
@@ -57,8 +74,8 @@ open class ShortIcuExtractor : StreamWishExtractor() {
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 callback.invoke(
                     newExtractorLink(
-                        name,
-                        name,
+                        serverName,
+                        serverName,
                         videoUrl
                     ) {
                         this.referer = url
@@ -75,16 +92,30 @@ open class ShortIcuExtractor : StreamWishExtractor() {
                     if (fileUrl.startsWith("http")) {
                         if (fileUrl.contains(".m3u8")) {
                             M3u8Helper.generateM3u8(
-                                name,
+                                serverName,
                                 fileUrl,
                                 referer = url,
                                 headers = headers
-                            ).forEach(callback)
+                            ).forEach { link ->
+                                callback.invoke(
+                                    newExtractorLink(
+                                        "$serverName - ${link.name}",
+                                        link.name,
+                                        link.url,
+                                        link.type
+                                    ) {
+                                        this.referer = link.referer
+                                        this.headers = link.headers
+                                        this.quality = link.quality
+                                        this.extractorData = link.extractorData
+                                    }
+                                )
+                            }
                         } else {
                             callback.invoke(
                                 newExtractorLink(
-                                    name,
-                                    name,
+                                    serverName,
+                                    serverName,
                                     fileUrl
                                 ) {
                                     this.referer = url
@@ -98,27 +129,59 @@ open class ShortIcuExtractor : StreamWishExtractor() {
             }
 
             if (!found) {
-                super.getUrl(url, referer, subtitleCallback, callback)
+                super.getUrl(url, referer, subtitleCallback) { link ->
+                    runBlocking {
+                        callback.invoke(
+                            newExtractorLink(
+                                "$serverName - ${link.name}",
+                                link.name,
+                                link.url,
+                                link.type
+                            ) {
+                                this.referer = link.referer
+                                this.headers = link.headers
+                                this.quality = link.quality
+                                this.extractorData = link.extractorData
+                            }
+                        )
+                    }
+                }
             }
         } catch (_: Exception) {
             try {
-                super.getUrl(url, referer, subtitleCallback, callback)
+                super.getUrl(url, referer, subtitleCallback) { link ->
+                    runBlocking {
+                        callback.invoke(
+                            newExtractorLink(
+                                "$serverName - ${link.name}",
+                                link.name,
+                                link.url,
+                                link.type
+                            ) {
+                                this.referer = link.referer
+                                this.headers = link.headers
+                                this.quality = link.quality
+                                this.extractorData = link.extractorData
+                            }
+                        )
+                    }
+                }
             } catch (_: Exception) {}
         }
     }
 }
 
 class ShortInkExtractor : ShortIcuExtractor() {
-    override var name = "Server 1 (ShortInk)"
+    init { name = "Server 1 (ShortInk)" }
     override var mainUrl = "https://short.ink"
 }
 
 class GojonimeMyIdExtractor : ShortIcuExtractor() {
-    override var name = "Server 1 (Gojonime)"
+    init { name = "Server 1 (Gojonime)" }
     override var mainUrl = "https://gojonime.my.id"
 }
 
 class YihdraplayExtractor : ShortIcuExtractor() {
-    override var name = "Server 1 (Yihdraplay)"
+    init { name = "Server 1 (Yihdraplay)" }
     override var mainUrl = "https://yihdraplay.my.id"
 }

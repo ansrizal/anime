@@ -14,6 +14,8 @@ class AnimeSailProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val hasChromecastSupport = true
 
+    private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
+
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
@@ -38,7 +40,8 @@ class AnimeSailProvider : MainAPI() {
                 "Cache-Control" to "no-cache",
                 "Pragma" to "no-cache"
             ),
-            referer = ref ?: mainUrl
+            referer = ref ?: mainUrl,
+            interceptor = turnstileInterceptor
         )
     }
 
@@ -64,15 +67,17 @@ class AnimeSailProvider : MainAPI() {
             val document = response.document
             println("AnimeSail: Document title: ${document.title()}")
             
-            // Debug: Print first 500 characters of HTML
-            println("AnimeSail: HTML content: ${document.html().take(500)}")
-            
             // Try multiple selectors
             val selectors = listOf(
                 "article.bs",
                 "article.bsz",
                 ".listupd article",
-                ".postbody article"
+                ".postbody article",
+                "div.bsx",
+                "div.bs",
+                "div.animposx",
+                "div.animepost",
+                ".venz ul li"
             )
             
             var items = emptyList<AnimeSearchResponse>()
@@ -89,7 +94,7 @@ class AnimeSailProvider : MainAPI() {
             
             if (items.isEmpty()) {
                 println("AnimeSail: No items found with any selector")
-                println("AnimeSail: Available elements: ${document.select("article").size} articles")
+                println("AnimeSail: Available elements: ${document.select("article, div.bsx, div.bs").size} elements")
             }
             
             newHomePageResponse(request.name, items)
@@ -104,9 +109,9 @@ class AnimeSailProvider : MainAPI() {
         val a = this.selectFirst("a[href]") ?: return null
         val href = fixUrl(a.attr("href"))
         
-        if (href.isBlank() || href.contains("/page/")) return null
+        if (href.isBlank() || href.contains("/page/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
 
-        val rawTitle = this.selectFirst(".tt h2")?.text()
+        val rawTitle = this.selectFirst(".tt h2, h3, h4, .title, h2.jdlflm")?.text()
             ?: a.attr("title")
             ?: return null
 
@@ -120,14 +125,19 @@ class AnimeSailProvider : MainAPI() {
             .trim()
 
         val img = this.selectFirst("img")
-        val posterUrl = fixImageUrl(img?.attr("src"))
+        val posterUrl = fixImageUrl(
+            img?.attr("src")?.takeIf { !it.startsWith("data:") }
+                ?: img?.attr("data-src")
+                ?: img?.attr("data-lazy-src")
+        )
 
         val type = when {
-            this.hasClass("bsz") || href.contains("/movie/") -> TvType.AnimeMovie
+            this.hasClass("bsz") || href.contains("/movie/") || rawTitle.contains("Movie", true) -> TvType.AnimeMovie
             else -> TvType.Anime
         }
 
         val epNum = Regex("(?i)Episode\\s*(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: Regex("(?i)Ep\\s*(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
@@ -139,7 +149,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         return try {
             val document = request(link).document
-            document.select("article.bs, article.bsz").mapNotNull { 
+            document.select("article.bs, article.bsz, div.bsx, div.bs, div.animposx, div.animepost, .venz ul li").mapNotNull { 
                 it.toSearchResult() 
             }.distinctBy { it.url }
         } catch (e: Exception) {

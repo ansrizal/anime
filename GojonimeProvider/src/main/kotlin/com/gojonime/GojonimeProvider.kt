@@ -2,6 +2,7 @@ package com.gojonime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -63,7 +64,8 @@ class GojonimeProvider : MainAPI() {
         val posterUrl = fixImageUrl(rawImg)
         val typeStr = this.selectFirst(".typez, .eggtype, .bt .typez, span i")?.text().orEmpty()
         val tvType = when {
-            href.contains("/movie/") || typeStr.contains("Movie", true) || title.contains("Movie", true) -> TvType.AnimeMovie
+            href.contains("/movie/") || typeStr.contains("Movie", true) ||
+                title.contains("Movie", true) -> TvType.AnimeMovie
             typeStr.contains("OVA", true) || typeStr.contains("Special", true) -> TvType.OVA
             else -> TvType.Anime
         }
@@ -107,7 +109,8 @@ class GojonimeProvider : MainAPI() {
         )
         val synopsis = doc.select("div.entry-content p, div.desc p, div.mindesc").text().trim()
         val genres = doc.select(".genxed a").map { it.text().trim() }
-        val rating = doc.selectFirst("div.rating strong")?.text()?.replace("Rating", "")?.trim()?.toDoubleOrNull()
+        val rating = doc.selectFirst("div.rating strong")?.text()
+            ?.replace("Rating", "")?.trim()?.toDoubleOrNull()
         val statusStr = doc.select("div.spe span:contains(Status)").text()
         val showStatus = when {
             statusStr.contains("Completed", true) -> ShowStatus.Completed
@@ -137,7 +140,8 @@ class GojonimeProvider : MainAPI() {
         }
         return if (tvType == TvType.AnimeMovie && finalEpisodes.size <= 1) {
             newMovieLoadResponse(title, animeUrl, TvType.AnimeMovie, finalEpisodes.first().data) {
-                this.posterUrl = poster; this.plot = synopsis; this.tags = genres; this.score = Score.from10(rating)
+                this.posterUrl = poster; this.plot = synopsis
+                this.tags = genres; this.score = Score.from10(rating)
             }
         } else {
             newAnimeLoadResponse(title, animeUrl, tvType) {
@@ -228,7 +232,7 @@ class GojonimeProvider : MainAPI() {
     }
 
     // ============================================================
-    // PROSES STREAM — versi baru: fetch HTTP langsung, hindari WebView
+    // PROSES STREAM — fetch HTTP langsung, hindari WebView
     // ============================================================
     private suspend fun processStreamUrl(
         streamUrl: String,
@@ -252,17 +256,13 @@ class GojonimeProvider : MainAPI() {
 
         println("Gojonime: [$serverName] final target = $targetUrl")
 
-        // 2. Kalau target sudah URL video langsung
+        // 2. Target sudah URL video langsung
         if (targetUrl.matches(Regex(""".*\.(m3u8|mp4)(\?.*)?$"""))) {
-            val type = if (targetUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            callback.invoke(newExtractorLink(serverName, serverName, targetUrl, type) {
-                this.referer = mainUrl; this.quality = quality
-            })
+            emitVideo(targetUrl, mainUrl, serverName, quality, callback)
             return
         }
 
-        // 3. Untuk shortener (gojonime.my.id, yihdraplay, harenchidesu, dll):
-        //    fetch HTTP manual (JANGAN pakai ShortIcuExtractor yang pakai WebView)
+        // 3. Shortener (gojonime.my.id, yihdraplay, harenchidesu, dll): fetch HTTP manual
         if (isShortenerDomain(targetUrl)) {
             try {
                 val res = app.get(targetUrl, referer = mainUrl, allowRedirects = true)
@@ -270,24 +270,23 @@ class GojonimeProvider : MainAPI() {
                 val html = res.text
                 println("Gojonime: [$serverName] redirect -> $finalUrl")
 
-                // Follow redirect recursively (1x)
                 if (finalUrl != targetUrl && !isShortenerDomain(finalUrl)) {
                     processStreamUrl(finalUrl, serverName, quality, subtitleCallback, callback)
                     return
                 }
 
-                // Parse HTML dari halaman akhir
                 val videoUrl = extractVideoFromHtml(html, finalUrl, serverName)
                 if (videoUrl != null) {
                     emitVideo(videoUrl, finalUrl, serverName, quality, callback)
                     return
                 }
+                println("Gojonime: [$serverName] tidak ada video URL di HTML shortener")
             } catch (e: Exception) {
                 println("Gojonime: [$serverName] shortener fetch gagal - ${e.message}")
             }
         }
 
-        // 4. Untuk abyss.to / abyssplayer: fetch HTML & parse
+        // 4. abyss.to / abyssplayer
         if (targetUrl.contains("abyss.to") || targetUrl.contains("abyssplayer")) {
             try {
                 val res = app.get(targetUrl, referer = mainUrl, allowRedirects = true)
@@ -304,7 +303,7 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // 5. Untuk mitedrive: fetch dengan Referer + Origin yang benar
+        // 5. mitedrive — fetch dengan Referer + UA mobile
         if (targetUrl.contains("mitedrive.com")) {
             try {
                 val res = app.get(
@@ -327,15 +326,20 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // 6. Fallback terakhir: loadExtractor internal
+        // 6. Fallback terakhir: loadExtractor internal CloudStream
+        //    PATCH: callback `loadExtractor` BUKAN suspend → bungkus newExtractorLink dalam runBlocking
         try {
             loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
-                callback.invoke(newExtractorLink(serverName, link.name, link.url, link.type) {
-                    this.referer = link.referer
-                    this.headers = link.headers
-                    this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
-                    this.extractorData = link.extractorData
-                })
+                runBlocking {
+                    callback.invoke(
+                        newExtractorLink(serverName, link.name, link.url, link.type) {
+                            this.referer = link.referer
+                            this.headers = link.headers
+                            this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
+                            this.extractorData = link.extractorData
+                        }
+                    )
+                }
             }
         } catch (e: Exception) {
             println("Gojonime: [$serverName] loadExtractor gagal - ${e.message}")
@@ -346,7 +350,8 @@ class GojonimeProvider : MainAPI() {
         listOf("gojonime.my.id", "yihdraplay.my.id", "harenchidesu.my.id", "short.icu", "short.ink")
             .any { url.contains(it, true) }
 
-    private fun emitVideo(
+    // PATCH: sekarang suspend karena newExtractorLink() suspend
+    private suspend fun emitVideo(
         videoUrl: String, referer: String, serverName: String,
         quality: Int, callback: (ExtractorLink) -> Unit
     ) {
@@ -357,18 +362,13 @@ class GojonimeProvider : MainAPI() {
         })
     }
 
-    /**
-     * Ekstrak URL video (m3u8/mp4) dari HTML player.
-     * Menangani: <video src>, <source src>, file:"...", sources:[{file:"..."}],
-     * dan base64-encoded atob() pattern.
-     */
     private fun extractVideoFromHtml(html: String, baseUrl: String, serverName: String): String? {
-        // 1. m3u8 prioritas
+        // 1. m3u8 langsung
         Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(html)?.let {
             println("Gojonime: [$serverName] found m3u8 (pattern 1)")
             return it.groupValues[1]
         }
-        // 2. file: "...m3u8 atau mp4"
+        // 2. file: "...m3u8/mp4"
         Regex("""file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']""").find(html)?.let {
             println("Gojonime: [$serverName] found file: (pattern 2)")
             return if (it.groupValues[1].startsWith("http")) it.groupValues[1]
@@ -391,7 +391,7 @@ class GojonimeProvider : MainAPI() {
             println("Gojonime: [$serverName] found mp4 (pattern 5)")
             return it.groupValues[1]
         }
-        // 6. base64 atob
+        // 6. atob("base64") → decode → cari URL
         Regex("""atob\(["']([A-Za-z0-9+/=]+)["']\)""").find(html)?.let { m ->
             try {
                 val decoded = base64Decode(m.groupValues[1])
@@ -401,7 +401,7 @@ class GojonimeProvider : MainAPI() {
                 }
             } catch (_: Exception) {}
         }
-        // 7. Absolute path dalam JS (mis. "file":"/stream/xxx.m3u8")
+        // 7. Relative path
         Regex("""["'](/[^"']+\.(?:m3u8|mp4)[^"']*)["']""").find(html)?.let {
             println("Gojonime: [$serverName] found relative path (pattern 7)")
             return fixUrl(it.groupValues[1])

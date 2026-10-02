@@ -204,7 +204,7 @@ class GojonimeProvider : MainAPI() {
     }
 
     // ============================================================
-    // LOAD LINKS — versi rewrite dengan scan semua server
+    // LOAD LINKS
     // ============================================================
     override suspend fun loadLinks(
         data: String,
@@ -312,7 +312,10 @@ class GojonimeProvider : MainAPI() {
     }
 
     // ============================================================
-    // PROSES STREAM
+    // PROSES STREAM — versi compile-safe:
+    // semua link dikumpulkan ke MutableList dulu, baru emit ke callback
+    // di luar lambda extractor (menghindari "suspension functions can only
+    // be called within coroutine body").
     // ============================================================
     private suspend fun processStreamUrl(
         streamUrl: String,
@@ -336,108 +339,108 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // --- shortener domain -> pakai ShortIcuExtractor ---
-        if (targetUrl.contains("short.icu") || targetUrl.contains("short.ink") ||
-            targetUrl.contains("yihdraplay") || targetUrl.contains("gojonime.my.id") ||
-            targetUrl.contains("harenchidesu")
-        ) {
-            try {
-                var emitted = false
-                ShortIcuExtractor().apply { name = serverName }.getUrl(
-                    targetUrl, mainUrl, subtitleCallback
-                ) { link ->
-                    emitted = true
-                    callback.invoke(
-                        newExtractorLink(serverName, link.name, link.url, link.type) {
-                            this.referer = link.referer
-                            this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
-                        }
-                    )
-                }
-                if (emitted) return
-                println("Gojonime: ShortIcu tidak menghasilkan link untuk $targetUrl")
-            } catch (e: Exception) {
-                println("Gojonime: ShortIcu error $targetUrl - ${e.message}")
-            }
-            // fall-through: coba fetch manual
-        }
-
-        // --- fetch manual: cari <video>, <source>, file:.mp4/.m3u8 di HTML ---
+        // ---------- TAHAP 1: coba fetch manual untuk direct URL ----------
+        val directLinks = mutableListOf<ExtractorLink>()
         try {
             val res = app.get(targetUrl, referer = mainUrl)
             val html = res.text
             val doc = res.document
 
             // a) pixeldrain
-            if (html.contains("pixeldrain.com")) {
-                val fid = Regex("""pixeldrain\.com/(?:d|u|api/file)/([A-Za-z0-9]+)""")
-                    .find(html)?.groupValues?.getOrNull(1)
-                if (fid != null) {
-                    callback.invoke(
-                        newExtractorLink(
-                            serverName, serverName,
-                            "https://pixeldrain.com/api/file/$fid",
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = "https://pixeldrain.com/"
-                            this.quality = quality
-                        }
-                    )
-                    return
-                }
-            }
-
-            // b) video / source tags
-            val videoSrc = doc.selectFirst("video[src], video source[src]")?.attr("src")
-                ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
-                    .find(html)?.groupValues?.getOrNull(1)
-                ?: Regex("""(?:src|source)\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
-                    .find(html)?.groupValues?.getOrNull(1)
-                ?: Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-                    .find(html)?.groupValues?.getOrNull(1)
-                ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""")
-                    .find(html)?.groupValues?.getOrNull(1)
-
-            if (!videoSrc.isNullOrBlank()) {
-                val finalUrl = fixUrl(videoSrc)
-                val type = if (finalUrl.contains(".m3u8", ignoreCase = true))
-                    ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                callback.invoke(
-                    newExtractorLink(serverName, serverName, finalUrl, type) {
-                        this.referer = targetUrl
+            val pixeldrainId = Regex("""pixeldrain\.com/(?:d|u|api/file)/([A-Za-z0-9]+)""")
+                .find(html)?.groupValues?.getOrNull(1)
+            if (pixeldrainId != null) {
+                directLinks.add(
+                    newExtractorLink(
+                        source = serverName,
+                        name = serverName,
+                        url = "https://pixeldrain.com/api/file/$pixeldrainId",
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://pixeldrain.com/"
                         this.quality = quality
                     }
                 )
-                return
             }
 
-            // c) nested iframe — rekursif sekali
-            val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
-            if (!innerIframe.isNullOrBlank() && innerIframe != targetUrl) {
-                val innerFixed = fixUrl(innerIframe)
-                if (innerFixed != targetUrl) {
-                    processStreamUrl(innerFixed, serverName, quality, subtitleCallback, callback)
-                    return
+            // b) direct video source
+            if (directLinks.isEmpty()) {
+                val videoSrc = doc.selectFirst("video[src], video source[src]")?.attr("src")
+                    ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+                        .find(html)?.groupValues?.getOrNull(1)
+                    ?: Regex("""(?:src|source)\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+                        .find(html)?.groupValues?.getOrNull(1)
+                    ?: Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                        .find(html)?.groupValues?.getOrNull(1)
+                    ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""")
+                        .find(html)?.groupValues?.getOrNull(1)
+
+                if (!videoSrc.isNullOrBlank()) {
+                    val finalUrl = fixUrl(videoSrc)
+                    val type = if (finalUrl.contains(".m3u8", ignoreCase = true))
+                        ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    directLinks.add(
+                        newExtractorLink(
+                            source = serverName,
+                            name = serverName,
+                            url = finalUrl,
+                            type = type
+                        ) {
+                            this.referer = targetUrl
+                            this.quality = quality
+                        }
+                    )
+                }
+            }
+
+            // c) nested iframe → rekursif
+            if (directLinks.isEmpty()) {
+                val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
+                if (!innerIframe.isNullOrBlank()) {
+                    val innerFixed = fixUrl(innerIframe)
+                    if (innerFixed != targetUrl) {
+                        // emit dulu apa yang sudah terkumpul (kosong), lalu rekursi
+                        processStreamUrl(innerFixed, serverName, quality, subtitleCallback, callback)
+                        return
+                    }
                 }
             }
         } catch (e: Exception) {
             println("Gojonime: fetch $targetUrl error - ${e.message}")
         }
 
-        // --- fallback terakhir: extractor bawaan CloudStream ---
+        // emit direct links
+        for (link in directLinks) {
+            callback.invoke(link)
+        }
+        if (directLinks.isNotEmpty()) return
+
+        // ---------- TAHAP 2: fallback ke extractor bawaan CloudStream ----------
+        val extractorLinks = mutableListOf<ExtractorLink>()
         try {
+            // Kumpulkan dulu ke list, JANGAN invoke callback di dalam lambda ini
             loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
-                callback.invoke(
-                    newExtractorLink(serverName, link.name, link.url, link.type) {
-                        this.referer = link.referer
-                        this.headers = link.headers
-                        this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
-                        this.extractorData = link.extractorData
-                    }
-                )
+                extractorLinks.add(link)
             }
         } catch (e: Exception) {
-            println("Gojonime: loadExtractor gagal $targetUrl - ${e.message}")
+            println("Gojonime: loadExtractor error $targetUrl - ${e.message}")
+        }
+
+        // baru emit di luar lambda
+        for (link in extractorLinks) {
+            callback.invoke(
+                newExtractorLink(
+                    source = serverName,
+                    name = link.name,
+                    url = link.url,
+                    type = link.type
+                ) {
+                    this.referer = link.referer
+                    this.headers = link.headers
+                    this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
+                    this.extractorData = link.extractorData
+                }
+            )
         }
     }
 
@@ -448,21 +451,18 @@ class GojonimeProvider : MainAPI() {
         var url = fixUrl(rawUrl)
 
         // 1) replaceDomain() dari website — urutan penting:
-        //    short.ink -> gojonime.my.id  (BUKAN ke short.icu!)
         if (Regex("""https?://([^/]*\.)?short\.ink""").containsMatchIn(url)) {
             url = url.replace(
                 Regex("""https?://([^/]*\.)?short\.ink"""),
                 "https://gojonime.my.id"
             )
         }
-        //    short.icu -> yihdraplay.my.id
         if (Regex("""https?://([^/]*\.)?short\.icu""").containsMatchIn(url)) {
             url = url.replace(
                 Regex("""https?://([^/]*\.)?short\.icu"""),
                 "https://yihdraplay.my.id"
             )
         }
-        //    abyssplayer -> harenchidesu
         if (Regex("""https?://(player\.|play\.)?abyssplayer\.com""").containsMatchIn(url)) {
             url = url.replace(
                 Regex("""https?://(player\.|play\.)?abyssplayer\.com"""),

@@ -60,47 +60,35 @@ class AnimeSailProvider : MainAPI() {
         }
 
         return try {
-            println("AnimeSail: Fetching $url")
             val response = request(url)
-            println("AnimeSail: Response code: ${response.code}")
-            
             val document = response.document
-            println("AnimeSail: Document title: ${document.title()}")
             
-            // Try multiple selectors
-            val selectors = listOf(
-                "article.bs",
-                "article.bsz",
-                ".listupd article",
-                ".postbody article",
-                "div.bsx",
-                "div.bs",
-                "div.animposx",
-                "div.animepost",
-                ".venz ul li"
-            )
-            
-            var items = emptyList<AnimeSearchResponse>()
-            for (selector in selectors) {
-                items = document.select(selector).mapNotNull { 
-                    it.toSearchResult() 
-                }.distinctBy { it.url }
+            val items = if (request.data == "anime/") {
+                document.select("a[href*='/anime/']").mapNotNull { it.toDaftarAnimeResult() }.distinctBy { it.url }
+            } else {
+                val selectors = listOf(
+                    "article.bs",
+                    "article.bsz",
+                    ".listupd article",
+                    ".postbody article",
+                    "div.bsx",
+                    "div.bs",
+                    "div.animposx",
+                    "div.animepost",
+                    ".venz ul li"
+                )
                 
-                if (items.isNotEmpty()) {
-                    println("AnimeSail: Found ${items.size} items using selector: $selector")
-                    break
+                var foundItems = emptyList<AnimeSearchResponse>()
+                for (selector in selectors) {
+                    foundItems = document.select(selector).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+                    if (foundItems.isNotEmpty()) break
                 }
-            }
-            
-            if (items.isEmpty()) {
-                println("AnimeSail: No items found with any selector")
-                println("AnimeSail: Available elements: ${document.select("article, div.bsx, div.bs").size} elements")
+                foundItems
             }
             
             newHomePageResponse(request.name, items)
         } catch (e: Exception) {
             println("AnimeSail: Error loading main page: ${e.message}")
-            e.printStackTrace()
             newHomePageResponse(request.name, emptyList())
         }
     }
@@ -145,6 +133,23 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
+    private fun Element.toDaftarAnimeResult(): AnimeSearchResponse? {
+        val href = fixUrl(attr("href"))
+        if (href.isBlank() || !href.contains("/anime/") || href.contains("/page/") || href.contains("/genre/") || href.contains("/category/") || href.contains("/tag/")) return null
+        
+        val title = text().trim().ifEmpty { attr("title").trim() }
+        if (title.isBlank() || title.lowercase() == "daftar anime" || title.lowercase() == "update terbaru" || title.lowercase() == "movie" || title.lowercase() == "genre" || title.lowercase() == "jadwal") return null
+
+        val cleanTitle = title
+            .replace(Regex("(?i)Subtitle Indonesia"), "")
+            .replace(Regex("(?i)Sub Indo"), "")
+            .trim()
+
+        return newAnimeSearchResponse(cleanTitle, href, TvType.Anime) {
+            this.posterUrl = null
+        }
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val link = "$mainUrl/?s=$query"
         return try {
@@ -159,8 +164,23 @@ class AnimeSailProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = request(url).document
-        
+        var currentUrl = url
+        var res = request(currentUrl)
+        var document = res.document
+
+        if (currentUrl.contains("-episode-") && !currentUrl.contains("/anime/")) {
+            val seriesLink = document.selectFirst(".breadcrumb a[href*='/anime/']")?.attr("href")
+                ?: document.selectFirst("div.entry-content i a[href*='/anime/']")?.attr("href")
+                ?: document.selectFirst("a[href*='/anime/'][rel='tag']")?.attr("href")
+                ?: document.selectFirst("a[href*='/anime/']")?.attr("href")
+
+            if (seriesLink != null) {
+                currentUrl = fixUrl(seriesLink)
+                res = request(currentUrl)
+                document = res.document
+            }
+        }
+
         val title = document.selectFirst("h1.entry-title")?.text()
             ?: document.selectFirst("h1")?.text()
             ?: document.title()
@@ -222,7 +242,7 @@ class AnimeSailProvider : MainAPI() {
             ?: document.selectFirst(".desc")?.text()
             ?: document.selectFirst(".entry-content")?.text()
 
-        if (url.contains("/movie/")) {
+        if (currentUrl.contains("/movie/")) {
             type = TvType.AnimeMovie
         }
 
@@ -245,7 +265,7 @@ class AnimeSailProvider : MainAPI() {
             }
         }.distinctBy { it.data }.sortedByDescending { it.episode }
 
-        return newAnimeLoadResponse(cleanTitle, url, type) {
+        return newAnimeLoadResponse(cleanTitle, currentUrl, type) {
             this.posterUrl = poster
             this.year = year
             addEpisodes(DubStatus.Subbed, episodes)
@@ -303,6 +323,4 @@ class AnimeSailProvider : MainAPI() {
             return false
         }
     }
-
-
 }

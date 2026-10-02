@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
 
 class AnimeSailProvider : MainAPI() {
     override var mainUrl = "https://v1.animesail.xyz"
@@ -297,7 +298,7 @@ class AnimeSailProvider : MainAPI() {
             // Also check main default iframe if present
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
-                loadExtractor(defaultIframe, mainUrl, subtitleCallback, callback)
+                resolveAndLoadIframe(defaultIframe, name, Qualities.Unknown.value, subtitleCallback, callback)
             }
 
             val options = document.select(".mobius > .mirror > option, select.mirror option")
@@ -312,7 +313,13 @@ class AnimeSailProvider : MainAPI() {
                     val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
                     if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
 
-                    loadExtractor(iframe, mainUrl, subtitleCallback, callback)
+                    val rawText = element.text().trim()
+                    val quality = Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
+                    val serverName = rawText.replace(Regex("(?i)\\d+[pP]"), "").trim().replaceFirstChar { 
+                        if (it.isLowerCase()) it.titlecase() else it.toString() 
+                    }.ifBlank { name }
+
+                    resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
                 } catch (e: Exception) {
                     println("AnimeSail: Error processing link: ${e.message}")
                 }
@@ -321,6 +328,127 @@ class AnimeSailProvider : MainAPI() {
         } catch (e: Exception) {
             println("AnimeSail: Error in loadLinks: ${e.message}")
             return false
+        }
+    }
+
+    private suspend fun resolveAndLoadIframe(
+        iframeUrl: String,
+        serverName: String,
+        quality: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            // Check if iframeUrl has ?url= parameter (like popup player)
+            if (iframeUrl.contains("url=")) {
+                var targetUrl = Regex("url=([^&]+)").find(iframeUrl)?.groupValues?.getOrNull(1)?.let {
+                    URLDecoder.decode(it, "UTF-8")
+                }
+                if (!targetUrl.isNullOrBlank()) {
+                    if (targetUrl.contains("pixeldrain.com")) {
+                        val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(targetUrl)?.groupValues?.getOrNull(1)
+                        if (fileId != null) {
+                            targetUrl = "https://pixeldrain.com/api/file/$fileId"
+                        }
+                    }
+
+                    if (targetUrl.contains("pixeldrain.com/api/file/")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = serverName,
+                                name = serverName,
+                                url = targetUrl,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://pixeldrain.com/"
+                                this.quality = quality
+                            }
+                        )
+                        return
+                    }
+
+                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+                    return
+                }
+            }
+
+            // Otherwise, fetch the iframe page HTML
+            val res = request(iframeUrl, mainUrl)
+            val doc = res.document
+            val html = res.text
+
+            // Check if iframeUrl or html has pixeldrain
+            if (iframeUrl.contains("pixeldrain.com") || html.contains("pixeldrain.com")) {
+                val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(iframeUrl)?.groupValues?.getOrNull(1)
+                    ?: Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
+                if (fileId != null) {
+                    val directUrl = "https://pixeldrain.com/api/file/$fileId"
+                    callback.invoke(
+                        newExtractorLink(
+                            source = serverName,
+                            name = serverName,
+                            url = directUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://pixeldrain.com/"
+                            this.quality = quality
+                        }
+                    )
+                    return
+                }
+            }
+
+            // 1. Check for video / source tags
+            val videoSrc = doc.selectFirst("video source, video")?.attr("src") 
+                ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""src\s*=\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
+
+            if (!videoSrc.isNullOrBlank()) {
+                val finalVideoUrl = fixUrl(videoSrc)
+                val type = if (finalVideoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                callback.invoke(
+                    newExtractorLink(
+                        source = serverName,
+                        name = serverName,
+                        url = finalVideoUrl,
+                        type = type
+                    ) {
+                        this.referer = iframeUrl
+                        this.quality = quality
+                    }
+                )
+                return
+            }
+
+            // 2. Check if iframe page contains another iframe or external link
+            val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
+            if (!innerIframe.isNullOrBlank()) {
+                val fixedInner = fixUrl(innerIframe)
+                if (fixedInner.contains("pixeldrain.com")) {
+                    val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(fixedInner)?.groupValues?.getOrNull(1)
+                    if (fileId != null) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = serverName,
+                                name = serverName,
+                                url = "https://pixeldrain.com/api/file/$fileId",
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://pixeldrain.com/"
+                                this.quality = quality
+                            }
+                        )
+                        return
+                    }
+                }
+                loadExtractor(fixedInner, iframeUrl, subtitleCallback, callback)
+                return
+            }
+
+            // 3. Fallback: try standard loadExtractor on iframeUrl
+            loadExtractor(iframeUrl, mainUrl, subtitleCallback, callback)
+        } catch (e: Exception) {
+            println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
         }
     }
 }

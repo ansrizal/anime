@@ -24,6 +24,7 @@ class GojonimeProvider : MainAPI() {
         "movie/page/%d/" to "Movie Anime",
         "anime/page/%d/?order=update" to "Latest Update",
         "anime/page/%d/?order=popular" to "Most Popular",
+        "anime/list-mode/" to "List Anime"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

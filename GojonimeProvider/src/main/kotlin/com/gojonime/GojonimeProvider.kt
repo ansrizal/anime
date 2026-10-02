@@ -1,21 +1,23 @@
-package com.animesail
+package com.gojonime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.nicehttp.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
 
-class AnimeSailProvider : MainAPI() {
+class GojonimeProvider : MainAPI() {
     override var mainUrl = "https://v1.animesail.xyz"
-    override var name = "AnimeSail"
+    override var name = "Gojonime"
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
     override val hasChromecastSupport = true
 
-    private val turnstileInterceptor = TurnstileInterceptor("_as_turnstile")
+    // Ganti TurnstileInterceptor dengan CloudflareKiller yang tersedia di CloudStream
+    private val interceptor = CloudflareKiller()
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -42,7 +44,7 @@ class AnimeSailProvider : MainAPI() {
                 "Pragma" to "no-cache"
             ),
             referer = ref ?: mainUrl,
-            interceptor = turnstileInterceptor
+            interceptor = interceptor
         )
     }
 
@@ -89,7 +91,7 @@ class AnimeSailProvider : MainAPI() {
 
             newHomePageResponse(request.name, items)
         } catch (e: Exception) {
-            println("AnimeSail: Error loading main page: ${e.message}")
+            println("Gojonime: Error loading main page: ${e.message}")
             newHomePageResponse(request.name, emptyList())
         }
     }
@@ -159,7 +161,7 @@ class AnimeSailProvider : MainAPI() {
                 it.toSearchResult()
             }.distinctBy { it.url }
         } catch (e: Exception) {
-            println("AnimeSail: Search error: ${e.message}")
+            println("Gojonime: Search error: ${e.message}")
             emptyList()
         }
     }
@@ -185,7 +187,7 @@ class AnimeSailProvider : MainAPI() {
         val title = document.selectFirst("h1.entry-title")?.text()
             ?: document.selectFirst("h1")?.text()
             ?: document.title()
-            ?: "AnimeSail"
+            ?: "Gojonime"
 
         val cleanTitle = title
             .replace(Regex("(?i)Subtitle Indonesia"), "")
@@ -314,7 +316,7 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // ==== PATCH 2: Selector diperbaiki, dan ambil base64 dari attr `value`, bukan `data-em` ====
+            // ==== PATCH 2: Selector diperbaiki, ambil base64 dari attr `value` ====
             val options = document.select(".mobius select.mirror option, select.mirror option")
 
             options.amap { element ->
@@ -380,13 +382,13 @@ class AnimeSailProvider : MainAPI() {
                     resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
 
                 } catch (e: Exception) {
-                    println("AnimeSail: Error processing server option '${element.text()}': ${e.message}")
+                    println("Gojonime: Error processing server option '${element.text()}': ${e.message}")
                 }
             }
 
             return true
         } catch (e: Exception) {
-            println("AnimeSail: Error in loadLinks: ${e.message}")
+            println("Gojonime: Error in loadLinks: ${e.message}")
             return false
         }
     }
@@ -515,7 +517,7 @@ class AnimeSailProvider : MainAPI() {
             // 3. Fallback
             loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
         } catch (e: Exception) {
-            println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
+            println("Gojonime: Error resolving iframe $iframeUrl: ${e.message}")
         }
     }
 }

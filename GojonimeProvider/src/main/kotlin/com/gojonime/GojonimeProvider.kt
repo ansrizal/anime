@@ -2,6 +2,7 @@ package com.gojonime
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -24,6 +25,9 @@ class GojonimeProvider : MainAPI() {
         "anime/page/%d/?order=popular" to "Most Popular",
         "anime/list-mode/" to "List Anime"
     )
+
+    private val ua =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val path = request.data.format(page)
@@ -57,7 +61,8 @@ class GojonimeProvider : MainAPI() {
         val posterUrl = fixImageUrl(rawImg)
         val typeStr = this.selectFirst(".typez, .eggtype, .bt .typez, span i")?.text().orEmpty()
         val tvType = when {
-            href.contains("/movie/") || typeStr.contains("Movie", true) || title.contains("Movie", true) -> TvType.AnimeMovie
+            href.contains("/movie/") || typeStr.contains("Movie", true) ||
+                title.contains("Movie", true) -> TvType.AnimeMovie
             typeStr.contains("OVA", true) || typeStr.contains("Special", true) -> TvType.OVA
             else -> TvType.Anime
         }
@@ -88,7 +93,9 @@ class GojonimeProvider : MainAPI() {
             val parentLink = doc.selectFirst(
                 ".ts-breadcrumb a[href*=\"/anime/\"], .year a[href*=\"/anime/\"], .naveps a[href*=\"/anime/\"]"
             )?.attr("href")
-            if (parentLink != null) { animeUrl = fixUrl(parentLink); doc = app.get(animeUrl).document }
+            if (parentLink != null) {
+                animeUrl = fixUrl(parentLink); doc = app.get(animeUrl).document
+            }
         }
         val title = doc.selectFirst("h1.entry-title")?.text()?.trim()
             ?: doc.selectFirst(".entry-title")?.text()?.trim() ?: "Unknown"
@@ -98,7 +105,8 @@ class GojonimeProvider : MainAPI() {
         )
         val synopsis = doc.select("div.entry-content p, div.desc p, div.mindesc").text().trim()
         val genres = doc.select(".genxed a").map { it.text().trim() }
-        val rating = doc.selectFirst("div.rating strong")?.text()?.replace("Rating", "")?.trim()?.toDoubleOrNull()
+        val rating = doc.selectFirst("div.rating strong")?.text()
+            ?.replace("Rating", "")?.trim()?.toDoubleOrNull()
         val statusStr = doc.select("div.spe span:contains(Status)").text()
         val showStatus = when {
             statusStr.contains("Completed", true) -> ShowStatus.Completed
@@ -124,11 +132,14 @@ class GojonimeProvider : MainAPI() {
             }
         }.reversed()
         val finalEpisodes = episodes.ifEmpty {
-            listOf(newEpisode(animeUrl) { this.name = title; this.episode = 1; this.posterUrl = poster })
+            listOf(newEpisode(animeUrl) {
+                this.name = title; this.episode = 1; this.posterUrl = poster
+            })
         }
         return if (tvType == TvType.AnimeMovie && finalEpisodes.size <= 1) {
             newMovieLoadResponse(title, animeUrl, TvType.AnimeMovie, finalEpisodes.first().data) {
-                this.posterUrl = poster; this.plot = synopsis; this.tags = genres; this.score = Score.from10(rating)
+                this.posterUrl = poster; this.plot = synopsis; this.tags = genres
+                this.score = Score.from10(rating)
             }
         } else {
             newAnimeLoadResponse(title, animeUrl, tvType) {
@@ -219,7 +230,7 @@ class GojonimeProvider : MainAPI() {
     }
 
     // ============================================================
-    // PROSES STREAM — difokuskan untuk resolve shortener -> abyss
+    // PROSES STREAM
     // ============================================================
     private suspend fun processStreamUrl(
         streamUrl: String,
@@ -230,7 +241,7 @@ class GojonimeProvider : MainAPI() {
     ) {
         var targetUrl = streamUrl
 
-        // 1. Berkasdrive decode ?id=
+        // Berkasdrive decode ?id=
         if (streamUrl.contains("berkasdrive.com")) {
             val id = streamUrl.substringAfter("id=", "").substringBefore("&")
             if (id.isNotBlank()) {
@@ -243,96 +254,54 @@ class GojonimeProvider : MainAPI() {
 
         println("Gojonime: [$serverName] target = $targetUrl")
 
-        // 2. Sudah URL video langsung
+        // Direct video URL
         if (targetUrl.matches(Regex(""".*\.(m3u8|mp4)(\?.*)?$"""))) {
             emitVideo(targetUrl, mainUrl, serverName, quality, callback)
             return
         }
 
-        // 3. SHORTENER: fetch HTML, cari abyss ID / iframe
-        if (isShortenerDomain(targetUrl)) {
-            var resolved = false
+        // ABYSS-like: shortener, abyss.to, abyssplayer, harenchidesu
+        if (isAbyssLike(targetUrl)) {
             try {
                 val res = app.get(
                     targetUrl,
                     referer = mainUrl,
                     headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                        "User-Agent" to ua,
                         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8"
                     )
                 )
                 val html = res.text
-                val finalUrl = res.url
-                println("Gojonime: [$serverName] fetch OK, finalUrl=$finalUrl, len=${html.length}")
+                println("Gojonime: [$serverName] HTML len=${html.length}")
 
-                // Log snippet HTML untuk debug
-                println("Gojonime: [$serverName] HTML snippet: ${html.take(1500).replace("\n", " ")}")
-
-                // A. Cari abyss.to / abyssplayer.com / harenchidesu di HTML
-                val abyssUrl = findAbyssUrl(html, finalUrl)
-                if (abyssUrl != null) {
-                    println("Gojonime: [$serverName] ✓ abyss url = $abyssUrl")
-                    processAbyss(abyssUrl, serverName, quality, subtitleCallback, callback)
+                // Coba decode via enc-dec.app
+                if (decodeAbyss(html, targetUrl, serverName, quality, callback)) {
                     return
                 }
 
-                // B. Cari iframe apapun
+                // Fallback: cari iframe di HTML
                 Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
                     .find(html)?.groupValues?.get(1)?.let { iframeSrc ->
                         val fixed = fixUrl(iframeSrc)
-                        if (!fixed.contains("statistic") && !fixed.contains("error.php")) {
+                        if (fixed != targetUrl &&
+                            !fixed.contains("statistic") &&
+                            !fixed.contains("error.php")
+                        ) {
                             println("Gojonime: [$serverName] ✓ iframe = $fixed")
                             processStreamUrl(fixed, serverName, quality, subtitleCallback, callback)
                             return
                         }
                     }
-
-                // C. Cari JS redirect location.href / window.location
-                Regex("""(?:location\.href|window\.location\.href|location\.replace)\s*[=\(]\s*["']([^"']+)["']""")
-                    .find(html)?.groupValues?.get(1)?.let { jsUrl ->
-                        val fixed = fixUrl(jsUrl)
-                        if (fixed != targetUrl && fixed.startsWith("http")) {
-                            println("Gojonime: [$serverName] ✓ JS redirect -> $fixed")
-                            processStreamUrl(fixed, serverName, quality, subtitleCallback, callback)
-                            return
-                        }
-                    }
-
-                // D. Cari meta refresh
-                Regex("""<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?\d+;\s*url=([^"'\s>]+)""", RegexOption.IGNORE_CASE)
-                    .find(html)?.groupValues?.get(1)?.let { metaUrl ->
-                        val fixed = fixUrl(metaUrl)
-                        if (fixed.startsWith("http")) {
-                            println("Gojonime: [$serverName] ✓ meta refresh -> $fixed")
-                            processStreamUrl(fixed, serverName, quality, subtitleCallback, callback)
-                            return
-                        }
-                    }
-
-                println("Gojonime: [$serverName] ✗ tidak ada abyss/iframe/redirect di HTML")
             } catch (e: Exception) {
-                println("Gojonime: [$serverName] shortener error: ${e.message}")
+                println("Gojonime: [$serverName] fetch error - ${e.message}")
             }
         }
 
-        // 4. ABYSS domain langsung
-        if (targetUrl.contains("abyss.to") || targetUrl.contains("abyssplayer") ||
-            targetUrl.contains("harenchidesu")) {
-            processAbyss(targetUrl, serverName, quality, subtitleCallback, callback)
-            return
-        }
-
-        // 5. mitedrive
-        if (targetUrl.contains("mitedrive.com")) {
+        // Mitedrive
+        if (targetUrl.contains("mitedrive.com", true)) {
             try {
-                val res = app.get(
-                    targetUrl,
-                    referer = "https://mitedrive.com/",
-                    headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-                    )
-                )
+                val res = app.get(targetUrl, referer = "https://mitedrive.com/")
                 extractVideoFromHtml(res.text, targetUrl, serverName)?.let {
                     emitVideo(it, targetUrl, serverName, quality, callback)
                     return
@@ -342,7 +311,7 @@ class GojonimeProvider : MainAPI() {
             }
         }
 
-        // 6. Fallback: loadExtractor
+        // Final fallback
         try {
             loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
                 callback.invoke(newExtractorLink(serverName, link.name, link.url, link.type) {
@@ -358,197 +327,141 @@ class GojonimeProvider : MainAPI() {
     }
 
     // ============================================================
-    // ABYSS HANDLER: extract ID, call API, parse JSON
+    // ABYSS DECRYPT via enc-dec.app
     // ============================================================
-    private suspend fun processAbyss(
-        abyssUrl: String,
+    private suspend fun decodeAbyss(
+        html: String,
+        sourceUrl: String,
         serverName: String,
         quality: Int,
-        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ) {
-        println("Gojonime: [$serverName] processAbyss: $abyssUrl")
+    ): Boolean {
+        val encrypted = Regex("""const\s+datas\s*=\s*"([^"]+)"""")
+            .find(html)?.groupValues?.get(1)?.trim()
+            ?: run {
+                println("Gojonime: [$serverName] tidak ada 'const datas' di HTML")
+                return false
+            }
 
-        // Cari video ID di URL
-        val id = when {
-            abyssUrl.contains("abyssplayer.com") ->
-                Regex("""abyssplayer\.com/([A-Za-z0-9]+)""").find(abyssUrl)?.groupValues?.get(1)
-            abyssUrl.contains("abyss.to") ->
-                Regex("""abyss\.to/(?:e|d|embed/)?([A-Za-z0-9]+)""").find(abyssUrl)?.groupValues?.get(1)
-            abyssUrl.contains("harenchidesu") ->
-                Regex("""harenchidesu\.my\.id/([A-Za-z0-9]+)""").find(abyssUrl)?.groupValues?.get(1)
-            else -> null
-        }
+        println("Gojonime: [$serverName] encrypted len=${encrypted.length}")
 
-        if (id != null) {
-            println("Gojonime: [$serverName] abyss id = $id")
+        return try {
+            // POST JSON sama persis dengan cURL yang berhasil:
+            // curl -X POST .../dec-abyss -H "Content-Type: application/json" -d "{\"text\":\"...\"}"
+            val response = app.post(
+                "https://enc-dec.app/api/dec-abyss",
+                json = mapOf("text" to encrypted),
+                headers = mapOf(
+                    "User-Agent" to ua,
+                    "Origin" to "https://playhydrax.com",
+                    "Referer" to "https://playhydrax.com/",
+                    "Accept" to "application/json, text/plain, */*"
+                )
+            ).text
 
-            // Coba beberapa endpoint API abyss
-            val endpoints = listOf(
-                "https://abyssplayer.com/player/index.php?data=$id&do=getVideo",
-                "https://abyss.to/player/index.php?data=$id&do=getVideo",
-                "https://harenchidesu.my.id/player/index.php?data=$id&do=getVideo"
-            )
+            println("Gojonime: [$serverName] dec-abyss resp: ${response.take(400)}")
 
-            for (endpoint in endpoints) {
-                try {
-                    val apiRes = app.post(
-                        endpoint,
-                        data = mapOf("hash" to id, "r" to ""),
-                        referer = abyssUrl,
-                        headers = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36",
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Accept" to "application/json, text/javascript, */*; q=0.01",
-                            "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"
+            val root = JSONObject(response)
+            if (root.optInt("status", 0) != 200) {
+                println("Gojonime: [$serverName] dec-abyss status=${root.optInt("status")} err=${root.optString("error")}")
+                return false
+            }
+
+            val result = root.optJSONObject("result")
+                ?: run {
+                    println("Gojonime: [$serverName] no 'result' in response")
+                    return false
+                }
+            val sources = result.optJSONArray("sources")
+                ?: run {
+                    println("Gojonime: [$serverName] no 'sources' in result")
+                    return false
+                }
+
+            var emitted = false
+            for (i in 0 until sources.length()) {
+                val src = sources.optJSONObject(i) ?: continue
+                if (!src.optBoolean("status", false)) continue
+
+                val url = src.optString("url")
+                if (url.isBlank()) continue
+
+                val typeStr = src.optString("type").lowercase()   // "360p", "720p", ...
+                val q = when {
+                    typeStr.contains("1080") -> Qualities.P1080.value
+                    typeStr.contains("720")  -> Qualities.P720.value
+                    typeStr.contains("480")  -> Qualities.P480.value
+                    typeStr.contains("360")  -> Qualities.P360.value
+                    typeStr.contains("240")  -> Qualities.P240.value
+                    else -> quality
+                }
+
+                println("Gojonime: [$serverName] source[$i] $typeStr -> ${url.take(80)}")
+
+                // URL abyss (sssrr.org / sora path) TIDAK punya ekstensi .m3u8,
+                // tapi ini HLS. Emit sebagai M3U8.
+                callback.invoke(
+                    newExtractorLink(
+                        source = "$serverName $typeStr",
+                        name = "$serverName $typeStr",
+                        url = url,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "https://abyssplayer.com/"
+                        this.quality = q
+                        this.headers = mapOf(
+                            "User-Agent" to ua,
+                            "Origin" to "https://abyssplayer.com/",
+                            "Referer" to "https://abyssplayer.com/",
+                            "Accept" to "*/*"
                         )
-                    )
-                    val json = apiRes.text
-                    println("Gojonime: [$serverName] API resp (${endpoint.substringBefore("?")}) -> ${json.take(500)}")
-
-                    val videoUrl = Regex(""""(?:videoSource|securedLink|file|url)"\s*:\s*"([^"]+)""")
-                        .find(json)?.groupValues?.get(1)?.replace("\\/", "/")?.replace("&amp;", "&")
-
-                    if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http")) {
-                        println("Gojonime: [$serverName] ✓ video url from API = $videoUrl")
-                        emitVideo(videoUrl, abyssUrl, serverName, quality, callback)
-                        return
                     }
-                } catch (e: Exception) {
-                    println("Gojonime: [$serverName] API error ${endpoint.substringBefore("?")} - ${e.message}")
-                }
+                )
+                emitted = true
             }
-        }
-
-        // Fallback: fetch HTML player dan parse m3u8
-        try {
-            val res = app.get(abyssUrl, referer = mainUrl)
-            val html = res.text
-            println("Gojonime: [$serverName] abyss HTML len=${html.length}")
-            extractVideoFromHtml(html, abyssUrl, serverName)?.let {
-                println("Gojonime: [$serverName] ✓ video from HTML = $it")
-                emitVideo(it, abyssUrl, serverName, quality, callback)
-                return
+            if (!emitted) {
+                println("Gojonime: [$serverName] tidak ada source aktif")
             }
+            emitted
         } catch (e: Exception) {
-            println("Gojonime: [$serverName] abyss fetch error - ${e.message}")
-        }
-
-        // Final fallback
-        try {
-            loadExtractor(abyssUrl, mainUrl, subtitleCallback) { link ->
-                callback.invoke(newExtractorLink(serverName, link.name, link.url, link.type) {
-                    this.referer = link.referer
-                    this.headers = link.headers
-                    this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
-                })
-            }
-        } catch (e: Exception) {
-            println("Gojonime: [$serverName] abyss loadExtractor gagal - ${e.message}")
+            println("Gojonime: [$serverName] decodeAbyss error - ${e.message}")
+            false
         }
     }
 
-    // Cari URL abyss di HTML shortener (multiple patterns)
-    private fun findAbyssUrl(html: String, baseUrl: String): String? {
-        val patterns = listOf(
-            Regex("""["'](https?://(?:www\.)?abyss\.to/[^"'\s<>\\]+)["']"""),
-            Regex("""["'](https?://(?:player\.|play\.)?abyssplayer\.com/[^"'\s<>\\]+)["']"""),
-            Regex("""["'](https?://harenchidesu\.my\.id/[^"'\s<>\\]+)["']"""),
-            Regex("""(https?://(?:www\.)?abyss\.to/[A-Za-z0-9]+)"""),
-            Regex("""(https?://(?:player\.|play\.)?abyssplayer\.com/[A-Za-z0-9]+)""")
-        )
-        for (p in patterns) {
-            p.find(html)?.let { m ->
-                var url = m.groupValues[1].replace("\\/", "/").replace("&amp;", "&")
-                if (url.startsWith("http")) return url
-            }
-        }
+    private fun isAbyssLike(url: String): Boolean =
+        listOf(
+            "abyss.to", "abyssplayer", "harenchidesu",
+            "gojonime.my.id", "yihdraplay.my.id",
+            "short.icu", "short.ink"
+        ).any { url.contains(it, true) }
 
-        // Cari base64 di atob(...)
-        Regex("""atob\s*\(\s*["']([A-Za-z0-9+/=]{16,})["']\s*\)""").findAll(html).forEach { m ->
-            try {
-                val decoded = base64Decode(m.groupValues[1])
-                for (p in patterns) {
-                    p.find(decoded)?.let { mm ->
-                        var url = mm.groupValues[1].replace("\\/", "/")
-                        if (url.startsWith("http")) return url
-                    }
-                }
-            } catch (_: Exception) {}
-        }
-
-        // Kalau HTML menyebut "abyss" tapi tidak ada URL lengkap,
-        // cari string 9-12 char alfanumerik yang kandidat ID abyss
-        if (html.contains("abyss", ignoreCase = true) ||
-            html.contains("abyssplayer", ignoreCase = true) ||
-            html.contains("jwplayer", ignoreCase = true)) {
-            // Cari pola umum: id = "K8R6OOjS7"
-            Regex("""(?:id|hash|video|data-id|data-hash)\s*[:=]\s*["']([A-Za-z0-9]{8,14})["']""", RegexOption.IGNORE_CASE)
-                .find(html)?.groupValues?.get(1)?.let { candidate ->
-                    println("Gojonime: kandidat abyss id dari regex = $candidate")
-                    return "https://abyssplayer.com/$candidate"
-                }
-        }
-
-        return null
-    }
-
-    // Emit video link
     private fun emitVideo(
         videoUrl: String, referer: String, serverName: String,
         quality: Int, callback: (ExtractorLink) -> Unit
     ) {
-        val type = if (videoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+        val type = if (videoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8
+                   else ExtractorLinkType.VIDEO
         callback.invoke(newExtractorLink(serverName, serverName, videoUrl, type) {
             this.referer = referer
             this.quality = quality
         })
     }
 
-    // Extract video URL dari HTML (multi-pattern)
     private fun extractVideoFromHtml(html: String, baseUrl: String, serverName: String): String? {
         Regex("""["'](https?://[^"'\s]+\.m3u8[^"'\s]*)["']""").find(html)?.let {
-            println("Gojonime: [$serverName] pattern m3u8")
             return it.groupValues[1].replace("\\/", "/")
         }
         Regex("""file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']""").find(html)?.let {
-            println("Gojonime: [$serverName] pattern file:")
-            val u = it.groupValues[1].replace("\\/", "/")
-            return if (u.startsWith("http")) u else fixUrl(u)
-        }
-        Regex("""sources\s*:\s*\[\s*\{[^}]*?file\s*:\s*["']([^"']+)["']""").find(html)?.let {
-            println("Gojonime: [$serverName] pattern sources")
             val u = it.groupValues[1].replace("\\/", "/")
             return if (u.startsWith("http")) u else fixUrl(u)
         }
         Regex("""<(?:video|source)[^>]+src=["']([^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE).find(html)?.let {
-            println("Gojonime: [$serverName] pattern video tag")
             val u = it.groupValues[1].replace("\\/", "/")
             return if (u.startsWith("http")) u else fixUrl(u)
         }
-        Regex("""["'](https?://[^"'\s]+\.mp4[^"'\s]*)["']""").find(html)?.let {
-            println("Gojonime: [$serverName] pattern mp4")
-            return it.groupValues[1].replace("\\/", "/")
-        }
-        Regex("""atob\(["']([A-Za-z0-9+/=]+)["']\)""").find(html)?.let { m ->
-            try {
-                val dec = base64Decode(m.groupValues[1])
-                Regex("""(https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*)""").find(dec)?.let {
-                    println("Gojonime: [$serverName] pattern atob")
-                    return it.groupValues[1]
-                }
-            } catch (_: Exception) {}
-        }
-        Regex("""["'](/[^"']+\.(?:m3u8|mp4)[^"']*)["']""").find(html)?.let {
-            println("Gojonime: [$serverName] pattern relative path")
-            return fixUrl(it.groupValues[1])
-        }
         return null
     }
-
-    private fun isShortenerDomain(url: String): Boolean =
-        listOf("gojonime.my.id", "yihdraplay.my.id", "harenchidesu.my.id", "short.icu", "short.ink")
-            .any { url.contains(it, true) }
 
     private fun fixStreamUrl(rawUrl: String): String {
         var url = fixUrl(rawUrl)
@@ -564,20 +477,6 @@ class GojonimeProvider : MainAPI() {
                 "https://harenchidesu.my.id"
             )
         }
-        val extraMappings = mapOf(
-            "desustream.me/otakuhade/baru/" to "desustream.info/dstream/otakustream/index.php",
-            "desustream.me/moedesu/stream/hd/" to "desustream.info/dstream/moedesu/hd/index.php",
-            "desustream.com/moedesu/hd/" to "desustream.info/dstream/moedesu/index.php",
-            "desustream.me/beta/stream/hd/" to "desustream.info/dstream/otakuwatch2/hd/index.php",
-            "desustream.me/ondesu/hd/index.php" to "desustream.info/dstream/ondesu/hd/index.php",
-            "desustream.me/arcg/done/" to "desustream.info/dstream/arcg/",
-            "desustream.me/otakustream/?" to "desustream.info/dstream/otakustream/index.php?",
-            "desustream.me/desudrive/player.php" to "desustream.info/dstream/desudrive/player.php",
-            "desustream.me/desudesuhd/" to "desustream.info/dstream/desudesuhd/index.php",
-            "desustream.me/desudesuhd3/" to "desustream.info/dstream/desudesuhd3/index.php",
-            "desustream.me/arcg" to "desustream.info/dstream/arcg"
-        )
-        extraMappings.forEach { (old, new) -> url = url.replace(old, new) }
         return url
     }
 }

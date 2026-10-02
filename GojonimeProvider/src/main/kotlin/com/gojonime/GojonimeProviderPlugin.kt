@@ -15,6 +15,10 @@ import com.lagradost.cloudstream3.extractors.Mediafire
 class GojonimeProviderPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(GojonimeProvider())
+        registerExtractorAPI(ShortIcuExtractor())
+        registerExtractorAPI(ShortInkExtractor())
+        registerExtractorAPI(GojonimeMyIdExtractor())
+        registerExtractorAPI(YihdraplayExtractor())
         registerExtractorAPI(PixelDrain())
         registerExtractorAPI(Gofile())
         registerExtractorAPI(Krakenfiles())

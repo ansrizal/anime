@@ -204,17 +204,32 @@ class GojonimeProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(fixUrl(data)).document
 
-        doc.select(".mobius option, select.mirror option").forEach { option ->
-            val base64Value = option.attr("value").trim()
-            if (base64Value.isNotBlank()) {
-                try {
-                    val decodedHtml = base64Decode(base64Value)
-                    val iframeSrc = Jsoup.parse(decodedHtml).selectFirst("iframe")?.attr("src")
-                    if (!iframeSrc.isNullOrBlank()) {
-                        val streamUrl = fixStreamUrl(iframeSrc)
-                        processStreamUrl(streamUrl, subtitleCallback, callback)
+        val options = doc.select("#selectserver option, select.mirror option, .mobius option, .select-server option")
+        options.forEach { option ->
+            val value = option.attr("value").trim()
+            if (value.isNotBlank()) {
+                var rawIframeOrUrl = ""
+                if (value.startsWith("http://") || value.startsWith("https://")) {
+                    rawIframeOrUrl = value
+                } else if (value.contains("<iframe")) {
+                    rawIframeOrUrl = Jsoup.parse(value).selectFirst("iframe")?.attr("src") ?: ""
+                } else {
+                    try {
+                        val decoded = base64Decode(value)
+                        rawIframeOrUrl = if (decoded.contains("<iframe")) {
+                            Jsoup.parse(decoded).selectFirst("iframe")?.attr("src") ?: decoded
+                        } else {
+                            decoded
+                        }
+                    } catch (_: Exception) {
+                        rawIframeOrUrl = value
                     }
-                } catch (_: Exception) {}
+                }
+
+                if (rawIframeOrUrl.isNotBlank()) {
+                    val streamUrl = fixStreamUrl(rawIframeOrUrl)
+                    processStreamUrl(streamUrl, subtitleCallback, callback)
+                }
             }
         }
 
@@ -232,15 +247,58 @@ class GojonimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        if (streamUrl.contains("berkasdrive.com") && streamUrl.contains("id=")) {
-            val base64Id = streamUrl.substringAfter("id=").substringBefore("&")
+        if (streamUrl.contains("berkasdrive.com")) {
+            if (streamUrl.contains("id=")) {
+                val base64Id = streamUrl.substringAfter("id=").substringBefore("&")
+                try {
+                    val decodedUrl = base64Decode(base64Id)
+                    if (decodedUrl.startsWith("http")) {
+                        val fixedDecoded = fixStreamUrl(decodedUrl)
+                        loadExtractor(fixedDecoded, subtitleCallback, callback)
+                    }
+                } catch (_: Exception) {}
+            }
+            if (streamUrl.contains("backup=")) {
+                val base64Backup = streamUrl.substringAfter("backup=").substringBefore("&")
+                try {
+                    val decodedUrl = base64Decode(base64Backup)
+                    if (decodedUrl.startsWith("http")) {
+                        val fixedDecoded = fixStreamUrl(decodedUrl)
+                        loadExtractor(fixedDecoded, subtitleCallback, callback)
+                    }
+                } catch (_: Exception) {}
+            }
             try {
-                val decodedUrl = base64Decode(base64Id)
-                if (decodedUrl.startsWith("http")) {
-                    loadExtractor(decodedUrl, subtitleCallback, callback)
+                val berkasDoc = app.get(streamUrl, referer = mainUrl).document
+                val berkasIframe = berkasDoc.selectFirst("iframe")?.attr("src")
+                if (!berkasIframe.isNullOrBlank()) {
+                    val fixedBerkas = fixStreamUrl(berkasIframe)
+                    loadExtractor(fixedBerkas, subtitleCallback, callback)
+                }
+                val videoSrc = berkasDoc.selectFirst("video source, source")?.attr("src")
+                if (!videoSrc.isNullOrBlank()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            "Berkasdrive",
+                            "Berkasdrive",
+                            fixUrl(videoSrc)
+                        ) {
+                            this.referer = streamUrl
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
                 }
             } catch (_: Exception) {}
         }
+
+        if (streamUrl.contains("short.icu") || streamUrl.contains("short.ink") ||
+            streamUrl.contains("yihdraplay") || streamUrl.contains("gojonime.my.id")
+        ) {
+            try {
+                ShortIcuExtractor().getUrl(streamUrl, mainUrl, subtitleCallback, callback)
+            } catch (_: Exception) {}
+        }
+
         loadExtractor(streamUrl, subtitleCallback, callback)
     }
 

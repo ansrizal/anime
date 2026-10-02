@@ -79,8 +79,10 @@ class GojonimeProvider : MainAPI() {
 
         val typeStr = this.selectFirst(".typez, .eggtype, .bt .typez, span i")?.text().orEmpty()
         val tvType = when {
-            href.contains("/movie/") || typeStr.contains("Movie", ignoreCase = true) || title.contains("Movie", ignoreCase = true) -> TvType.AnimeMovie
-            typeStr.contains("OVA", ignoreCase = true) || typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
+            href.contains("/movie/") || typeStr.contains("Movie", ignoreCase = true) ||
+                title.contains("Movie", ignoreCase = true) -> TvType.AnimeMovie
+            typeStr.contains("OVA", ignoreCase = true) ||
+                typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
             else -> TvType.Anime
         }
 
@@ -116,7 +118,9 @@ class GojonimeProvider : MainAPI() {
         var doc = app.get(animeUrl).document
 
         if (!animeUrl.contains("/anime/")) {
-            val parentLink = doc.selectFirst(".ts-breadcrumb a[href*=\"/anime/\"], .year a[href*=\"/anime/\"], .naveps a[href*=\"/anime/\"]")?.attr("href")
+            val parentLink = doc.selectFirst(
+                ".ts-breadcrumb a[href*=\"/anime/\"], .year a[href*=\"/anime/\"], .naveps a[href*=\"/anime/\"]"
+            )?.attr("href")
             if (parentLink != null) {
                 animeUrl = fixUrl(parentLink)
                 doc = app.get(animeUrl).document
@@ -134,7 +138,8 @@ class GojonimeProvider : MainAPI() {
 
         val synopsis = doc.select("div.entry-content p, div.desc p, div.mindesc").text().trim()
         val genres = doc.select(".genxed a").map { it.text().trim() }
-        val rating = doc.selectFirst("div.rating strong")?.text()?.replace("Rating", "")?.trim()?.toDoubleOrNull()
+        val rating = doc.selectFirst("div.rating strong")?.text()
+            ?.replace("Rating", "")?.trim()?.toDoubleOrNull()
 
         val statusStr = doc.select("div.spe span:contains(Status)").text()
         val showStatus = when {
@@ -146,7 +151,8 @@ class GojonimeProvider : MainAPI() {
         val typeStr = doc.select("div.spe span:contains(Tipe), div.spe span:contains(Type)").text()
         val tvType = when {
             typeStr.contains("Movie", ignoreCase = true) || animeUrl.contains("/movie/") -> TvType.AnimeMovie
-            typeStr.contains("OVA", ignoreCase = true) || typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
+            typeStr.contains("OVA", ignoreCase = true) ||
+                typeStr.contains("Special", ignoreCase = true) -> TvType.OVA
             else -> TvType.Anime
         }
 
@@ -197,6 +203,9 @@ class GojonimeProvider : MainAPI() {
         }
     }
 
+    // ============================================================
+    // LOAD LINKS — versi rewrite dengan scan semua server
+    // ============================================================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -205,11 +214,10 @@ class GojonimeProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(fixUrl(data)).document
 
-        // Kumpulkan (raw-iframe-url -> serverName) dengan dedup otomatis
-        // PATCH: LinkedHashMap dengan key = raw URL, value = server name
+        // Peta URL -> serverName (LinkedHashMap untuk dedup otomatis)
         val collected = LinkedHashMap<String, String>()
 
-        // 1. Semua opsi di <select class="mirror"> dan varian selector lainnya
+        // (1) Semua <option> di <select class="mirror"> dan varian selector
         val optionSelector = listOf(
             "select.mirror option",
             "#selectserver option",
@@ -220,55 +228,46 @@ class GojonimeProvider : MainAPI() {
         ).joinToString(", ")
 
         for (option in doc.select(optionSelector)) {
-            val rawValue = option.attr("value").trim()
-            if (rawValue.isBlank()) continue
-
-            val iframeUrl = extractIframeUrl(rawValue) ?: continue
-
+            val raw = option.attr("value").trim()
+            if (raw.isBlank()) continue
+            val iframeUrl = extractIframeUrl(raw) ?: continue
             val serverName = option.text().trim()
                 .takeIf { it.isNotBlank() && !it.contains("Pilih", ignoreCase = true) }
                 ?: "Server"
-
-            if (!collected.containsKey(iframeUrl)) {
-                collected[iframeUrl] = serverName
-            }
+            collected.putIfAbsent(iframeUrl, serverName)
         }
 
-        // 2. Item dengan data-link / data-embed
+        // (2) <li> / [data-link] / [data-embed]
         for (item in doc.select("ul#playeroptionsul > li, .player-servers li, [data-link], [data-embed]")) {
             val link = item.attr("data-link")
                 .ifBlank { item.attr("data-embed") }
                 .ifBlank { item.selectFirst("iframe")?.attr("src") ?: "" }
             if (link.isBlank()) continue
-
             val iframeUrl = extractIframeUrl(link) ?: continue
             val serverName = item.text().trim().ifBlank { "Server" }
-
-            if (!collected.containsKey(iframeUrl)) {
-                collected[iframeUrl] = serverName
-            }
+            collected.putIfAbsent(iframeUrl, serverName)
         }
 
-        // 3. Default iframe di player utama (sering duplikat Server 1, tapi tetap kita cek)
-        doc.selectFirst("#pembed iframe, #embed_holder iframe, .player-embed iframe")
+        // (3) Default iframe di player utama (#pembed / #embed_holder)
+        doc.selectFirst("#pembed iframe[src], #embed_holder iframe[src], .player-embed iframe[src]")
             ?.attr("src")
             ?.takeIf { it.isNotBlank() }
             ?.let { src ->
-                extractIframeUrl(src)?.let {
-                    if (!collected.containsKey(it)) collected[it] = "Default"
-                }
+                extractIframeUrl(src)?.let { collected.putIfAbsent(it, "Server 1") }
             }
 
-        // PATCH: proses semua, JANGAN pakai runBlocking
+        println("Gojonime: ditemukan ${collected.size} server unik")
+
         var success = 0
         for ((rawUrl, serverName) in collected) {
             val streamUrl = fixStreamUrl(rawUrl)
             val quality = detectQuality(serverName)
+            println("Gojonime: proses [$serverName] -> $streamUrl")
             try {
                 processStreamUrl(streamUrl, serverName, quality, subtitleCallback, callback)
                 success++
             } catch (e: Exception) {
-                println("Gojonime: gagal proses $streamUrl ($serverName) - ${e.message}")
+                println("Gojonime: gagal [$serverName] $streamUrl - ${e.message}")
             }
         }
 
@@ -276,22 +275,19 @@ class GojonimeProvider : MainAPI() {
     }
 
     /**
-     * PATCH: Helper untuk ekstrak URL dari value option.
-     * Bisa berupa URL langsung, HTML <iframe>, atau base64 dari salah satunya.
+     * Ekstrak URL iframe dari value option.
+     * Nilai bisa: URL langsung, HTML <iframe>, atau base64 dari salah satunya.
      */
     private fun extractIframeUrl(raw: String): String? {
         val value = raw.trim()
         if (value.isBlank() || value == "#") return null
 
-        // URL langsung
         if (value.startsWith("http://") || value.startsWith("https://")) return value
 
-        // HTML <iframe>
         if (value.contains("<iframe", ignoreCase = true)) {
             return Jsoup.parse(value).selectFirst("iframe")?.attr("src")?.takeIf { it.isNotBlank() }
         }
 
-        // Coba base64 decode
         return try {
             val decoded = base64Decode(value).trim()
             when {
@@ -305,20 +301,19 @@ class GojonimeProvider : MainAPI() {
         }
     }
 
-    /**
-     * PATCH: Deteksi kualitas dari teks opsi, misal "Server 3 - HD" atau "1080p".
-     */
-    private fun detectQuality(text: String): Int {
-        return when {
-            Regex("""\b1080[pP]\b""").containsMatchIn(text) -> Qualities.P1080.value
-            Regex("""\b720[pP]\b""").containsMatchIn(text)  -> Qualities.P720.value
-            Regex("""\b480[pP]\b""").containsMatchIn(text)  -> Qualities.P480.value
-            Regex("""\b360[pP]\b""").containsMatchIn(text)  -> Qualities.P360.value
-            Regex("""\b240[pP]\b""").containsMatchIn(text)  -> Qualities.P240.value
-            else -> Qualities.Unknown.value
-        }
+    /** Deteksi kualitas dari teks opsi, mis. "Server 3 - HD" atau "1080p". */
+    private fun detectQuality(text: String): Int = when {
+        Regex("""\b1080[pP]\b""").containsMatchIn(text) -> Qualities.P1080.value
+        Regex("""\b720[pP]\b""").containsMatchIn(text)  -> Qualities.P720.value
+        Regex("""\b480[pP]\b""").containsMatchIn(text)  -> Qualities.P480.value
+        Regex("""\b360[pP]\b""").containsMatchIn(text)  -> Qualities.P360.value
+        Regex("""\b240[pP]\b""").containsMatchIn(text)  -> Qualities.P240.value
+        else -> Qualities.Unknown.value
     }
 
+    // ============================================================
+    // PROSES STREAM
+    // ============================================================
     private suspend fun processStreamUrl(
         streamUrl: String,
         serverName: String,
@@ -328,89 +323,154 @@ class GojonimeProvider : MainAPI() {
     ) {
         var targetUrl = streamUrl
 
-        // ==== Handle berkasdrive (Server 3 - HD) ====
+        // --- berkasdrive: decode ?id= ---
         if (streamUrl.contains("berkasdrive.com")) {
-            if (streamUrl.contains("id=")) {
-                val base64Id = streamUrl.substringAfter("id=").substringBefore("&")
+            val id = streamUrl.substringAfter("id=", "").substringBefore("&")
+            if (id.isNotBlank()) {
                 try {
-                    val decodedUrl = base64Decode(base64Id)
-                    if (decodedUrl.startsWith("http")) {
-                        targetUrl = fixStreamUrl(decodedUrl)
-                    }
-                } catch (_: Exception) {}
-            } else if (streamUrl.contains("backup=")) {
-                val base64Backup = streamUrl.substringAfter("backup=").substringBefore("&")
-                try {
-                    val decodedUrl = base64Decode(base64Backup)
-                    if (decodedUrl.startsWith("http")) {
-                        targetUrl = fixStreamUrl(decodedUrl)
-                    }
-                } catch (_: Exception) {}
-            } else {
-                try {
-                    val berkasDoc = app.get(streamUrl, referer = mainUrl).document
-                    val berkasIframe = berkasDoc.selectFirst("iframe")?.attr("src")
-                    if (!berkasIframe.isNullOrBlank()) {
-                        targetUrl = fixStreamUrl(berkasIframe)
-                    } else {
-                        val videoSrc = berkasDoc.selectFirst("video source, source")?.attr("src")
-                        if (!videoSrc.isNullOrBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    serverName,
-                                    serverName,
-                                    fixUrl(videoSrc)
-                                ) {
-                                    this.referer = streamUrl
-                                    this.quality = quality
-                                }
-                            )
-                            return
-                        }
+                    val decoded = base64Decode(id)
+                    if (decoded.startsWith("http")) {
+                        targetUrl = fixStreamUrl(decoded)
                     }
                 } catch (_: Exception) {}
             }
         }
 
-        // ==== Handle short.icu / short.ink / mirror mereka ====
+        // --- shortener domain -> pakai ShortIcuExtractor ---
         if (targetUrl.contains("short.icu") || targetUrl.contains("short.ink") ||
-            targetUrl.contains("yihdraplay") || targetUrl.contains("gojonime.my.id")
+            targetUrl.contains("yihdraplay") || targetUrl.contains("gojonime.my.id") ||
+            targetUrl.contains("harenchidesu")
         ) {
             try {
-                ShortIcuExtractor().apply { name = serverName }.getUrl(targetUrl, mainUrl, subtitleCallback) { link ->
-                    callback.invoke(link)
+                var emitted = false
+                ShortIcuExtractor().apply { name = serverName }.getUrl(
+                    targetUrl, mainUrl, subtitleCallback
+                ) { link ->
+                    emitted = true
+                    callback.invoke(
+                        newExtractorLink(serverName, link.name, link.url, link.type) {
+                            this.referer = link.referer
+                            this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
+                        }
+                    )
                 }
-                return
-            } catch (_: Exception) {
-                // fall through ke loadExtractor
+                if (emitted) return
+                println("Gojonime: ShortIcu tidak menghasilkan link untuk $targetUrl")
+            } catch (e: Exception) {
+                println("Gojonime: ShortIcu error $targetUrl - ${e.message}")
             }
+            // fall-through: coba fetch manual
         }
 
-        // ==== Fallback: extractor bawaan CloudStream ====
-        // PATCH: HAPUS runBlocking, langsung invoke callback
-        loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
-            callback.invoke(link)
+        // --- fetch manual: cari <video>, <source>, file:.mp4/.m3u8 di HTML ---
+        try {
+            val res = app.get(targetUrl, referer = mainUrl)
+            val html = res.text
+            val doc = res.document
+
+            // a) pixeldrain
+            if (html.contains("pixeldrain.com")) {
+                val fid = Regex("""pixeldrain\.com/(?:d|u|api/file)/([A-Za-z0-9]+)""")
+                    .find(html)?.groupValues?.getOrNull(1)
+                if (fid != null) {
+                    callback.invoke(
+                        newExtractorLink(
+                            serverName, serverName,
+                            "https://pixeldrain.com/api/file/$fid",
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://pixeldrain.com/"
+                            this.quality = quality
+                        }
+                    )
+                    return
+                }
+            }
+
+            // b) video / source tags
+            val videoSrc = doc.selectFirst("video[src], video source[src]")?.attr("src")
+                ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+                    .find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""(?:src|source)\s*[:=]\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+                    .find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                    .find(html)?.groupValues?.getOrNull(1)
+                ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""")
+                    .find(html)?.groupValues?.getOrNull(1)
+
+            if (!videoSrc.isNullOrBlank()) {
+                val finalUrl = fixUrl(videoSrc)
+                val type = if (finalUrl.contains(".m3u8", ignoreCase = true))
+                    ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                callback.invoke(
+                    newExtractorLink(serverName, serverName, finalUrl, type) {
+                        this.referer = targetUrl
+                        this.quality = quality
+                    }
+                )
+                return
+            }
+
+            // c) nested iframe — rekursif sekali
+            val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
+            if (!innerIframe.isNullOrBlank() && innerIframe != targetUrl) {
+                val innerFixed = fixUrl(innerIframe)
+                if (innerFixed != targetUrl) {
+                    processStreamUrl(innerFixed, serverName, quality, subtitleCallback, callback)
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            println("Gojonime: fetch $targetUrl error - ${e.message}")
+        }
+
+        // --- fallback terakhir: extractor bawaan CloudStream ---
+        try {
+            loadExtractor(targetUrl, mainUrl, subtitleCallback) { link ->
+                callback.invoke(
+                    newExtractorLink(serverName, link.name, link.url, link.type) {
+                        this.referer = link.referer
+                        this.headers = link.headers
+                        this.quality = if (link.quality != Qualities.Unknown.value) link.quality else quality
+                        this.extractorData = link.extractorData
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            println("Gojonime: loadExtractor gagal $targetUrl - ${e.message}")
         }
     }
 
+    // ============================================================
+    // FIX STREAM URL — samakan dengan replaceDomain() + loadMi() di web
+    // ============================================================
     private fun fixStreamUrl(rawUrl: String): String {
         var url = fixUrl(rawUrl)
 
-        // PATCH: urutan mapping disamakan dengan replaceDomain() di website
-        // Aturan 1: short.ink -> gojonime.my.id
+        // 1) replaceDomain() dari website — urutan penting:
+        //    short.ink -> gojonime.my.id  (BUKAN ke short.icu!)
         if (Regex("""https?://([^/]*\.)?short\.ink""").containsMatchIn(url)) {
-            url = url.replace(Regex("""https?://([^/]*\.)?short\.ink"""), "https://gojonime.my.id")
+            url = url.replace(
+                Regex("""https?://([^/]*\.)?short\.ink"""),
+                "https://gojonime.my.id"
+            )
         }
-        // Aturan 2: short.icu -> yihdraplay.my.id
+        //    short.icu -> yihdraplay.my.id
         if (Regex("""https?://([^/]*\.)?short\.icu""").containsMatchIn(url)) {
-            url = url.replace(Regex("""https?://([^/]*\.)?short\.icu"""), "https://yihdraplay.my.id")
+            url = url.replace(
+                Regex("""https?://([^/]*\.)?short\.icu"""),
+                "https://yihdraplay.my.id"
+            )
         }
-        // Aturan 3: abyssplayer -> harenchidesu
+        //    abyssplayer -> harenchidesu
         if (Regex("""https?://(player\.|play\.)?abyssplayer\.com""").containsMatchIn(url)) {
-            url = url.replace(Regex("""https?://(player\.|play\.)?abyssplayer\.com"""), "https://harenchidesu.my.id")
+            url = url.replace(
+                Regex("""https?://(player\.|play\.)?abyssplayer\.com"""),
+                "https://harenchidesu.my.id"
+            )
         }
 
-        // Mapping tambahan dari loadMi() di website (desustream, dll.)
+        // 2) Mapping tambahan dari loadMi() di website
         val extraMappings = mapOf(
             "desustream.me/otakuhade/baru/" to "desustream.info/dstream/otakustream/index.php",
             "desustream.me/moedesu/stream/hd/" to "desustream.info/dstream/moedesu/hd/index.php",

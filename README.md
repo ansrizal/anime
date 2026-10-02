@@ -4,14 +4,13 @@ Repositori resmi ekstensi streaming anime untuk **StreamCloud** dan **CloudStrea
 
 ## ✨ Daftar Provider yang Tersedia:
 ### Anime & Streaming
-- **sokuja Anime** : Streaming anime Subtitle Indonesia terlengkap.
-- **Animasu**, **AnimeIndo**, **Anichin**, **Alqanime**, **AnimeSail**, **Animexin**, **Anoboy**, **Donghub**, **Hanime**, **Kuramanime**, **Kuronime**, **Nekopoi**, **Nimegami**, **NontonAnimeID**, **Otakudesu**, **Samehadaku**.
+- **Animasu**, **AnimeIndo**, **Anichin**, **Alqanime**, **AnimeSail**, **Animexin**, **Anoboy**, **Donghub**, **Hanime**, **Kuramanime**, **Kuronime**, **Nekopoi**, **Nimegami**, **NontonAnimeID**, **Otakudesu**, **Samehadaku**, **sokuja Anime**.
 
 ### Movies & TV Series
-- **Filmkita**, **Filmlokal**, **Indomax**, **IndoMax21**, **Idlix**, **KlikXXi**, **LayarAsia**, **LayarKaca**, **LayarWarna**, **Moviebox**, **Ngefilm**, **NgeFilm21**, **Nomat**, **Oploverz**, **OppaDrama**, **Pahe**, **PencuriMovie**, **Pusatfilm**, **Pusatmovie**, **Rebahin**, **Sarangfilm**, **Savefilm**, **SemiRebahin**, **WGFilm21**.
+- **Filmkita**, **Filmlokal**, **Indomax**, **IndoMax21**, **Idlix**, **KlikXXi**, **LayarAsia**, **LayarKaca**, **LayarWarna**, **Moviebox**, **Ngefilm**, **NgeFilm21**, **Nomat**, **Oploverz**, **OppaDrama**, **Pahe**, **PencuriMovie**, **Pusatfilm**, **Pusatmovie**, **Rebahin**, **Sarangfilm**, **Savefilm**, **WGFilm21**.
 
 ### Special / Others
-- **Drakor**, **Dubbindo**, **HidoriStream**, **JavHey**, **Kawanfilm**, **KlikxxiProvider**.
+- **Drakor**, **Dubbindo**, **HidoriStream**, **Kawanfilm**, **KlikxxiProvider**.
 
 ---
 
@@ -33,7 +32,7 @@ https://raw.githubusercontent.com/ansrizal/anime/builds/plugins.json
 ```
 
 5. Klik **Simpan & Sinkronisasikan**.
-6. Provider **sokuja Anime** akan otomatis muncul dan siap digunakan untuk menonton anime!
+6. Provider **Ans Rizal Anime Repo** akan otomatis muncul dan siap digunakan untuk menonton anime!
 
 ---
 

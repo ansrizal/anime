@@ -205,39 +205,86 @@ class GojonimeProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(fixUrl(data)).document
 
-        val options = doc.select("#selectserver option, select.mirror option, .mobius option, .select-server option")
-        options.forEach { option ->
-            val value = option.attr("value").trim()
-            if (value.isNotBlank()) {
-                var rawIframeOrUrl = ""
-                if (value.startsWith("http://") || value.startsWith("https://")) {
-                    rawIframeOrUrl = value
-                } else if (value.contains("<iframe")) {
-                    rawIframeOrUrl = Jsoup.parse(value).selectFirst("iframe")?.attr("src") ?: ""
-                } else {
-                    try {
-                        val decoded = base64Decode(value)
-                        rawIframeOrUrl = if (decoded.contains("<iframe")) {
-                            Jsoup.parse(decoded).selectFirst("iframe")?.attr("src") ?: decoded
-                        } else {
-                            decoded
-                        }
-                    } catch (_: Exception) {
-                        rawIframeOrUrl = value
-                    }
-                }
+        val postId = doc.selectFirst("input[name=post_id], input[name=postid]")?.attr("value")
+            ?: doc.selectFirst("[data-postid]")?.attr("data-postid")
+            ?: doc.selectFirst("article[id^=post-]")?.attr("id")?.removePrefix("post-")
+            ?: Regex("""post_id\s*[:=]\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
+            ?: Regex("""postId\s*[:=]\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
+            ?: Regex("""id\s*:\s*['"]?(\d+)['"]?""").find(doc.html())?.groupValues?.getOrNull(1)
+            ?: Regex("""[?&]p=(\d+)""").find(data)?.groupValues?.getOrNull(1)
 
-                if (rawIframeOrUrl.isNotBlank()) {
-                    val streamUrl = fixStreamUrl(rawIframeOrUrl)
-                    processStreamUrl(streamUrl, subtitleCallback, callback)
-                }
+        val documents = mutableListOf(doc)
+        if (!postId.isNullOrBlank()) {
+            listOf("$mainUrl/usotsuki-neko/admin-ajax.php", "$mainUrl/wp-admin/admin-ajax.php").forEach { ajaxUrl ->
+                try {
+                    val res = app.post(
+                        ajaxUrl,
+                        data = mapOf(
+                            "action" to "dynamic_view_ajax",
+                            "post_id" to postId
+                        ),
+                        headers = mapOf(
+                            "X-Requested-With" to "XMLHttpRequest",
+                            "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8"
+                        ),
+                        referer = fixUrl(data)
+                    )
+                    val text = res.text
+                    if (text.isNotBlank()) {
+                        documents.add(Jsoup.parse(text))
+                    }
+                } catch (_: Exception) {}
             }
         }
 
-        val defaultIframeSrc = doc.selectFirst("#pembed iframe, #embed_holder iframe, .player-embed iframe")?.attr("src")
-        if (!defaultIframeSrc.isNullOrBlank()) {
-            val streamUrl = fixStreamUrl(defaultIframeSrc)
-            processStreamUrl(streamUrl, subtitleCallback, callback)
+        documents.forEach { document ->
+            val options = document.select("#selectserver option, select.mirror option, .mobius option, .select-server option, .mirrorstream option, select#changeServer option, .server-item")
+            options.forEach { option ->
+                val value = option.attr("value").trim()
+                    .ifBlank { option.attr("data-link") }
+                    .ifBlank { option.attr("data-embed") }
+                    .ifBlank { option.attr("data-value") }
+                if (value.isNotBlank() && value != "#") {
+                    var rawIframeOrUrl = ""
+                    if (value.startsWith("http://") || value.startsWith("https://")) {
+                        rawIframeOrUrl = value
+                    } else if (value.contains("<iframe")) {
+                        rawIframeOrUrl = Jsoup.parse(value).selectFirst("iframe")?.attr("src") ?: ""
+                    } else {
+                        try {
+                            val decoded = base64Decode(value)
+                            rawIframeOrUrl = if (decoded.contains("<iframe")) {
+                                Jsoup.parse(decoded).selectFirst("iframe")?.attr("src") ?: decoded
+                            } else {
+                                decoded
+                            }
+                        } catch (_: Exception) {
+                            rawIframeOrUrl = value
+                        }
+                    }
+
+                    if (rawIframeOrUrl.isNotBlank()) {
+                        val streamUrl = fixStreamUrl(rawIframeOrUrl)
+                        processStreamUrl(streamUrl, subtitleCallback, callback)
+                    }
+                }
+            }
+
+            document.select("ul#playeroptionsul > li, .player-servers li, [data-link], [data-embed]").forEach { item ->
+                val link = item.attr("data-link")
+                    .ifBlank { item.attr("data-embed") }
+                    .ifBlank { item.selectFirst("iframe")?.attr("src") ?: "" }
+                if (link.isNotBlank()) {
+                    val streamUrl = fixStreamUrl(link)
+                    processStreamUrl(streamUrl, subtitleCallback, callback)
+                }
+            }
+
+            val defaultIframeSrc = document.selectFirst("#pembed iframe, #embed_holder iframe, .player-embed iframe, iframe")?.attr("src")
+            if (!defaultIframeSrc.isNullOrBlank()) {
+                val streamUrl = fixStreamUrl(defaultIframeSrc)
+                processStreamUrl(streamUrl, subtitleCallback, callback)
+            }
         }
 
         return true

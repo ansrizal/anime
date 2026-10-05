@@ -21,9 +21,9 @@ class GojonimeProvider : MainAPI() {
         "on-going-anime/page/%d/" to "On-Going Anime",
         "completed-anime/page/%d/" to "Completed Anime",
         "movie/page/%d/" to "Movie Anime",
-        "anime/page/%d/?order=update" to "Latest Update",
-        "anime/page/%d/?order=popular" to "Most Popular",
-        "anime/list-mode/" to "List Anime"
+        "anime/?page=%d&order=update" to "Latest Update",
+        "anime/?page=%d&order=popular" to "Most Popular",
+        "anime/" to "List Anime"
     )
 
     private val ua =

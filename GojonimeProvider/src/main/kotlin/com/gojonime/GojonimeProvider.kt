@@ -23,7 +23,7 @@ class GojonimeProvider : MainAPI() {
         "movie/page/%d/" to "Movie Anime",
         "anime/?page=%d&order=update" to "Latest Update",
         "anime/?page=%d&order=popular" to "Most Popular",
-        "anime?page=%d" to "List Anime"
+        "anime?page=%d&status=&type=&sub=&order=title" to "List Anime"
     )
 
     private val ua =

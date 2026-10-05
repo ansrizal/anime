@@ -34,14 +34,16 @@ class FilmApikProvider : MainAPI() {
 
     private val turnstileInterceptor = TurnstileInterceptor("cf_clearance")
 
+    private val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent" to UA,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Referer" to "$mainUrl/",
     )
 
     private val fullHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "User-Agent" to UA,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "Cache-Control" to "max-age=0",
@@ -50,7 +52,7 @@ class FilmApikProvider : MainAPI() {
         "Sec-Fetch-Dest" to "document",
         "Sec-Fetch-Mode" to "navigate",
         "Sec-Fetch-Site" to "same-origin",
-        "sec-ch-ua" to "\"Chromium\";v=\"128\", \"Not_A Brand\";v=\"24\", \"Google Chrome\";v=\"128\"",
+        "sec-ch-ua" to "\"Chromium\";v=\"154\", \"Not_A Brand\";v=\"24\", \"Google Chrome\";v=\"154\"",
         "sec-ch-ua-mobile" to "?0",
         "sec-ch-ua-platform" to "\"Windows\"",
         "Referer" to "$mainUrl/",
@@ -236,42 +238,47 @@ class FilmApikProvider : MainAPI() {
             } catch (_: Throwable) {}
         }
 
-        // Brutal regex fallback
+        // Brutal regex fallback for known player domains
         if (playerUrls.isEmpty()) {
-            val known = listOf("byseqekaho","f7hyg4q","strp2p","abyssplayer","efek.stream",
-                "filemoon","streamwish","mixdrop","doodstream","voe.sx",
-                "vidoza","upstream","filelions","mp4upload","streamtape",
-                "turbovidhls","netu","waaw","buzzheavier")
+            val known = listOf(
+                "byseqekaho", "f7hyg4q", "n1mwq", "strp2p", "abyssplayer",
+                "efek.stream", "filemoon", "streamwish", "mixdrop", "doodstream",
+                "voe.sx", "vidoza", "upstream", "filelions", "mp4upload",
+                "streamtape", "turbovidhls", "netu", "waaw", "buzzheavier"
+            )
             Regex("""https?://[^\s"'<>\\]+""").findAll(html).forEach { m ->
                 if (known.any { m.value.contains(it, true) }) addPlayer("regex", m.value)
             }
         }
 
-        println("[FilmApik] Found ${playerUrls.size} player(s): $playerUrls")
+        println("[FilmApik] ===== playerUrls (${playerUrls.size}) =====")
+        playerUrls.forEach { println("[FilmApik] -> ${it.first} | ${it.second}") }
 
-        // === Process each player — try ALL ===
+        // === Process each player ===
         for ((serverName, url) in playerUrls) {
             try {
                 val ok = when {
-                    url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") -> {
+                    url.contains("byseqekaho.com") || url.contains("f7hyg4q.org") || url.contains("n1mwq.org") -> {
                         println("[FilmApik] >>> FILEMOON: $url")
-                        extractByseqekaho(url, serverName, callback)
+                        extractFilemoon(url, serverName, callback)
                     }
                     url.contains("strp2p.site") -> {
                         println("[FilmApik] >>> STREAMP2P: $url")
-                        extractGeneric(url, serverName, "strp2p", callback)
+                        extractStrp2p(url, serverName, callback)
                     }
                     url.contains("abyssplayer.com") -> {
-                        println("[FilmApik] >>> HYDRAX: $url")
-                        extractGeneric(url, serverName, "abyss", callback)
+                        println("[FilmApik] >>> ABYSS/HYDRAX: $url")
+                        extractAbyss(url, serverName, callback)
                     }
                     url.contains("efek.stream") -> {
                         println("[FilmApik] >>> VIP SERVER: $url")
                         extractGeneric(url, serverName, "efek", callback)
                     }
                     else -> {
-                        println("[FilmApik] >>> BUILTIN: $url")
-                        loadExtractor(fixUrl(url), subtitleCallback, callback)
+                        println("[FilmApik] >>> loadExtractor fallback: $url")
+                        try {
+                            loadExtractor(fixUrl(url), subtitleCallback, callback)
+                        } catch (_: Throwable) { false }
                     }
                 }
                 if (ok) found = true
@@ -280,11 +287,236 @@ class FilmApikProvider : MainAPI() {
             }
         }
 
+        println("[FilmApik] ===== DONE, found=$found =====")
         return found
     }
 
     // ========================================================================
-    // GENERIC EXTRACTOR — untuk STREAMP2P, HYDRAX, VIP SERVER
+    // STREAMP2P EXTRACTOR
+    // ========================================================================
+
+    private suspend fun extractStrp2p(
+        playerUrl: String, serverName: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val uri = try { java.net.URI(playerUrl) } catch (_: Throwable) { return false }
+            val host = uri.host ?: return false
+            val id = (uri.fragment ?: playerUrl.substringAfterLast("#", "")).trim()
+            if (id.isBlank()) {
+                println("[Strp2p] no fragment id in $playerUrl")
+                return false
+            }
+
+            val base = "https://$host"
+            val apiH = mapOf(
+                "User-Agent" to UA,
+                "Referer" to "$base/",
+                "Accept" to "*/*",
+                "Accept-Language" to "en-US,en;q=0.9,id;q=0.8"
+            )
+
+            println("[Strp2p] host=$host id=$id")
+
+            // 1. Info (optional, tapi ikuti flow)
+            try { getRaw("$base/api/v1/info?id=$id", apiH) } catch (_: Throwable) {}
+
+            // 2. Ambil token
+            val videoRaw = getRaw(
+                "$base/api/v1/video?id=$id&w=1366&h=768&r=filmapik.college",
+                apiH
+            )
+            println("[Strp2p] video resp len=${videoRaw.length}")
+
+            var token = ""
+            try {
+                val j = JSONObject(videoRaw)
+                token = j.optString("t", "")
+                    .ifBlank { j.optString("token", "") }
+                    .ifBlank { j.optString("hash", "") }
+                if (token.isBlank()) {
+                    val data = j.optJSONObject("data")
+                    if (data != null) {
+                        token = data.optString("t", "")
+                            .ifBlank { data.optString("token", "") }
+                            .ifBlank { data.optString("hash", "") }
+                    }
+                }
+            } catch (_: Throwable) {}
+
+            if (token.isBlank()) {
+                Regex(""""(?:t|token|hash)"\s*:\s*"([A-Za-z0-9_\-]+)"""")
+                    .find(videoRaw)?.let { token = it.groupValues[1] }
+            }
+
+            println("[Strp2p] token len=${token.length}")
+            if (token.isBlank()) {
+                println("[Strp2p] no token, dump: ${videoRaw.take(400)}")
+                return false
+            }
+
+            // 3. Ambil player (response berisi m3u8 + data URI k/kx)
+            val playerRaw = getRaw("$base/api/v1/player?t=$token", apiH)
+            println("[Strp2p] player resp len=${playerRaw.length}")
+
+            // 4. Decode data URI -> k, kx
+            var k = ""; var kx = ""
+            Regex("""data:application/octet-stream;base64,([A-Za-z0-9+/=]+)""")
+                .find(playerRaw)?.groupValues?.get(1)?.let { b64 ->
+                    try {
+                        val decoded = String(Base64.decode(b64, Base64.DEFAULT))
+                        val j = JSONObject(decoded)
+                        k = j.optString("k", "")
+                        kx = j.opt("kx")?.toString() ?: ""
+                    } catch (_: Throwable) {}
+                }
+            println("[Strp2p] k=$k kx=$kx")
+
+            // 5. Ambil m3u8 URL (yang FULL, bukan relative)
+            var m3u8: String? = null
+            Regex("""https?://[^\s"'<>\\]+?\.m3u8[^\s"'<>\\]*""")
+                .findAll(playerRaw).forEach {
+                    // Prioritaskan URL dari CDN utama (edge2/edge/dst.)
+                    if (m3u8 == null || it.value.contains("edge")) m3u8 = it.value
+                }
+            if (m3u8.isNullOrBlank()) {
+                // Coba parse JSON
+                try {
+                    val j = JSONObject(playerRaw)
+                    m3u8 = j.optString("url", "")
+                        .ifBlank { j.optString("m3u8", "") }
+                        .ifBlank { j.optString("playlist", "") }
+                } catch (_: Throwable) {}
+            }
+            if (m3u8.isNullOrBlank()) {
+                println("[Strp2p] no m3u8, dump: ${playerRaw.take(500)}")
+                return false
+            }
+
+            // 6. Tambahkan k & kx kalau belum ada
+            val finalUrl = if (k.isNotBlank() && !m3u8!!.contains("k=")) {
+                "$m3u8${if (m3u8!!.contains("?")) "&" else "?"}k=$k&kx=$kx"
+            } else m3u8!!
+
+            println("[Strp2p] final m3u8 = $finalUrl")
+
+            callback(
+                newExtractorLink(
+                    source = this.name,
+                    name = "$name - $serverName",
+                    url = finalUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$base/"
+                    this.quality = Qualities.Unknown.value
+                    this.headers = mapOf(
+                        "User-Agent" to UA,
+                        "Referer" to "$base/",
+                        "Origin" to base
+                    )
+                }
+            )
+            true
+        } catch (t: Throwable) {
+            println("[FilmApik] extractStrp2p error: ${t.message}")
+            false
+        }
+    }
+
+    // ========================================================================
+    // ABYSSPLAYER / HYDRAX EXTRACTOR
+    // ========================================================================
+
+    private suspend fun extractAbyss(
+        playerUrl: String, serverName: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val base = "https://abyssplayer.com"
+            val playerH = mapOf(
+                "User-Agent" to UA,
+                "Referer" to "$mainUrl/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language" to "en-US,en;q=0.9,id;q=0.8"
+            )
+
+            val html = try {
+                app.get(playerUrl, headers = playerH, timeout = 30).text
+            } catch (t: Throwable) {
+                println("[Abyss] fetch failed: ${t.message}"); return false
+            }
+            println("[Abyss] HTML length=${html.length}")
+
+            val candidates = mutableListOf<String>()
+
+            // 1. Cari .fd / .mp4 / .m3u8 langsung
+            Regex("""https?://[^\s"'<>\\]+?\.(?:fd|mp4|m3u8)[^\s"'<>\\]*""")
+                .findAll(html).forEach { candidates.add(it.value.replace("\\/", "/")) }
+
+            // 2. Cari di src= / file: / source: / url:
+            Regex("""(?:src|file|source|url|video_url|videoUrl)"?\s*[:=]\s*["'](https?://[^"']+)["']""",
+                RegexOption.IGNORE_CASE).findAll(html).forEach {
+                val u = it.groupValues[1].replace("\\/", "/")
+                if (u.contains(".fd") || u.contains(".mp4") || u.contains(".m3u8") ||
+                    u.contains("sssrr.org") || u.contains("sora")) {
+                    candidates.add(u)
+                }
+            }
+
+            // 3. Cari pola "sssrr.org" atau CDN video lain
+            Regex("""https?://[a-z0-9]+\.sssrr\.org/[^\s"'<>\\]+""")
+                .findAll(html).forEach { candidates.add(it.value.replace("\\/", "/")) }
+
+            // 4. Decode base64 yang mungkin menyimpan URL
+            Regex("""["']([A-Za-z0-9+/=]{40,})["']""").findAll(html).forEach { m ->
+                try {
+                    val dec = String(Base64.decode(m.groupValues[1], Base64.DEFAULT))
+                    Regex("""https?://[^\s"'<>\\]+""").findAll(dec).forEach {
+                        if (it.value.contains(".fd") || it.value.contains(".mp4") || it.value.contains("sssrr"))
+                            candidates.add(it.value)
+                    }
+                } catch (_: Throwable) {}
+            }
+
+            println("[Abyss] candidates = ${candidates.distinct()}")
+
+            if (candidates.isEmpty()) {
+                println("[Abyss] no candidates found, dump head: ${html.take(500)}")
+                return false
+            }
+
+            var any = false
+            for (u in candidates.distinct()) {
+                try {
+                    val type = if (u.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    callback(
+                        newExtractorLink(
+                            source = this.name,
+                            name = "$name - $serverName",
+                            url = u,
+                            type = type
+                        ) {
+                            this.referer = "$base/"
+                            this.quality = Qualities.Unknown.value
+                            this.headers = mapOf(
+                                "User-Agent" to UA,
+                                "Referer" to "$base/",
+                                "Origin" to base
+                            )
+                        }
+                    )
+                    any = true
+                } catch (_: Throwable) {}
+            }
+            any
+        } catch (t: Throwable) {
+            println("[FilmApik] extractAbyss error: ${t.message}")
+            false
+        }
+    }
+
+    // ========================================================================
+    // GENERIC EXTRACTOR — efek.stream / dll
     // ========================================================================
 
     private suspend fun extractGeneric(
@@ -294,11 +526,16 @@ class FilmApikProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-
             val playerHtml = try {
-                app.get(playerUrl, headers = mapOf("User-Agent" to ua, "Referer" to "$mainUrl/"), timeout = 30).text
+                app.get(
+                    playerUrl,
+                    headers = mapOf(
+                        "User-Agent" to UA,
+                        "Referer" to "$mainUrl/",
+                        "Origin" to mainUrl
+                    ),
+                    timeout = 30
+                ).text
             } catch (t: Throwable) {
                 println("[FilmApik] $tag fetch failed: ${t.message}"); return false
             }
@@ -307,39 +544,37 @@ class FilmApikProvider : MainAPI() {
 
             val found = mutableListOf<String>()
 
-            // 1. Direct m3u8/mp4 URL di HTML
-            Regex("""https?://[^\s"'<>\\]+?\.(m3u8|mp4)[^\s"'<>\\]*""").findAll(playerHtml).forEach { m ->
+            Regex("""https?://[^\s"'<>\\]+?\.(m3u8|mp4|fd)[^\s"'<>\\]*""").findAll(playerHtml).forEach { m ->
                 found.add(m.value.replace("\\/", "/"))
             }
 
-            // 2. JSON config — cari "file":"...", "source":"...", "src":"..."
-            Regex(""""(?:file|source|src|url|playlist|hls)"\s*:\s*"([^"]+\.(?:m3u8|mp4)[^"]*)"""").findAll(playerHtml).forEach { m ->
+            Regex(""""(?:file|source|src|url|playlist|hls|video_url|videoUrl)"\s*:\s*"([^"]+\.(?:m3u8|mp4|fd)[^"]*)"""").findAll(playerHtml).forEach { m ->
                 val u = m.groupValues[1].replace("\\/", "/")
                 if (!found.contains(u)) found.add(u)
             }
 
-            // 3. Escaped URL di JS
-            Regex("""(https?:)?\\?/\\?/[^\s"'<>\\]+?\.(?:m3u8|mp4)""").findAll(playerHtml).forEach { m ->
+            Regex("""(https?:)?\\?/\\?/[^\s"'<>\\]+?\.(?:m3u8|mp4|fd)""").findAll(playerHtml).forEach { m ->
                 val u = m.value.replace("\\/", "/").replace("\\", "")
                 if (u.startsWith("http") && !found.contains(u)) found.add(u)
             }
 
-            // 4. src= attribute
-            Regex("""(?:src|data-src)=["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE).findAll(playerHtml).forEach { m ->
+            Regex("""(?:src|data-src)=["'](https?://[^"']+\.(?:m3u8|mp4|fd)[^"']*)["']""", RegexOption.IGNORE_CASE).findAll(playerHtml).forEach { m ->
                 val u = m.groupValues[1].replace("\\/", "/")
                 if (!found.contains(u)) found.add(u)
             }
 
             println("[FilmApik] $tag found ${found.size} url(s): ${found.take(5)}")
-
             if (found.isEmpty()) return false
 
             var any = false
+            val referer = try { "${java.net.URI(playerUrl).scheme}://${java.net.URI(playerUrl).host}/" }
+                catch (_: Throwable) { "$mainUrl/" }
             for (videoUrl in found.distinct()) {
                 try {
-                    val type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    val referer = try { "${java.net.URI(playerUrl).scheme}://${java.net.URI(playerUrl).host}/" }
-                        catch (_: Throwable) { "$mainUrl/" }
+                    val type = when {
+                        videoUrl.contains(".m3u8") -> ExtractorLinkType.M3U8
+                        else -> ExtractorLinkType.VIDEO
+                    }
                     callback(
                         newExtractorLink(
                             source = this.name,
@@ -350,8 +585,9 @@ class FilmApikProvider : MainAPI() {
                             this.referer = referer
                             this.quality = Qualities.Unknown.value
                             this.headers = mapOf(
-                                "User-Agent" to ua,
-                                "Referer" to referer
+                                "User-Agent" to UA,
+                                "Referer" to referer,
+                                "Origin" to referer.trimEnd('/')
                             )
                         }
                     )
@@ -521,11 +757,10 @@ class FilmApikProvider : MainAPI() {
     }
 
     // ========================================================================
-    // M3U8 URL EXTRACTION — decode JSON escapes
+    // M3U8 URL EXTRACTION
     // ========================================================================
 
     private fun extractM3u8Url(plain: String): String? {
-        // Unescape \\/ dan \\uXXXX
         var s = plain
             .replace("\\/", "/")
             .replace("\\u0026", "&")
@@ -538,7 +773,6 @@ class FilmApikProvider : MainAPI() {
             try { m.groupValues[1].toInt(16).toChar().toString() } catch (_: Throwable) { m.value }
         }
 
-        // Coba parse JSON → walk semua field string
         try {
             val json = JSONObject(s)
             val found = mutableListOf<String>()
@@ -553,15 +787,14 @@ class FilmApikProvider : MainAPI() {
             if (found.isNotEmpty()) return found.first()
         } catch (_: Throwable) {}
 
-        // Fallback regex
         return Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""").find(s)?.value
     }
 
     // ========================================================================
-    // EXTRACT BYSEQEKOAH (FILEMOON)
+    // FILEMOON / BYSEQEKOAH EXTRACTOR
     // ========================================================================
 
-    private suspend fun extractByseqekaho(
+    private suspend fun extractFilemoon(
         embedUrl: String, serverName: String,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
@@ -572,12 +805,11 @@ class FilmApikProvider : MainAPI() {
 
             val host = try { java.net.URI(fixed).host } catch (_: Throwable) { return false }
             val playerBase = "https://$host"
-            val ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-            try { getRaw(fixed, mapOf("User-Agent" to ua)) } catch (_: Throwable) {}
+            try { getRaw(fixed, mapOf("User-Agent" to UA)) } catch (_: Throwable) {}
 
             val embedHeaders = mapOf(
-                "User-Agent" to ua, "accept" to "*/*",
+                "User-Agent" to UA, "accept" to "*/*",
                 "x-embed-origin" to "filmapik.college",
                 "x-embed-parent" to fixed,
                 "x-embed-referer" to "$mainUrl/"
@@ -591,10 +823,10 @@ class FilmApikProvider : MainAPI() {
                 catch (_: Throwable) { "https://$host" }
             } else "https://$host"
 
-            println("[FilmApik] byseqekaho: apiBase=$apiBase code=$code")
+            println("[FilmApik] filemoon: apiBase=$apiBase code=$code")
 
             val apiHeaders = mapOf(
-                "User-Agent" to ua, "accept" to "*/*",
+                "User-Agent" to UA, "accept" to "*/*",
                 "content-type" to "application/json",
                 "x-embed-origin" to "filmapik.college",
                 "x-embed-parent" to fixed,
@@ -625,27 +857,40 @@ class FilmApikProvider : MainAPI() {
             signer.update(nonce.toByteArray())
             val sig = b64UrlEncode(signer.sign())
 
-            val viewerId = rand16(); val deviceId = rand16()
+            // FIX: kirim kosong sesuai capture asli (bukan random)
+            val viewerId = ""
+            val deviceId = ""
 
             val clientObj = JSONObject().apply {
-                put("user_agent", ua)
+                put("user_agent", UA)
                 put("architecture", "x86"); put("bitness", "64")
                 put("platform", "Windows"); put("platform_version", "10.0.0")
-                put("model", ""); put("ua_full_version", "128.0.0.0")
+                put("model", ""); put("ua_full_version", "154.0.8037.93")
                 put("brand_full_versions", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("brand", "Google Chrome"); put("version", "128.0.0.0")
-                    })
+                    put(JSONObject().apply { put("brand", "Chromium"); put("version", "154.0.8037.93") })
+                    put(JSONObject().apply { put("brand", "Google Chrome"); put("version", "154.0.8037.93") })
+                    put(JSONObject().apply { put("brand", "Not A(Brand"); put("version", "99.0.0.0") })
                 })
                 put("pixel_ratio", 1)
                 put("screen_width", 1366); put("screen_height", 768)
                 put("color_depth", 24)
-                put("languages", JSONArray(listOf("en-GB", "en-US", "en")))
+                put("languages", JSONArray(listOf("en-US", "en", "id")))
                 put("timezone", "Asia/Jakarta")
-                put("hardware_concurrency", 2); put("device_memory", 8)
+                put("hardware_concurrency", 2); put("device_memory", 16)
                 put("touch_points", 0)
                 put("webgl_vendor", "Google Inc. (Intel)")
-                put("webgl_renderer", "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)")
+                put("webgl_renderer", "ANGLE (Intel, Intel(R) HD Graphics (0x00000402) Direct3D11 vs_5_0 ps_5_0, D3D11)")
+                put("canvas_hash", "YxgFI9NNQJBFA9bS1P_Ynao8KRnJeEKWQ-ujfsto5oI")
+                put("audio_hash", "Q6FIrN6OYk4-8qILTIDrwcAVs_cBZ_9oao7-UJIYBF0")
+                put("webgl_params_hash", "BIoy8SYxo8-2WtAM5ui9D8sDkpzLPvGjVdblDUiGQ-c")
+                put("fonts_hash", "A3NvW7_xc4imEb2Z_dU5M6k6vDZTjWR7YiuZjLqys2o")
+                put("codecs_hash", "qJye5DfMLC0co_nw835Vyx_VcUOEnA01Coov9OtwHZs")
+                put("media_devices", "ai1ao1vi1")
+                put("pointer_type", "fine,hover")
+                put("extra", JSONObject().apply {
+                    put("vendor", "Google Inc.")
+                    put("appVersion", "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36")
+                })
             }
 
             val attestBody = JSONObject().apply {
@@ -660,11 +905,7 @@ class FilmApikProvider : MainAPI() {
                     put("y", b64UrlEncode(fixed32(pub.w.affineY)))
                 })
                 put("client", clientObj)
-                put("storage", JSONObject().apply {
-                    put("cookie", viewerId); put("local_storage", viewerId)
-                    put("indexed_db", "$viewerId:$deviceId")
-                    put("cache_storage", "$viewerId:$deviceId")
-                })
+                put("storage", JSONObject())
                 put("attributes", JSONObject().apply { put("entropy", "high") })
             }.toString()
 
@@ -672,16 +913,19 @@ class FilmApikProvider : MainAPI() {
             val fpToken = attestJson.optString("token", "")
             val realViewer = attestJson.optString("viewer_id", viewerId)
             val realDevice = attestJson.optString("device_id", deviceId)
-            if (fpToken.isBlank()) return false
+            if (fpToken.isBlank()) {
+                println("[FilmApik] filemoon: no attest token, dump=${attestJson.toString().take(300)}")
+                return false
+            }
 
             val fingerprint = JSONObject().apply {
                 put("token", fpToken)
                 put("viewer_id", realViewer)
                 put("device_id", realDevice)
-                put("confidence", 0.95)
+                put("confidence", 0.77)
             }
 
-            // === MULTI-FORMAT PoW RETRY ===
+            // === MULTI-FORMAT PoW ===
             val formats = listOf(
                 Triple("str_cat",
                     { n: String, c: Long -> (n + c.toString()).toByteArray() },
@@ -717,7 +961,7 @@ class FilmApikProvider : MainAPI() {
             for ((formatName, buildInput, buildSolution) in formats) {
                 val captcha = fetchCaptcha(apiBase, code, apiHeaders, fingerprint)
                 if (captcha == null) {
-                    println("[FilmApik] byseqekaho: [$formatName] captcha fetch failed")
+                    println("[FilmApik] filemoon: [$formatName] captcha fetch failed")
                     continue
                 }
 
@@ -725,7 +969,7 @@ class FilmApikProvider : MainAPI() {
                     solveWithFormat(captcha.powNonce, captcha.powDiff, buildInput)
                 }
                 if (counter == null) {
-                    println("[FilmApik] byseqekaho: [$formatName] timeout")
+                    println("[FilmApik] filemoon: [$formatName] timeout")
                     continue
                 }
 
@@ -747,16 +991,16 @@ class FilmApikProvider : MainAPI() {
                 val status = verifyJson.optString("status", "")
 
                 if (token.isNotBlank()) {
-                    println("[FilmApik] byseqekaho: >>> OK format=$formatName counter=$counter")
+                    println("[FilmApik] filemoon: >>> OK format=$formatName counter=$counter")
                     captchaToken = token
                     break
                 }
-                println("[FilmApik] byseqekaho: [$formatName] fail status=$status counter=$counter")
+                println("[FilmApik] filemoon: [$formatName] fail status=$status counter=$counter")
                 delay(250)
             }
 
             if (captchaToken == null) {
-                println("[FilmApik] byseqekaho: ALL FORMATS FAILED")
+                println("[FilmApik] filemoon: ALL FORMATS FAILED")
                 return false
             }
 
@@ -774,7 +1018,7 @@ class FilmApikProvider : MainAPI() {
             val kpArr = playbackJson.optJSONArray("key_parts") ?: return false
             val allParts = (0 until kpArr.length()).map { kpArr.getString(it) }
 
-            println("[FilmApik] byseqekaho: version=$version, parts=${allParts.size}")
+            println("[FilmApik] filemoon: version=$version, parts=${allParts.size}")
 
             var plainStr: String? = null
             val picked = pickKeyPartsByVersion(allParts, version)
@@ -783,7 +1027,7 @@ class FilmApikProvider : MainAPI() {
                 val pt = tryAesGcmDecrypt(key, iv, payload)
                 if (pt != null) {
                     plainStr = String(pt, Charsets.UTF_8)
-                    println("[FilmApik] byseqekaho: DECRYPT OK (v=$version)")
+                    println("[FilmApik] filemoon: DECRYPT OK (v=$version)")
                 }
             }
             if (plainStr == null) {
@@ -793,24 +1037,21 @@ class FilmApikProvider : MainAPI() {
                     val key = buildKeyFromParts(pair)
                     val pt = tryAesGcmDecrypt(key, iv, payload) ?: continue
                     plainStr = String(pt, Charsets.UTF_8)
-                    println("[FilmApik] byseqekaho: DECRYPT OK (pair n=$n)")
+                    println("[FilmApik] filemoon: DECRYPT OK (pair n=$n)")
                     break
                 }
             }
             if (plainStr == null) return false
 
-            // === EXTRACT M3U8 URL (decode JSON escapes!) ===
             val m3u8 = extractM3u8Url(plainStr) ?: run {
-                println("[FilmApik] byseqekaho: no m3u8 in: ${plainStr.take(500)}")
+                println("[FilmApik] filemoon: no m3u8 in: ${plainStr.take(500)}")
                 return false
             }
 
-            println("[FilmApik] byseqekaho: m3u8 = $m3u8")
-            println("[FilmApik] byseqekaho: m3u8 length = ${m3u8.length}")
+            println("[FilmApik] filemoon: m3u8 = $m3u8")
 
             val apiHost = try { java.net.URI(apiBase).host } catch (_: Throwable) { "f7hyg4q.org" }
 
-            // === CALLBACK — minimal headers (hapus Origin) ===
             callback(
                 newExtractorLink(
                     source = this.name,
@@ -821,14 +1062,14 @@ class FilmApikProvider : MainAPI() {
                     this.referer = "https://$apiHost/"
                     this.quality = Qualities.Unknown.value
                     this.headers = mapOf(
-                        "User-Agent" to ua,
+                        "User-Agent" to UA,
                         "Referer" to "https://$apiHost/"
                     )
                 }
             )
             true
         } catch (t: Throwable) {
-            println("[FilmApik] extractByseqekaho error: ${t.message}")
+            println("[FilmApik] extractFilemoon error: ${t.message}")
             false
         }
     }

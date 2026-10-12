@@ -182,6 +182,8 @@ c9yYMAoUD+52usxxsMaELLOb+xEv6LRW5oquDck7ZWj0xkSfHc4UXUa1l1FwVXQS
                 "timezone" to timezone,
                 "usertype" to usertype,
                 "versionCode" to "32",
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer" to "https://www.loklok.fun/"
             )
             if (!token.isNullOrEmpty()) {
                 headers["token"] = token
@@ -196,7 +198,8 @@ c9yYMAoUD+52usxxsMaELLOb+xEv6LRW5oquDck7ZWj0xkSfHc4UXUa1l1FwVXQS
     // ==================== MAIN PAGE ====================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val home = ArrayList<HomePageList>()
-        val headers = buildHeaders()
+        val query = mapOf("navigationId" to "1000004", "page" to "0")
+        val headers = buildHeaders(query = query)
         val homeData = app.get(
             "$homeApi/getHome?page=0&navigationId=1000004",
             headers = headers
@@ -208,7 +211,6 @@ c9yYMAoUD+52usxxsMaELLOb+xEv6LRW5oquDck7ZWj0xkSfHc4UXUa1l1FwVXQS
         for (section in items) {
             val type = section.homeSectionType?.trim()?.uppercase(Locale.ROOT) ?: continue
             if (type == "BANNER") continue
-            if (type != "SINGLE_ALBUM") continue
 
             val header = section.homeSectionName?.trim().orEmpty()
             if (header.isEmpty()) continue
@@ -275,7 +277,7 @@ c9yYMAoUD+52usxxsMaELLOb+xEv6LRW5oquDck7ZWj0xkSfHc4UXUa1l1FwVXQS
         val id = data.id?.toString() ?: return null
         val category = data.category ?: 0
 
-        val query = mapOf("id" to id, "category" to category.toString())
+        val query = mapOf("category" to category.toString(), "id" to id)
         val headers = buildHeaders(query = query)
 
         val res = app.get(
@@ -370,8 +372,8 @@ c9yYMAoUD+52usxxsMaELLOb+xEv6LRW5oquDck7ZWj0xkSfHc4UXUa1l1FwVXQS
             val query = mapOf(
                 "category" to (res.category?.toString() ?: "1"),
                 "contentId" to (res.id ?: ""),
-                "episodeId" to (res.epId?.toString() ?: ""),
-                "definition" to (video.code ?: "")
+                "definition" to (video.code ?: ""),
+                "episodeId" to (res.epId?.toString() ?: "")
             )
             val headers = buildHeaders(query = query)
 

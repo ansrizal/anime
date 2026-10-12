@@ -15,6 +15,7 @@ import org.jsoup.select.Elements
 import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import java.net.URLEncoder
 
 class DubbindoProvider : MainAPI() {
     override var mainUrl = "https://www.dubbindo.site"
@@ -187,13 +188,26 @@ class DubbindoProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): TvSeriesSearchResponse? {
-        val title = selectFirst("div.video-list-title h4")?.text()?.trim()
-            ?: selectFirst("h4")?.text()?.trim() ?: return null
+        val title = selectFirst("div.video-title h4")?.text()?.trim()
+            ?: selectFirst("div.video-title h4")?.attr("title")?.trim()
+            ?: selectFirst("h4")?.text()?.trim()
+            ?: return null
+
         if (title.isEmpty()) return null
-        val href = selectFirst("div.video-list-image a")?.attr("href")
-            ?: selectFirst("a")?.attr("href") ?: return null
+
+        val href = selectFirst("div.video-thumb a")?.attr("href")?.trim()
+            ?: selectFirst("div.video-title a")?.attr("href")?.trim()
+            ?: selectFirst("a")?.attr("href")?.trim()
+            ?: return null
+
+        if (href.isEmpty()) return null
+
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            posterUrl     = fixUrlNull(selectFirst("img")?.attr("src"))
+            posterUrl = fixUrlNull(
+                selectFirst("div.video-thumb img")?.attr("src")
+                    ?: selectFirst("div.video-thumb img")?.attr("data-src")
+                    ?: selectFirst("img")?.attr("src")
+            )
             posterHeaders = mapOf("Referer" to mainUrl)
         }
     }
@@ -211,15 +225,26 @@ class DubbindoProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         ensureSession()
+
         val results = mutableListOf<SearchResponse>()
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+
         for (i in 1..10) {
-            val page = app.get(
-                "$mainUrl/search?keyword=$query&page_id=$i",
+            val document = app.get(
+                "$mainUrl/search?keyword=$encodedQuery&page_id=$i",
                 headers = authedHeaders
-            ).document.select("div.video-list").asIterable().mapNotNull { it.toSearchResult() }
+            ).document
+
+            val page = document.select("div.video-wrapper")
+                .asIterable()
+                .mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
+
             results.addAll(page)
+
             if (page.isEmpty()) break
         }
+
         return results
     }
 

@@ -18,7 +18,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Anoboy : MainAPI() {
-    override var mainUrl = "https://ww1.anoboy.boo"
+    override var mainUrl = "https://anoboy.quest"
     override var name = "AnoBoy"
     override val hasMainPage = true
     override var lang = "id"

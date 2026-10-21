@@ -298,7 +298,7 @@ class AnimeSailProvider : MainAPI() {
             // Cek iframe default (jika ada)
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
-                // PERBAIKAN: Ganti runCatching dengan try-catch agar bisa memanggil fungsi suspend
+                // Wajib menggunakan try-catch, DILARANG menggunakan runCatching karena memanggil suspend function
                 try {
                     resolveAndLoadIframe(defaultIframe, "$name Default", Qualities.Unknown.value, subtitleCallback, callback)
                 } catch (e: Exception) {
@@ -309,7 +309,7 @@ class AnimeSailProvider : MainAPI() {
             // Selector server list
             val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
-            // PERBAIKAN: Ganti options.amap dengan perulangan for standar
+            // Wajib menggunakan perulangan for standar, DILARANG menggunakan amap/forEach lambda
             for (element in options) {
                 val encodedData = element.attr("data-em")
                 if (encodedData.isBlank()) continue
@@ -359,19 +359,18 @@ class AnimeSailProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         loadExtractor(url, referer, subtitleCallback) { link ->
-            callback.invoke(
-                newExtractorLink(
-                    source = serverName,
-                    name = serverName, 
-                    url = link.url,
-                    type = link.type
-                ) {
-                    this.referer = link.referer
-                    this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
-                    this.headers = link.headers
-                    this.extractorData = link.extractorData
-                }
-            )
+            val newLink = newExtractorLink(
+                source = serverName,
+                name = serverName, 
+                url = link.url,
+                type = link.type
+            ) {
+                this.referer = link.referer
+                this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
+                this.headers = link.headers
+                this.extractorData = link.extractorData
+            }
+            callback.invoke(newLink)
         }
     }
 
@@ -391,12 +390,13 @@ class AnimeSailProvider : MainAPI() {
 
             // Tangani URL proxy (?url=...)
             if (currentUrl.contains("url=")) {
-                val targetUrl = Regex("url=([^&]+)").find(currentUrl)?.groupValues?.getOrNull(1)?.let {
-                    URLDecoder.decode(it, "UTF-8")
-                }
-                if (!targetUrl.isNullOrBlank()) {
-                    resolveAndLoadIframe(targetUrl, serverName, quality, subtitleCallback, callback)
-                    return
+                val match = Regex("url=([^&]+)").find(currentUrl)
+                if (match != null) {
+                    val targetUrl = URLDecoder.decode(match.groupValues[1], "UTF-8")
+                    if (targetUrl.isNotBlank()) {
+                        resolveAndLoadIframe(targetUrl, serverName, quality, subtitleCallback, callback)
+                        return
+                    }
                 }
             }
 

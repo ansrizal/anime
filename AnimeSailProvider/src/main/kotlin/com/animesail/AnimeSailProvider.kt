@@ -68,15 +68,8 @@ class AnimeSailProvider : MainAPI() {
                 document.select("a[href*='/anime/']").mapNotNull { it.toDaftarAnimeResult() }.distinctBy { it.url }
             } else {
                 val selectors = listOf(
-                    "article.bs",
-                    "article.bsz",
-                    ".listupd article",
-                    ".postbody article",
-                    "div.bsx",
-                    "div.bs",
-                    "div.animposx",
-                    "div.animepost",
-                    ".venz ul li"
+                    "article.bs", "article.bsz", ".listupd article", ".postbody article",
+                    "div.bsx", "div.bs", "div.animposx", "div.animepost", ".venz ul li"
                 )
                 
                 var foundItems = emptyList<AnimeSearchResponse>()
@@ -357,19 +350,18 @@ class AnimeSailProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         loadExtractor(url, referer, subtitleCallback) { link ->
-            callback.invoke(
-                newExtractorLink(
-                    source = serverName,
-                    name = serverName, 
-                    url = link.url,
-                    type = link.type
-                ) {
-                    this.referer = link.referer
-                    this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
-                    this.headers = link.headers
-                    this.extractorData = link.extractorData
-                }
-            )
+            val newLink = newExtractorLink(
+                source = serverName,
+                name = serverName, 
+                url = link.url,
+                type = link.type
+            ) {
+                this.referer = link.referer
+                this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
+                this.headers = link.headers
+                this.extractorData = link.extractorData
+            }
+            callback.invoke(newLink)
         }
     }
 
@@ -388,34 +380,30 @@ class AnimeSailProvider : MainAPI() {
             }
 
             if (currentUrl.contains("url=")) {
-                var targetUrl = Regex("url=([^&]+)").find(currentUrl)?.groupValues?.getOrNull(1)?.let {
-                    URLDecoder.decode(it, "UTF-8")
-                }
-                if (!targetUrl.isNullOrBlank()) {
-                    if (targetUrl.contains("pixeldrain.com")) {
-                        val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(targetUrl)?.groupValues?.getOrNull(1)
-                        if (fileId != null) {
-                            targetUrl = "https://pixeldrain.com/api/file/$fileId"
-                        }
-                    }
-
-                    if (targetUrl.contains("pixeldrain.com/api/file/")) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = serverName,
-                                name = serverName,
-                                url = targetUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://pixeldrain.com/"
-                                this.quality = quality
+                val match = Regex("url=([^&]+)").find(currentUrl)
+                if (match != null) {
+                    var targetUrl = URLDecoder.decode(match.groupValues[1], "UTF-8")
+                    if (targetUrl.isNotBlank()) {
+                        if (targetUrl.contains("pixeldrain.com")) {
+                            val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(targetUrl)?.groupValues?.getOrNull(1)
+                            if (fileId != null) {
+                                targetUrl = "https://pixeldrain.com/api/file/$fileId"
                             }
-                        )
+                        }
+
+                        if (targetUrl.contains("pixeldrain.com/api/file/")) {
+                            callback.invoke(
+                                newExtractorLink(serverName, serverName, targetUrl, ExtractorLinkType.VIDEO) {
+                                    this.referer = "https://pixeldrain.com/"
+                                    this.quality = quality
+                                }
+                            )
+                            return
+                        }
+
+                        loadExtractorWithCustomInfo(targetUrl, mainUrl, serverName, quality, subtitleCallback, callback)
                         return
                     }
-
-                    loadExtractorWithCustomInfo(targetUrl, mainUrl, serverName, quality, subtitleCallback, callback)
-                    return
                 }
             }
 
@@ -433,12 +421,7 @@ class AnimeSailProvider : MainAPI() {
                 val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
                 if (fileId != null) {
                     callback.invoke(
-                        newExtractorLink(
-                            source = serverName,
-                            name = serverName,
-                            url = "https://pixeldrain.com/api/file/$fileId",
-                            type = ExtractorLinkType.VIDEO
-                        ) {
+                        newExtractorLink(serverName, serverName, "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
                             this.referer = "https://pixeldrain.com/"
                             this.quality = quality
                         }
@@ -455,12 +438,7 @@ class AnimeSailProvider : MainAPI() {
                 val finalVideoUrl = fixUrl(videoSrc)
                 val type = if (finalVideoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
-                    newExtractorLink(
-                        source = serverName,
-                        name = serverName,
-                        url = finalVideoUrl,
-                        type = type
-                    ) {
+                    newExtractorLink(serverName, serverName, finalVideoUrl, type) {
                         this.referer = currentUrl
                         this.quality = quality
                     }

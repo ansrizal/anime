@@ -288,7 +288,6 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
-            // Cek iframe default
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
                 try {
@@ -300,16 +299,18 @@ class AnimeSailProvider : MainAPI() {
 
             val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
-            // MENGGUNAKAN AMAP: Standar Cloudstream untuk memanggil fungsi suspend di dalam list
-            options.amap { element ->
+            // Kumpulkan data ke dalam List terlebih dahulu agar terbebas dari masalah Coroutine Lambda
+            val serverList = mutableListOf<Triple<String, String, Int>>()
+            
+            for (element in options) {
                 val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) return@amap
+                if (encodedData.isBlank()) continue
 
                 try {
                     val decoded = base64Decode(encodedData)
                     val parsed = Jsoup.parse(decoded)
                     val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
-                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
+                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) continue
 
                     val rawText = element.text().trim()
                     
@@ -326,11 +327,17 @@ class AnimeSailProvider : MainAPI() {
                         if (it.isLowerCase()) it.titlecase() else it.toString() 
                     }.ifBlank { name }
 
-                    resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
+                    serverList.add(Triple(iframe, serverName, quality))
                 } catch (e: Exception) {
                     println("AnimeSail: Error processing server option ${element.text()}: ${e.message}")
                 }
             }
+
+            // Proses data yang sudah dikumpulkan
+            for (server in serverList) {
+                resolveAndLoadIframe(server.first, server.second, server.third, subtitleCallback, callback)
+            }
+            
             return true
         } catch (e: Exception) {
             println("AnimeSail: Error in loadLinks: ${e.message}")

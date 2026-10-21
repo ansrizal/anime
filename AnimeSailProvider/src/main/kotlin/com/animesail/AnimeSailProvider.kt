@@ -298,23 +298,27 @@ class AnimeSailProvider : MainAPI() {
             // Cek iframe default (jika ada)
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
-                runCatching {
+                // PERBAIKAN: Ganti runCatching dengan try-catch agar bisa memanggil fungsi suspend
+                try {
                     resolveAndLoadIframe(defaultIframe, "$name Default", Qualities.Unknown.value, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    println("AnimeSail: Error default iframe: ${e.message}")
                 }
             }
 
             // Selector server list
             val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
-            options.amap { element ->
+            // PERBAIKAN: Ganti options.amap dengan perulangan for standar
+            for (element in options) {
                 val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) return@amap
+                if (encodedData.isBlank()) continue
 
                 try {
                     val decoded = base64Decode(encodedData)
                     val parsed = Jsoup.parse(decoded)
                     val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
-                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
+                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) continue
 
                     val rawText = element.text().trim() // Contoh isi: "mp4 720p", "lokal"
                     

@@ -264,7 +264,7 @@ class AnimeSailProvider : MainAPI() {
                 this.name = epTitle
                 this.episode = epNum
             }
-        }.distinctBy { it.data }.sortedByDescending { it.episode }
+        }.distinctBy { it.data }.sortedWith(compareBy(nullsLast()) { it.episode }) // Urutan Ascending agar Next maju
 
         return newAnimeLoadResponse(cleanTitle, currentUrl, type) {
             this.posterUrl = poster
@@ -295,15 +295,16 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
-            // Also check main default iframe if present
+            // Cek iframe default (jika ada)
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
                 runCatching {
-                    resolveAndLoadIframe(defaultIframe, name, Qualities.Unknown.value, subtitleCallback, callback)
+                    resolveAndLoadIframe(defaultIframe, "$name Default", Qualities.Unknown.value, subtitleCallback, callback)
                 }
             }
 
-            val options = document.select(".mobius > .mirror > option, select.mirror option")
+            // Selector server list
+            val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
             options.amap { element ->
                 val encodedData = element.attr("data-em")
@@ -315,7 +316,9 @@ class AnimeSailProvider : MainAPI() {
                     val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
                     if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
 
-                    val rawText = element.text().trim()
+                    val rawText = element.text().trim() // Contoh isi: "mp4 720p", "lokal"
+                    
+                    // Ekstrak kualitas
                     val quality = when {
                         rawText.contains("1080", true) -> Qualities.P1080.value
                         rawText.contains("720", true) -> Qualities.P720.value
@@ -324,7 +327,9 @@ class AnimeSailProvider : MainAPI() {
                         rawText.contains("240", true) -> Qualities.P240.value
                         else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
                     }
-                    val serverName = rawText.replace(Regex("(?i)\\d+[pP]"), "").trim().replaceFirstChar { 
+                    
+                    // Format nama server (contoh: "Mp4 720p")
+                    val serverName = rawText.replaceFirstChar { 
                         if (it.isLowerCase()) it.titlecase() else it.toString() 
                     }.ifBlank { name }
 
@@ -340,6 +345,32 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
+    // Mencegat ekstraktor bawaan agar nama dan kualitas dari web asli tidak tertimpa
+    private suspend fun loadExtractorWithCustomInfo(
+        url: String,
+        referer: String,
+        serverName: String,
+        quality: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        loadExtractor(url, referer, subtitleCallback) { link ->
+            callback.invoke(
+                newExtractorLink(
+                    source = serverName,
+                    name = serverName, 
+                    url = link.url,
+                    type = link.type
+                ) {
+                    this.referer = link.referer
+                    this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
+                    this.headers = link.headers
+                    this.extractorData = link.extractorData
+                }
+            )
+        }
+    }
+
     private suspend fun resolveAndLoadIframe(
         iframeUrl: String,
         serverName: String,
@@ -350,67 +381,27 @@ class AnimeSailProvider : MainAPI() {
         try {
             var currentUrl = iframeUrl
 
-            // Normalize alternate domains
             if (currentUrl.contains("miiiixdrop.net", true)) {
                 currentUrl = currentUrl.replace("miiiixdrop.net", "mixdrop.co")
             }
 
-            // Check if currentUrl has ?url= parameter (like popup player)
+            // Tangani URL proxy (?url=...)
             if (currentUrl.contains("url=")) {
-                var targetUrl = Regex("url=([^&]+)").find(currentUrl)?.groupValues?.getOrNull(1)?.let {
+                val targetUrl = Regex("url=([^&]+)").find(currentUrl)?.groupValues?.getOrNull(1)?.let {
                     URLDecoder.decode(it, "UTF-8")
                 }
                 if (!targetUrl.isNullOrBlank()) {
-                    if (targetUrl.contains("pixeldrain.com")) {
-                        val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(targetUrl)?.groupValues?.getOrNull(1)
-                        if (fileId != null) {
-                            targetUrl = "https://pixeldrain.com/api/file/$fileId"
-                        }
-                    }
-
-                    if (targetUrl.contains("pixeldrain.com/api/file/")) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = serverName,
-                                name = serverName,
-                                url = targetUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://pixeldrain.com/"
-                                this.quality = quality
-                            }
-                        )
-                        return
-                    }
-
-                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+                    resolveAndLoadIframe(targetUrl, serverName, quality, subtitleCallback, callback)
                     return
                 }
             }
 
-            // Known extractor domains
-            val knownExtractors = listOf("mixdrop", "mp4upload", "krakenfiles", "dood", "filemoon", "mega.nz", "abyss.to", "acefile.co", "vikingfile")
-            if (knownExtractors.any { currentUrl.contains(it, true) }) {
-                loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
-                return
-            }
-
-            // Otherwise, fetch the iframe page HTML
-            val res = request(currentUrl, mainUrl)
-            val doc = res.document
-            val html = res.text
-
-            // Check if html has pixeldrain
-            if (html.contains("pixeldrain.com")) {
-                val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
+            // Tangani Pixeldrain secara langsung
+            if (currentUrl.contains("pixeldrain.com")) {
+                val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(currentUrl)?.groupValues?.getOrNull(1)
                 if (fileId != null) {
                     callback.invoke(
-                        newExtractorLink(
-                            source = serverName,
-                            name = serverName,
-                            url = "https://pixeldrain.com/api/file/$fileId",
-                            type = ExtractorLinkType.VIDEO
-                        ) {
+                        newExtractorLink(serverName, serverName, "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
                             this.referer = "https://pixeldrain.com/"
                             this.quality = quality
                         }
@@ -419,7 +410,39 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // 1. Check for video / source tags
+            // Daftar domain server yang diperluas (termasuk buzi/buzzheavier, dodo, dll)
+            val knownExtractors = listOf(
+                "mixdrop", "mp4upload", "krakenfiles", "dood", "dodo", "filemoon", 
+                "mega.nz", "abyss", "acefile", "vikingfile", "buzi", "buzzheavier",
+                "lokal", "streamtape", "gdrive", "ok.ru", "vidhide", "embed"
+            )
+
+            // JIKA URL BUKAN DARI ANIMESAIL (Link Luar), LANGSUNG GUNAKAN EKSTRAKTOR BAWAAN
+            if (knownExtractors.any { currentUrl.contains(it, true) } || !currentUrl.contains(mainUrl, true)) {
+                loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
+                return
+            }
+
+            // JIKA URL IFRAME DARI ANIMESAIL, COBA AMBIL HTML
+            val res = request(currentUrl, mainUrl)
+            val doc = res.document
+            val html = res.text
+
+            // Cek Pixeldrain di dalam HTML
+            if (html.contains("pixeldrain.com")) {
+                val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
+                if (fileId != null) {
+                    callback.invoke(
+                        newExtractorLink(serverName, serverName, "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
+                            this.referer = "https://pixeldrain.com/"
+                            this.quality = quality
+                        }
+                    )
+                    return
+                }
+            }
+
+            // Cek link video langsung (.mp4 / .m3u8)
             val videoSrc = doc.selectFirst("video source, video")?.attr("src") 
                 ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
                 ?: Regex("""src\s*=\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
@@ -428,12 +451,7 @@ class AnimeSailProvider : MainAPI() {
                 val finalVideoUrl = fixUrl(videoSrc)
                 val type = if (finalVideoUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 callback.invoke(
-                    newExtractorLink(
-                        source = serverName,
-                        name = serverName,
-                        url = finalVideoUrl,
-                        type = type
-                    ) {
+                    newExtractorLink(serverName, serverName, finalVideoUrl, type) {
                         this.referer = currentUrl
                         this.quality = quality
                     }
@@ -441,7 +459,7 @@ class AnimeSailProvider : MainAPI() {
                 return
             }
 
-            // 2. Check if iframe page contains another iframe or external link
+            // Cek iframe bersarang (nested iframe)
             val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
             if (!innerIframe.isNullOrBlank()) {
                 val fixedInner = fixUrl(innerIframe)
@@ -449,10 +467,14 @@ class AnimeSailProvider : MainAPI() {
                 return
             }
 
-            // 3. Fallback: try standard loadExtractor on currentUrl
-            loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
+            // Fallback ke ekstraktor
+            loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
+            
         } catch (e: Exception) {
             println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
+            // KUNCI PERBAIKAN: Jika request HTML gagal (misal diblokir Cloudflare atau Error 403),
+            // sistem TETAP AKAN memaksa menggunakan loadExtractor agar server tidak hilang dari daftar!
+            loadExtractorWithCustomInfo(iframeUrl, mainUrl, serverName, quality, subtitleCallback, callback)
         }
     }
 }

@@ -288,6 +288,7 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
+            // Cek iframe default
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
                 try {
@@ -299,52 +300,41 @@ class AnimeSailProvider : MainAPI() {
 
             val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
-            // PERBAIKAN TOTAL: Menggunakan looping index standar untuk menghindari error coroutine
-            for (i in options.indices) {
-                val element = options[i]
-                processServerOption(element, name, subtitleCallback, callback)
+            // MENGGUNAKAN AMAP: Standar Cloudstream untuk memanggil fungsi suspend di dalam list
+            options.amap { element ->
+                val encodedData = element.attr("data-em")
+                if (encodedData.isBlank()) return@amap
+
+                try {
+                    val decoded = base64Decode(encodedData)
+                    val parsed = Jsoup.parse(decoded)
+                    val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
+                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
+
+                    val rawText = element.text().trim()
+                    
+                    val quality = when {
+                        rawText.contains("1080", true) -> Qualities.P1080.value
+                        rawText.contains("720", true) -> Qualities.P720.value
+                        rawText.contains("480", true) -> Qualities.P480.value
+                        rawText.contains("360", true) -> Qualities.P360.value
+                        rawText.contains("240", true) -> Qualities.P240.value
+                        else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
+                    }
+                    
+                    val serverName = rawText.replaceFirstChar { 
+                        if (it.isLowerCase()) it.titlecase() else it.toString() 
+                    }.ifBlank { name }
+
+                    resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    println("AnimeSail: Error processing server option ${element.text()}: ${e.message}")
+                }
             }
             return true
         } catch (e: Exception) {
             println("AnimeSail: Error in loadLinks: ${e.message}")
             return false
-        }
-    }
-
-    // Fungsi terpisah khusus untuk memproses server agar terbebas dari error lambda/coroutine
-    private suspend fun processServerOption(
-        element: Element,
-        defaultName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val encodedData = element.attr("data-em")
-        if (encodedData.isBlank()) return
-
-        try {
-            val decoded = base64Decode(encodedData)
-            val parsed = Jsoup.parse(decoded)
-            val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
-            if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return
-
-            val rawText = element.text().trim()
-            
-            val quality = when {
-                rawText.contains("1080", true) -> Qualities.P1080.value
-                rawText.contains("720", true) -> Qualities.P720.value
-                rawText.contains("480", true) -> Qualities.P480.value
-                rawText.contains("360", true) -> Qualities.P360.value
-                rawText.contains("240", true) -> Qualities.P240.value
-                else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
-            }
-            
-            val serverName = rawText.replaceFirstChar { 
-                if (it.isLowerCase()) it.titlecase() else it.toString() 
-            }.ifBlank { defaultName }
-
-            resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
-        } catch (e: Exception) {
-            println("AnimeSail: Error processing server option ${element.text()}: ${e.message}")
         }
     }
 

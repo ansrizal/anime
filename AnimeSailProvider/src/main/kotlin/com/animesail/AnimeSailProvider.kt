@@ -264,7 +264,7 @@ class AnimeSailProvider : MainAPI() {
                 this.name = epTitle
                 this.episode = epNum
             }
-        }.distinctBy { it.data }.sortedBy { it.episode }
+        }.distinctBy { it.data }.sortedWith(compareBy(nullsLast()) { it.episode }) // PERBAIKAN: Urutan dibalik menjadi Ascending (maju)
 
         return newAnimeLoadResponse(cleanTitle, currentUrl, type) {
             this.posterUrl = poster
@@ -295,15 +295,16 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
-            // Also check main default iframe if present
+            // Cek iframe default (jika ada)
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
                 runCatching {
-                    resolveAndLoadIframe(defaultIframe, name, Qualities.Unknown.value, subtitleCallback, callback)
+                    resolveAndLoadIframe(defaultIframe, "$name Default", Qualities.Unknown.value, subtitleCallback, callback)
                 }
             }
 
-            val options = document.select(".mobius > .mirror > option, select.mirror option")
+            // Selector diperluas untuk mengantisipasi perubahan struktur HTML
+            val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
             options.amap { element ->
                 val encodedData = element.attr("data-em")
@@ -315,7 +316,9 @@ class AnimeSailProvider : MainAPI() {
                     val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
                     if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return@amap
 
-                    val rawText = element.text().trim()
+                    val rawText = element.text().trim() // Contoh isi: "mp4 720p", "lokal"
+                    
+                    // Ekstrak kualitas
                     val quality = when {
                         rawText.contains("1080", true) -> Qualities.P1080.value
                         rawText.contains("720", true) -> Qualities.P720.value
@@ -324,7 +327,9 @@ class AnimeSailProvider : MainAPI() {
                         rawText.contains("240", true) -> Qualities.P240.value
                         else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
                     }
-                    val serverName = rawText.replace(Regex("(?i)\\d+[pP]"), "").trim().replaceFirstChar { 
+                    
+                    // Jadikan teks mentah sebagai nama server (contoh: "Mp4 720p")
+                    val serverName = rawText.replaceFirstChar { 
                         if (it.isLowerCase()) it.titlecase() else it.toString() 
                     }.ifBlank { name }
 
@@ -337,6 +342,33 @@ class AnimeSailProvider : MainAPI() {
         } catch (e: Exception) {
             println("AnimeSail: Error in loadLinks: ${e.message}")
             return false
+        }
+    }
+
+    // PERBAIKAN: Fungsi pembantu untuk mencegat dan memodifikasi hasil dari loadExtractor bawaan
+    private suspend fun loadExtractorWithCustomInfo(
+        url: String,
+        referer: String,
+        serverName: String,
+        quality: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        loadExtractor(url, referer, subtitleCallback) { link ->
+            callback.invoke(
+                newExtractorLink(
+                    source = serverName,
+                    name = serverName, // Memaksa nama menjadi "Mp4 720p", dll.
+                    url = link.url,
+                    type = link.type
+                ) {
+                    this.referer = link.referer
+                    // Jika ekstraktor tidak tahu kualitasnya (Unknown), gunakan kualitas dari web asli
+                    this.quality = if (link.quality == Qualities.Unknown.value) quality else link.quality
+                    this.headers = link.headers
+                    this.extractorData = link.extractorData
+                }
+            )
         }
     }
 
@@ -383,7 +415,7 @@ class AnimeSailProvider : MainAPI() {
                         return
                     }
 
-                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+                    loadExtractorWithCustomInfo(targetUrl, mainUrl, serverName, quality, subtitleCallback, callback)
                     return
                 }
             }
@@ -391,7 +423,7 @@ class AnimeSailProvider : MainAPI() {
             // Known extractor domains
             val knownExtractors = listOf("mixdrop", "mp4upload", "krakenfiles", "dood", "filemoon", "mega.nz", "abyss.to", "acefile.co", "vikingfile")
             if (knownExtractors.any { currentUrl.contains(it, true) }) {
-                loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
+                loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
                 return
             }
 
@@ -450,7 +482,7 @@ class AnimeSailProvider : MainAPI() {
             }
 
             // 3. Fallback: try standard loadExtractor on currentUrl
-            loadExtractor(currentUrl, mainUrl, subtitleCallback, callback)
+            loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
         } catch (e: Exception) {
             println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
         }

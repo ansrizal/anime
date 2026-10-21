@@ -68,15 +68,8 @@ class AnimeSailProvider : MainAPI() {
                 document.select("a[href*='/anime/']").mapNotNull { it.toDaftarAnimeResult() }.distinctBy { it.url }
             } else {
                 val selectors = listOf(
-                    "article.bs",
-                    "article.bsz",
-                    ".listupd article",
-                    ".postbody article",
-                    "div.bsx",
-                    "div.bs",
-                    "div.animposx",
-                    "div.animepost",
-                    ".venz ul li"
+                    "article.bs", "article.bsz", ".listupd article", ".postbody article",
+                    "div.bsx", "div.bs", "div.animposx", "div.animepost", ".venz ul li"
                 )
                 
                 var foundItems = emptyList<AnimeSearchResponse>()
@@ -264,7 +257,7 @@ class AnimeSailProvider : MainAPI() {
                 this.name = epTitle
                 this.episode = epNum
             }
-        }.distinctBy { it.data }.sortedWith(compareBy(nullsLast()) { it.episode }) // Urutan Ascending agar Next maju
+        }.distinctBy { it.data }.sortedWith(compareBy(nullsLast()) { it.episode })
 
         return newAnimeLoadResponse(cleanTitle, currentUrl, type) {
             this.posterUrl = poster
@@ -295,10 +288,8 @@ class AnimeSailProvider : MainAPI() {
         try {
             val document = request(data).document
             
-            // Cek iframe default (jika ada)
             val defaultIframe = fixUrl(document.selectFirst("iframe[src]")?.attr("src") ?: "")
             if (defaultIframe.isNotBlank() && !defaultIframe.contains("statistic") && !defaultIframe.contains("error.php")) {
-                // Wajib menggunakan try-catch, DILARANG menggunakan runCatching karena memanggil suspend function
                 try {
                     resolveAndLoadIframe(defaultIframe, "$name Default", Qualities.Unknown.value, subtitleCallback, callback)
                 } catch (e: Exception) {
@@ -306,41 +297,12 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // Selector server list
             val options = document.select(".mobius > .mirror > option, select.mirror option, .mirror option, .server-list li[data-em], .server-list a[data-em]")
             
-            // Wajib menggunakan perulangan for standar, DILARANG menggunakan amap/forEach lambda
-            for (element in options) {
-                val encodedData = element.attr("data-em")
-                if (encodedData.isBlank()) continue
-
-                try {
-                    val decoded = base64Decode(encodedData)
-                    val parsed = Jsoup.parse(decoded)
-                    val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
-                    if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) continue
-
-                    val rawText = element.text().trim() // Contoh isi: "mp4 720p", "lokal"
-                    
-                    // Ekstrak kualitas
-                    val quality = when {
-                        rawText.contains("1080", true) -> Qualities.P1080.value
-                        rawText.contains("720", true) -> Qualities.P720.value
-                        rawText.contains("480", true) -> Qualities.P480.value
-                        rawText.contains("360", true) -> Qualities.P360.value
-                        rawText.contains("240", true) -> Qualities.P240.value
-                        else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
-                    }
-                    
-                    // Format nama server (contoh: "Mp4 720p")
-                    val serverName = rawText.replaceFirstChar { 
-                        if (it.isLowerCase()) it.titlecase() else it.toString() 
-                    }.ifBlank { name }
-
-                    resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    println("AnimeSail: Error processing server option ${element.text()}: ${e.message}")
-                }
+            // PERBAIKAN TOTAL: Menggunakan looping index standar untuk menghindari error coroutine
+            for (i in options.indices) {
+                val element = options[i]
+                processServerOption(element, name, subtitleCallback, callback)
             }
             return true
         } catch (e: Exception) {
@@ -349,7 +311,43 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
-    // Mencegat ekstraktor bawaan agar nama dan kualitas dari web asli tidak tertimpa
+    // Fungsi terpisah khusus untuk memproses server agar terbebas dari error lambda/coroutine
+    private suspend fun processServerOption(
+        element: Element,
+        defaultName: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val encodedData = element.attr("data-em")
+        if (encodedData.isBlank()) return
+
+        try {
+            val decoded = base64Decode(encodedData)
+            val parsed = Jsoup.parse(decoded)
+            val iframe = fixUrl(parsed.select("iframe").attr("src").ifBlank { parsed.text().trim() })
+            if (iframe.isBlank() || iframe.contains("statistic") || iframe.contains("error.php")) return
+
+            val rawText = element.text().trim()
+            
+            val quality = when {
+                rawText.contains("1080", true) -> Qualities.P1080.value
+                rawText.contains("720", true) -> Qualities.P720.value
+                rawText.contains("480", true) -> Qualities.P480.value
+                rawText.contains("360", true) -> Qualities.P360.value
+                rawText.contains("240", true) -> Qualities.P240.value
+                else -> Regex("(\\d{3,4})[pP]").find(rawText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Qualities.Unknown.value
+            }
+            
+            val serverName = rawText.replaceFirstChar { 
+                if (it.isLowerCase()) it.titlecase() else it.toString() 
+            }.ifBlank { defaultName }
+
+            resolveAndLoadIframe(iframe, serverName, quality, subtitleCallback, callback)
+        } catch (e: Exception) {
+            println("AnimeSail: Error processing server option ${element.text()}: ${e.message}")
+        }
+    }
+
     private suspend fun loadExtractorWithCustomInfo(
         url: String,
         referer: String,
@@ -388,7 +386,6 @@ class AnimeSailProvider : MainAPI() {
                 currentUrl = currentUrl.replace("miiiixdrop.net", "mixdrop.co")
             }
 
-            // Tangani URL proxy (?url=...)
             if (currentUrl.contains("url=")) {
                 val match = Regex("url=([^&]+)").find(currentUrl)
                 if (match != null) {
@@ -400,7 +397,6 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // Tangani Pixeldrain secara langsung
             if (currentUrl.contains("pixeldrain.com")) {
                 val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(currentUrl)?.groupValues?.getOrNull(1)
                 if (fileId != null) {
@@ -414,25 +410,21 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // Daftar domain server yang diperluas (termasuk buzi/buzzheavier, dodo, dll)
             val knownExtractors = listOf(
                 "mixdrop", "mp4upload", "krakenfiles", "dood", "dodo", "filemoon", 
                 "mega.nz", "abyss", "acefile", "vikingfile", "buzi", "buzzheavier",
                 "lokal", "streamtape", "gdrive", "ok.ru", "vidhide", "embed"
             )
 
-            // JIKA URL BUKAN DARI ANIMESAIL (Link Luar), LANGSUNG GUNAKAN EKSTRAKTOR BAWAAN
             if (knownExtractors.any { currentUrl.contains(it, true) } || !currentUrl.contains(mainUrl, true)) {
                 loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
                 return
             }
 
-            // JIKA URL IFRAME DARI ANIMESAIL, COBA AMBIL HTML
             val res = request(currentUrl, mainUrl)
             val doc = res.document
             val html = res.text
 
-            // Cek Pixeldrain di dalam HTML
             if (html.contains("pixeldrain.com")) {
                 val fileId = Regex("pixeldrain\\.com/(?:d|u|api/file)/([a-zA-Z0-9]+)").find(html)?.groupValues?.getOrNull(1)
                 if (fileId != null) {
@@ -446,7 +438,6 @@ class AnimeSailProvider : MainAPI() {
                 }
             }
 
-            // Cek link video langsung (.mp4 / .m3u8)
             val videoSrc = doc.selectFirst("video source, video")?.attr("src") 
                 ?: Regex("""file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
                 ?: Regex("""src\s*=\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']""").find(html)?.groupValues?.getOrNull(1)
@@ -463,7 +454,6 @@ class AnimeSailProvider : MainAPI() {
                 return
             }
 
-            // Cek iframe bersarang (nested iframe)
             val innerIframe = doc.selectFirst("iframe[src]")?.attr("src")
             if (!innerIframe.isNullOrBlank()) {
                 val fixedInner = fixUrl(innerIframe)
@@ -471,13 +461,10 @@ class AnimeSailProvider : MainAPI() {
                 return
             }
 
-            // Fallback ke ekstraktor
             loadExtractorWithCustomInfo(currentUrl, mainUrl, serverName, quality, subtitleCallback, callback)
             
         } catch (e: Exception) {
             println("AnimeSail: Error resolving iframe $iframeUrl: ${e.message}")
-            // KUNCI PERBAIKAN: Jika request HTML gagal (misal diblokir Cloudflare atau Error 403),
-            // sistem TETAP AKAN memaksa menggunakan loadExtractor agar server tidak hilang dari daftar!
             loadExtractorWithCustomInfo(iframeUrl, mainUrl, serverName, quality, subtitleCallback, callback)
         }
     }

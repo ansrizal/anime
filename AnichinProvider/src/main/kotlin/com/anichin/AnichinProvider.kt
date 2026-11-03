@@ -4,11 +4,6 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
-import org.jsoup.select.Elements
-import com.lagradost.nicehttp.*
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class AnichinProvider : MainAPI() {
     companion object {
@@ -19,7 +14,7 @@ class AnichinProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.Anime)
+    override val supportedTypes = setOf(TvType.Anime, TvType.Movie)
 
     override val mainPage = mainPageOf(
         "anime/?order=update" to "Latest Update",
@@ -31,7 +26,8 @@ class AnichinProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("${mainUrl}/${request.data}&page=$page").document
-        val home = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
+        // Perbaikan: Gunakan "div.listupd article" tanpa ">" agar poster terbaca
+        val home = document.select("div.listupd article").asIterable().mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
@@ -43,9 +39,12 @@ class AnichinProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        val title = this.select("div.bsx > a").attr("title").trim()
-        val href = fixUrl(this.select("div.bsx > a").attr("href"))
-        val posterUrl = fixUrlNull(this.select("div.bsx > a img").attr("src"))
+        // Perbaikan Selector: Gunakan div.bsx a img
+        val anchor = this.selectFirst("div.bsx a") ?: this.selectFirst("a")
+        val title = anchor?.attr("title")?.trim().orEmpty()
+        val href = fixUrl(anchor?.attr("href").orEmpty())
+        val posterUrl = fixUrlNull(this.selectFirst("div.bsx a img")?.attr("src"))
+        
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
         }
@@ -54,8 +53,10 @@ class AnichinProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val searchResponse = mutableListOf<SearchResponse>()
         for (i in 1..3) {
-            val document = app.get("${mainUrl}/page/$i/?s=$query").document
-            val results = document.select("div.listupd > article").asIterable().mapNotNull { it.toSearchResult() }
+            // Perbaikan: URL pencarian halaman 1 tidak pakai /page/1/
+            val url = if (i == 1) "${mainUrl}/?s=$query" else "${mainUrl}/page/$i/?s=$query"
+            val document = app.get(url).document
+            val results = document.select("div.listupd article").asIterable().mapNotNull { it.toSearchResult() }
             if (results.isEmpty()) break
             searchResponse.addAll(results)
         }
@@ -64,47 +65,52 @@ class AnichinProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(fixUrl(url)).document
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim().toString()
-        var poster = document.select("div.ime > img").attr("src")
-        val description = document.selectFirst("div.entry-content")?.text()?.trim()
-        val type = document.selectFirst(".spe")?.text().orEmpty()
-        val tvType = if (type.contains("Movie", true)) TvType.Movie else TvType.TvSeries
-        if (poster.isEmpty()) {
-            poster = document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
-        }
+        
+        // 1. Ambil Data Series dari Sidebar/Info Box
+        val seriesInfo = document.selectFirst("div.single-info.bixbox")
+        val title = seriesInfo?.selectFirst("div.infolimit h2")?.text()?.trim()
+            ?: document.selectFirst("h1.entry-title")?.text()?.trim().orEmpty()
+            
+        val poster = seriesInfo?.selectFirst("div.thumb img")?.attr("src")
+            ?: document.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+            
+        val description = seriesInfo?.selectFirst("div.desc")?.text()?.trim()
+            ?: document.selectFirst("div.entry-content")?.text()?.trim()
 
-        return if (tvType == TvType.TvSeries) {
-            val episodes = document.select(".eplister li").asIterable().map { ep ->
-                val link = fixUrl(ep.selectFirst("a")?.attr("href").orEmpty())
-                val epTitle = ep.selectFirst(".epl-title")?.text()?.trim().orEmpty()
-                val epSub = ep.selectFirst(".epl-sub span")?.text()?.trim().orEmpty()
-                val epDate = ep.selectFirst(".epl-date")?.text()?.trim().orEmpty()
+        // Cari URL utama series (tanpa embel-embel episode)
+        val seriesUrl = document.selectFirst("#mainepisode .headlist .det h2 a")?.attr("href")?.let { fixUrl(it) } ?: url
 
-                val cleanTitle = epTitle
-                    .replace(Regex("Episode\\s*\\d+\\s*Subtitle Indonesia", RegexOption.IGNORE_CASE), "")
-                    .replace("Subtitle Indonesia", "")
-                    .trim()
+        // 2. Ambil Daftar Episode dari Sidebar
+        val episodeElements = document.select("#mainepisode .episodelist ul li")
+        
+        val episodes = episodeElements.mapNotNull { li ->
+            val a = li.selectFirst("a") ?: return@mapNotNull null
+            val epHref = fixUrl(a.attr("href"))
+            
+            // Ambil judul asli
+            val rawTitle = li.selectFirst(".playinfo h3")?.text()?.trim() ?: a.attr("title").trim()
+            
+            // Ambil tanggal rilis
+            val dateText = li.selectFirst(".playinfo span")?.text()?.trim().orEmpty() // Contoh: "Eps 188 - November 3, 2026"
+            
+            // Bersihkan judul agar rapi: Ambil angka episodenya saja
+            val epNumber = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE).find(rawTitle)?.groupValues?.get(1)
+                ?: Regex("Eps\\s*(\\d+)", RegexOption.IGNORE_CASE).find(dateText)?.groupValues?.get(1)
+            
+            val cleanName = if (epNumber != null) "Episode $epNumber" else rawTitle.replace("Subtitle Indonesia", "").trim()
 
-                val name = "— $cleanTitle $epSub Indonesia".trim()
-                val desc = if (epDate.isNotEmpty()) "Rilis: $epDate" else null
-
-                newEpisode(link) {
-                    this.name = name
-                    this.posterUrl = fixUrlNull(poster)
-                    this.description = desc
-                }
-            }.reversed()
-
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+            newEpisode(epHref) {
+                this.name = cleanName
                 this.posterUrl = fixUrlNull(poster)
-                this.plot = description
+                // Tampilkan tanggal rilis di deskripsi episode
+                this.description = dateText.replace(Regex("Eps\\s*\\d+\\s*-\\s*", RegexOption.IGNORE_CASE), "Rilis: ")
             }
-        } else {
-            val movieHref = document.selectFirst(".eplister li > a")?.attr("href")?.let { fixUrl(it) } ?: url
-            newMovieLoadResponse(title, movieHref, TvType.Movie, movieHref) {
-                this.posterUrl = fixUrlNull(poster)
-                this.plot = description
-            }
+        }.reversed() // Dibalik agar Episode 1 ada di paling atas
+
+        // 3. Kembalikan sebagai TvSeries agar semua episode muncul
+        return newTvSeriesLoadResponse(title, seriesUrl, TvType.Anime, episodes) {
+            this.posterUrl = fixUrlNull(poster)
+            this.plot = description
         }
     }
 
@@ -115,13 +121,24 @@ class AnichinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(fixUrl(data)).document
-        document.select(".mobius option").asIterable().forEach { server ->
+        
+        // Ambil semua server dari dropdown <select class="mirror">
+        val options = document.select(".mobius option")
+        for (server in options) {
             val base64 = server.attr("value")
             if (base64.isNotBlank()) {
-                val decoded = base64Decode(base64)
-                val doc = Jsoup.parse(decoded)
-                val href = fixUrl(doc.select("iframe").attr("src"))
-                loadExtractor(href, subtitleCallback, callback)
+                try {
+                    val decoded = base64Decode(base64)
+                    val doc = Jsoup.parse(decoded)
+                    val href = doc.select("iframe").attr("src")
+                    
+                    if (href.isNotBlank()) {
+                        // Kirim ke extractor CloudStream
+                        loadExtractor(fixUrl(href), subtitleCallback, callback)
+                    }
+                } catch (e: Exception) {
+                    // Abaikan jika gagal decode
+                }
             }
         }
         return true

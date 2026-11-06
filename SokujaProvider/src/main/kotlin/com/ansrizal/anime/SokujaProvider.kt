@@ -132,7 +132,7 @@ class SokujaProvider : MainAPI() {
 
         val epText = selectFirst(".epx, .ep, .episode, .text-gray-400")?.text()?.trim()
         if (!epText.isNullOrBlank() && (epText.contains("Episode", true) || epText.contains("EP ", true))) {
-            val cleanEp = epText.replace(Regex("""\s*·.*"""), "")
+            val cleanEp = epText.replace(Regex("""\s*Â·.*"""), "")
             if (!title.contains(cleanEp, true)) title = "$title - $cleanEp"
         }
 
@@ -165,15 +165,10 @@ class SokujaProvider : MainAPI() {
         var res = request(currentUrl)
         var document = res.document
 
-        // [REDIRECT LOGIC] Perbaikan: Cek URL yang lebih luas (termasuk yang berakhiran angka)
-        val isEpisodePage = currentUrl.contains("-episode-") || 
-                            currentUrl.contains("/episode/") || 
-                            Regex("""/\d+/?$""").containsMatchIn(currentUrl)
-
-        if (isEpisodePage && !currentUrl.contains("/anime/")) {
+        // [REDIRECT LOGIC] Jika ini halaman episode (Update Terbaru), cari link ke halaman series utama
+        if (currentUrl.contains("-episode-") && !currentUrl.contains("/anime/")) {
             val seriesLink = document.selectFirst("main a[href*='/anime/']:not([href*='list-mode'])")?.attr("href")
                 ?: document.selectFirst(".breadcrumb a[href*='/anime/']")?.attr("href")
-                ?: document.selectFirst("a[href*='/anime/']")?.attr("href")
 
             if (seriesLink != null) {
                 currentUrl = fixUrl(seriesLink)
@@ -192,76 +187,48 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // ----- PARSING DATA UTAMA -----
+        // ----- PARSING SEPERTI BIASA -----
+        val rawData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
 
-        // Sinopsis
+        // ----- PERBAIKAN SINopsis & GENRE UNTUK HALAMAN ANIME -----
+        // 1. Sinopsis: cari di div.prose.prose-invert (atau .prose-invert) pada halaman anime
         val description = document.selectFirst("div.prose.prose-invert, div.prose-invert, div.prose")?.text()?.trim()
             ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // Genre
+        // 2. Genre: ambil dari div.flex.flex-wrap.gap-2 yang berisi link genre (biasanya di atas halaman anime)
         val genreElements = document.select("div.flex.flex-wrap.gap-2 a[href*='/genre/']")
         val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
-            .ifEmpty {
+            .ifEmpty { // fallback ke area informasi series jika tidak ditemukan
                 document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
                     .mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
             }
 
-        // ----- AMBIL DAFTAR EPISODE (PERBAIKAN UTAMA) -----
+        // ----- AMBIL DAFTAR EPISODE -----
         val episodes = mutableListOf<Episode>()
-        val scriptData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
-
-        // 1. Coba parsing menggunakan struktur JSON Next.js (__NEXT_DATA__)
-        try {
-            val startIndex = scriptData.indexOf("\"episodes\":")
-            if (startIndex != -1) {
-                val jsonArrayStr = scriptData.substring(startIndex).substringAfter("[").substringBefore("]")
-                Regex("""\{[^{}]*?"slug"\s*:\s*"([^"]+)"[^{}]*?"episodeNumber"\s*:\s*(\d+)[^{}]*?\}""").findAll(jsonArrayStr).forEach { match ->
-                    val slug = match.groupValues[1]
-                    val epNum = match.groupValues[2].toIntOrNull() ?: 0
-                    val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
-                    
-                    episodes.add(newEpisode(epUrl) {
-                        this.name = "Episode $epNum"
-                        this.episode = epNum
-                    })
-                }
+        Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
+            .findAll(rawData).forEach { match ->
+                val epUrl = if (match.groupValues[2].startsWith("/")) "$mainUrl${match.groupValues[2]}" else "$mainUrl/${match.groupValues[2]}"
+                episodes.add(newEpisode(epUrl) {
+                    this.name = match.groupValues[3]
+                    this.episode = match.groupValues[4].toIntOrNull() ?: 0
+                    this.data = match.groupValues[1]
+                })
             }
-        } catch (e: Exception) {
-            // Abaikan error parsing JSON
-        }
 
-        // 2. Fallback ke Regex lama jika JSON gagal
         if (episodes.isEmpty()) {
-            Regex("""["']slug["']:\s*["']([^"']+)["'][^{}]*?["']episodeNumber["']:\s*(\d+)""").findAll(scriptData).forEach { match ->
-                val slug = match.groupValues[1]
-                val epNum = match.groupValues[2].toIntOrNull() ?: 0
-                val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
-                episodes.add(newEpisode(epUrl) { this.name = "Episode $epNum"; this.episode = epNum })
-            }
-        }
-
-        // 3. Fallback ke HTML DOM
-        if (episodes.isEmpty()) {
-            document.select("a[href*='-episode-'], .eplist ul li a, div.grid a[href*='/episode/']").forEach { a ->
+            document.select("a[href*='-episode-'], .eplist ul li a").forEach { a ->
                 val href = a.attr("href")
-                if (href.isNotBlank()) {
-                    val epNum = Regex("""(?:episode|ep)[-/\s]*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
-                        ?: Regex("""/(\d+)/?$""").find(href)?.groupValues?.get(1)?.toIntOrNull()
-                    
-                    if (epNum != null) {
-                        episodes.add(newEpisode(fixUrl(href)) { 
-                            this.name = a.text().trim().ifEmpty { "Episode $epNum" }
-                            this.episode = epNum 
-                        })
-                    }
-                }
+                val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
+                if (epNum != null) episodes.add(newEpisode(fixUrl(href)) { this.name = a.text().trim(); this.episode = epNum })
             }
         }
 
+        // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
         val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
+
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
 
         // ----- SIMPAN KE CACHE -----
@@ -298,8 +265,7 @@ class SokujaProvider : MainAPI() {
             doc.select("iframe, .video-content iframe").forEach { iframe ->
                 val src = fixUrl(iframe.attr("src") ?: iframe.attr("data-src"))
                 if (src.isNotEmpty() && !src.contains("google")) {
-                    // PERBAIKAN: Tambahkan referer agar ekstraktor tidak diblokir
-                    loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
+                    loadExtractor(src, subtitleCallback, callback)
                 }
             }
         }
@@ -318,8 +284,7 @@ class SokujaProvider : MainAPI() {
                     collectedLinks.add(link)
                     callback(link)
                 } else {
-                    // PERBAIKAN: Tambahkan referer agar ekstraktor tidak diblokir
-                    loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
+                    loadExtractor(url, subtitleCallback, callback)
                 }
             }
         }

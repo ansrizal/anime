@@ -217,9 +217,7 @@ class SokujaProvider : MainAPI() {
         try {
             val startIndex = scriptData.indexOf("\"episodes\":")
             if (startIndex != -1) {
-                // Ambil potongan string array JSON episode
                 val jsonArrayStr = scriptData.substring(startIndex).substringAfter("[").substringBefore("]")
-                // Regex longgar: cari object yang memiliki slug dan episodeNumber dalam urutan apapun
                 Regex("""\{[^{}]*?"slug"\s*:\s*"([^"]+)"[^{}]*?"episodeNumber"\s*:\s*(\d+)[^{}]*?\}""").findAll(jsonArrayStr).forEach { match ->
                     val slug = match.groupValues[1]
                     val epNum = match.groupValues[2].toIntOrNull() ?: 0
@@ -232,7 +230,7 @@ class SokujaProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            // Abaikan error parsing JSON, lanjut ke fallback
+            // Abaikan error parsing JSON
         }
 
         // 2. Fallback ke Regex lama jika JSON gagal
@@ -245,13 +243,13 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // 3. Fallback ke HTML DOM (Jika situs merender episode secara statis)
+        // 3. Fallback ke HTML DOM
         if (episodes.isEmpty()) {
             document.select("a[href*='-episode-'], .eplist ul li a, div.grid a[href*='/episode/']").forEach { a ->
                 val href = a.attr("href")
                 if (href.isNotBlank()) {
                     val epNum = Regex("""(?:episode|ep)[-/\s]*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
-                        ?: Regex("""/(\d+)/?$""").find(href)?.groupValues?.get(1)?.toIntOrNull() // coba ambil angka di akhir URL
+                        ?: Regex("""/(\d+)/?$""").find(href)?.groupValues?.get(1)?.toIntOrNull()
                     
                     if (epNum != null) {
                         episodes.add(newEpisode(fixUrl(href)) { 
@@ -263,7 +261,6 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
         val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
 
@@ -301,7 +298,8 @@ class SokujaProvider : MainAPI() {
             doc.select("iframe, .video-content iframe").forEach { iframe ->
                 val src = fixUrl(iframe.attr("src") ?: iframe.attr("data-src"))
                 if (src.isNotEmpty() && !src.contains("google")) {
-                    loadExtractor(src, subtitleCallback, callback)
+                    // PERBAIKAN: Tambahkan referer agar ekstraktor tidak diblokir
+                    loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
                 }
             }
         }
@@ -320,7 +318,8 @@ class SokujaProvider : MainAPI() {
                     collectedLinks.add(link)
                     callback(link)
                 } else {
-                    loadExtractor(url, subtitleCallback, callback)
+                    // PERBAIKAN: Tambahkan referer agar ekstraktor tidak diblokir
+                    loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
                 }
             }
         }

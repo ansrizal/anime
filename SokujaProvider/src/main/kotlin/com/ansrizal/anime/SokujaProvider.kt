@@ -132,7 +132,7 @@ class SokujaProvider : MainAPI() {
 
         val epText = selectFirst(".epx, .ep, .episode, .text-gray-400")?.text()?.trim()
         if (!epText.isNullOrBlank() && (epText.contains("Episode", true) || epText.contains("EP ", true))) {
-            val cleanEp = epText.replace(Regex("""\s*Â·.*"""), "")
+            val cleanEp = epText.replace(Regex("""\s*·.*"""), "")
             if (!title.contains(cleanEp, true)) title = "$title - $cleanEp"
         }
 
@@ -187,29 +187,31 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // ----- PARSING SEPERTI BIASA -----
-        val rawData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
+        // ----- PARSING DATA -----
+        // Mengambil semua text dari script untuk mencari data JSON Next.js
+        val rawScriptData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
+
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
 
-        // ----- PERBAIKAN SINopsis & GENRE UNTUK HALAMAN ANIME -----
-        // 1. Sinopsis: cari di div.prose.prose-invert (atau .prose-invert) pada halaman anime
+        // Sinopsis & Genre
         val description = document.selectFirst("div.prose.prose-invert, div.prose-invert, div.prose")?.text()?.trim()
             ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // 2. Genre: ambil dari div.flex.flex-wrap.gap-2 yang berisi link genre (biasanya di atas halaman anime)
         val genreElements = document.select("div.flex.flex-wrap.gap-2 a[href*='/genre/']")
         val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
-            .ifEmpty { // fallback ke area informasi series jika tidak ditemukan
+            .ifEmpty {
                 document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
                     .mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
             }
 
         // ----- AMBIL DAFTAR EPISODE -----
         val episodes = mutableListOf<Episode>()
+
+        // CARA 1: Regex Lama (Format Spesifik)
         Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
-            .findAll(rawData).forEach { match ->
+            .findAll(rawScriptData).forEach { match ->
                 val epUrl = if (match.groupValues[2].startsWith("/")) "$mainUrl${match.groupValues[2]}" else "$mainUrl/${match.groupValues[2]}"
                 episodes.add(newEpisode(epUrl) {
                     this.name = match.groupValues[3]
@@ -218,15 +220,36 @@ class SokujaProvider : MainAPI() {
                 })
             }
 
+        // CARA 2: Regex Fleksibel untuk anime baru (menangkap JSON Next.js)
         if (episodes.isEmpty()) {
-            document.select("a[href*='-episode-'], .eplist ul li a").forEach { a ->
-                val href = a.attr("href")
-                val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
-                if (epNum != null) episodes.add(newEpisode(fixUrl(href)) { this.name = a.text().trim(); this.episode = epNum })
+            val flexibleRegex = Regex("""\{"id":(\d+),"slug":"([^"]+)","title":"([^"]+)","episodeNumber":(\d+).*?\}""")
+            flexibleRegex.findAll(rawScriptData).forEach { match ->
+                val epUrl = if (match.groupValues[2].startsWith("/")) "$mainUrl${match.groupValues[2]}" else "$mainUrl/${match.groupValues[2]}"
+                episodes.add(newEpisode(epUrl) {
+                    this.name = match.groupValues[3]
+                    this.episode = match.groupValues[4].toIntOrNull() ?: 0
+                    this.data = match.groupValues[1]
+                })
             }
         }
 
-        // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
+        // CARA 3: Fallback HTML (Jika script benar-benar tidak memuat data episode)
+        if (episodes.isEmpty()) {
+            document.select("a[href*='-episode-'], .eplist ul li a, div.episode-list a, ul.episodes a, .list-episode a").forEach { a ->
+                val href = a.attr("href")
+                val epNum = Regex("""(?:episode|ep)[\s-]*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""(\d+)""").find(a.text())?.groupValues?.get(1)?.toIntOrNull()
+
+                if (epNum != null) {
+                    episodes.add(newEpisode(fixUrl(href)) {
+                        this.name = a.text().trim().ifEmpty { "Episode $epNum" }
+                        this.episode = epNum
+                    })
+                }
+            }
+        }
+
+        // Urutkan episode ascending (1,2,3,...)
         val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
 
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime

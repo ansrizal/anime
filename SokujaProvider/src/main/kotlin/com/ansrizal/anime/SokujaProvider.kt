@@ -165,10 +165,15 @@ class SokujaProvider : MainAPI() {
         var res = request(currentUrl)
         var document = res.document
 
-        // [REDIRECT LOGIC] Jika ini halaman episode (Update Terbaru), cari link ke halaman series utama
-        if (currentUrl.contains("-episode-") && !currentUrl.contains("/anime/")) {
+        // [REDIRECT LOGIC] Perbaikan: Cek URL yang lebih luas (termasuk yang berakhiran angka)
+        val isEpisodePage = currentUrl.contains("-episode-") || 
+                            currentUrl.contains("/episode/") || 
+                            Regex("""/\d+/?$""").containsMatchIn(currentUrl)
+
+        if (isEpisodePage && !currentUrl.contains("/anime/")) {
             val seriesLink = document.selectFirst("main a[href*='/anime/']:not([href*='list-mode'])")?.attr("href")
                 ?: document.selectFirst(".breadcrumb a[href*='/anime/']")?.attr("href")
+                ?: document.selectFirst("a[href*='/anime/']")?.attr("href")
 
             if (seriesLink != null) {
                 currentUrl = fixUrl(seriesLink)
@@ -187,48 +192,79 @@ class SokujaProvider : MainAPI() {
             }
         }
 
-        // ----- PARSING SEPERTI BIASA -----
-        val rawData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
+        // ----- PARSING DATA UTAMA -----
         val title = document.selectFirst("h1")?.text()?.replace("Subtitle Indonesia", "")?.trim() ?: "Sokuja Anime"
         val rawPoster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: document.selectFirst("img[alt*='$title']")?.attr("src")
         val poster = fixImageUrl(rawPoster)
 
-        // ----- PERBAIKAN SINopsis & GENRE UNTUK HALAMAN ANIME -----
-        // 1. Sinopsis: cari di div.prose.prose-invert (atau .prose-invert) pada halaman anime
+        // Sinopsis
         val description = document.selectFirst("div.prose.prose-invert, div.prose-invert, div.prose")?.text()?.trim()
             ?: document.selectFirst("div.sinopsis, div.synopsis, div.desc, p.leading-relaxed, .entry-content p, .desc")?.text()?.trim()
 
-        // 2. Genre: ambil dari div.flex.flex-wrap.gap-2 yang berisi link genre (biasanya di atas halaman anime)
+        // Genre
         val genreElements = document.select("div.flex.flex-wrap.gap-2 a[href*='/genre/']")
         val tags = genreElements.mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
-            .ifEmpty { // fallback ke area informasi series jika tidak ditemukan
+            .ifEmpty {
                 document.select("div.rounded-xl.bg-sokuja-card.p-4 a[href*='/genre/']")
                     .mapNotNull { it.text().trim().ifEmpty { null } }.distinct()
             }
 
-        // ----- AMBIL DAFTAR EPISODE -----
+        // ----- AMBIL DAFTAR EPISODE (PERBAIKAN UTAMA) -----
         val episodes = mutableListOf<Episode>()
-        Regex("""["']id["']:\s*(\d+)\s*,\s*["']slug["']:\s*["']([^"']+)["']\s*,\s*["']title["']:\s*["']([^"']+)["']\s*,\s*["']episodeNumber["']:\s*(\d+)""")
-            .findAll(rawData).forEach { match ->
-                val epUrl = if (match.groupValues[2].startsWith("/")) "$mainUrl${match.groupValues[2]}" else "$mainUrl/${match.groupValues[2]}"
-                episodes.add(newEpisode(epUrl) {
-                    this.name = match.groupValues[3]
-                    this.episode = match.groupValues[4].toIntOrNull() ?: 0
-                    this.data = match.groupValues[1]
-                })
-            }
+        val scriptData = document.select("script").joinToString { it.data() }.replace("\\\"", "\"").replace("\\\\", "\\")
 
+        // 1. Coba parsing menggunakan struktur JSON Next.js (__NEXT_DATA__)
+        try {
+            val startIndex = scriptData.indexOf("\"episodes\":")
+            if (startIndex != -1) {
+                // Ambil potongan string array JSON episode
+                val jsonArrayStr = scriptData.substring(startIndex).substringAfter("[").substringBefore("]")
+                // Regex longgar: cari object yang memiliki slug dan episodeNumber dalam urutan apapun
+                Regex("""\{[^{}]*?"slug"\s*:\s*"([^"]+)"[^{}]*?"episodeNumber"\s*:\s*(\d+)[^{}]*?\}""").findAll(jsonArrayStr).forEach { match ->
+                    val slug = match.groupValues[1]
+                    val epNum = match.groupValues[2].toIntOrNull() ?: 0
+                    val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
+                    
+                    episodes.add(newEpisode(epUrl) {
+                        this.name = "Episode $epNum"
+                        this.episode = epNum
+                    })
+                }
+            }
+        } catch (e: Exception) {
+            // Abaikan error parsing JSON, lanjut ke fallback
+        }
+
+        // 2. Fallback ke Regex lama jika JSON gagal
         if (episodes.isEmpty()) {
-            document.select("a[href*='-episode-'], .eplist ul li a").forEach { a ->
+            Regex("""["']slug["']:\s*["']([^"']+)["'][^{}]*?["']episodeNumber["']:\s*(\d+)""").findAll(scriptData).forEach { match ->
+                val slug = match.groupValues[1]
+                val epNum = match.groupValues[2].toIntOrNull() ?: 0
+                val epUrl = if (slug.startsWith("/")) "$mainUrl$slug" else "$mainUrl/$slug"
+                episodes.add(newEpisode(epUrl) { this.name = "Episode $epNum"; this.episode = epNum })
+            }
+        }
+
+        // 3. Fallback ke HTML DOM (Jika situs merender episode secara statis)
+        if (episodes.isEmpty()) {
+            document.select("a[href*='-episode-'], .eplist ul li a, div.grid a[href*='/episode/']").forEach { a ->
                 val href = a.attr("href")
-                val epNum = Regex("""episode\s*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
-                if (epNum != null) episodes.add(newEpisode(fixUrl(href)) { this.name = a.text().trim(); this.episode = epNum })
+                if (href.isNotBlank()) {
+                    val epNum = Regex("""(?:episode|ep)[-/\s]*(\d+)""", RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: Regex("""/(\d+)/?$""").find(href)?.groupValues?.get(1)?.toIntOrNull() // coba ambil angka di akhir URL
+                    
+                    if (epNum != null) {
+                        episodes.add(newEpisode(fixUrl(href)) { 
+                            this.name = a.text().trim().ifEmpty { "Episode $epNum" }
+                            this.episode = epNum 
+                        })
+                    }
+                }
             }
         }
 
         // Urutkan episode ascending (1,2,3,...) agar next bekerja dengan benar
         val sortedEpisodes = episodes.distinctBy { it.episode }.sortedBy { it.episode ?: 0 }
-
         val type = if (currentUrl.contains("movie") || title.lowercase().contains("movie")) TvType.AnimeMovie else TvType.Anime
 
         // ----- SIMPAN KE CACHE -----

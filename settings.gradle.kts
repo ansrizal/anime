@@ -91,3 +91,5 @@ include(":MissAVProvider")
 include(":BStationProvider")
 include(":GojonimeProvider")
 include(":LoklokProvider")
+include(":MynimekuProvider")
+

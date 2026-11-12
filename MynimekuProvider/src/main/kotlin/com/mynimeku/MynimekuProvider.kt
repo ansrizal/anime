@@ -262,10 +262,27 @@ class MynimekuProvider : MainAPI() {
         // 1. Episode Player buttons
         doc.select("button.mynimeku-episode-server-btn[data-player-url]").forEach { btn ->
             val playerUrl = fixUrlNull(btn.attr("data-player-url")) ?: return@forEach
-            val host = btn.attr("data-player-host").ifBlank { "Server" }
-            val type = btn.attr("data-player-type")
-            val label = if (type.isNotBlank()) "$host ($type)" else host
-            servers.add(label.trim() to playerUrl)
+            
+            // Mengambil teks kualitas dari tombol, contoh: "CLOUD 360P"
+            val qualityText = btn.text().trim()
+            
+            // Mengambil tipe server dari atribut, contoh: "public" atau "private"
+            val serverType = btn.attr("data-player-type").trim()
+            
+            // Menyusun label baru: (tipe) (host) kualitas
+            val hostName = "MyPlayerKu" // Nama host statis berdasarkan URL
+            
+            val finalLabel = buildString {
+                if (serverType.isNotBlank()) {
+                    append("($serverType) ")
+                }
+                if (hostName.isNotBlank()) {
+                    append("($hostName) ")
+                }
+                append(qualityText)
+            }.trim()
+
+            servers.add(finalLabel to playerUrl)
         }
 
         // 2. Download links

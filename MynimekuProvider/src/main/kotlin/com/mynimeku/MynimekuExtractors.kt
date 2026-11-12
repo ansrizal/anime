@@ -30,72 +30,65 @@ open class MyPlayerKuExtractor : ExtractorApi() {
         )
 
         try {
-            val responseText = app.get(url, headers = headers).text
-
-            val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
-            val packedCode = packedRegex.find(responseText)?.value
-            val contentToSearch = if (packedCode != null) {
-                JsUnpacker(packedCode).unpack() ?: responseText
+            // Get redirect Location header without downloading the video body
+            val res = app.get(url, headers = headers, allowRedirects = false)
+            val location = res.headers["Location"] ?: res.headers["location"]
+            val targetUrl = if (!location.isNullOrBlank()) {
+                if (location.startsWith("http")) location else "$mainUrl$location"
             } else {
-                responseText
+                url
             }
 
-            val doc = Jsoup.parse(contentToSearch)
+            if (targetUrl != url && !targetUrl.contains("myplayerku.my.id") && !targetUrl.contains("mydriveku.my.id")) {
+                val loaded = loadExtractor(targetUrl, url, subtitleCallback, callback)
+                if (loaded) return
+            }
 
-            // Extract embed / iframe
-            doc.select("iframe[src]").forEach { iframe ->
-                val iframeUrl = iframe.attr("src")
-                if (iframeUrl.startsWith("http")) {
-                    loadExtractor(iframeUrl, url, subtitleCallback, callback)
+            val qualityStr = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(url)?.value
+                ?: Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(referer.orEmpty())?.value
+                ?: ""
+
+            val quality = when {
+                qualityStr.contains("1080") -> Qualities.P1080.value
+                qualityStr.contains("720") -> Qualities.P720.value
+                qualityStr.contains("480") -> Qualities.P480.value
+                qualityStr.contains("360") -> Qualities.P360.value
+                else -> Qualities.Unknown.value
+            }
+
+            val displayName = if (qualityStr.isNotBlank()) "$name $qualityStr" else name
+
+            callback.invoke(
+                newExtractorLink(
+                    source = "Mynimeku",
+                    name = displayName,
+                    url = targetUrl
+                ) {
+                    this.referer = url
+                    this.quality = quality
                 }
-            }
-
-            // Extract m3u8
-            val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-            m3u8Regex.findAll(contentToSearch).forEach { match ->
-                val m3u8Url = match.groupValues[1].replace("\\/", "/")
-                M3u8Helper.generateM3u8(
-                    name,
-                    m3u8Url,
-                    referer = url,
-                    headers = headers
-                ).forEach { link ->
-                    callback.invoke(link)
+            )
+        } catch (_: Exception) {
+            callback.invoke(
+                newExtractorLink(
+                    source = "Mynimeku",
+                    name = name,
+                    url = url
+                ) {
+                    this.referer = referer ?: "https://www.mynimeku.com/"
+                    this.quality = Qualities.Unknown.value
                 }
-            }
-
-            // Extract mp4
-            val mp4Regex = Regex("""["'](https?://[^"']+\.(?:mp4|mkv)[^"']*)["']""")
-            mp4Regex.findAll(contentToSearch).forEach { match ->
-                val videoUrl = match.groupValues[1].replace("\\/", "/")
-                callback.invoke(
-                    newExtractorLink(
-                        name,
-                        name,
-                        videoUrl
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
+            )
+        }
     }
 }
 
-class MyDriveKuExtractor : ExtractorApi() {
+class MyDriveKuExtractor : MyPlayerKuExtractor() {
     override var name = "MyDriveKu"
     override var mainUrl = "https://file.mydriveku.my.id"
-    override var requiresReferer = true
+}
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val playerKu = MyPlayerKuExtractor()
-        playerKu.name = name
-        playerKu.getUrl(url, referer, subtitleCallback, callback)
-    }
+class StreamMyPlayerKuExtractor : MyPlayerKuExtractor() {
+    override var name = "MyPlayerKu Stream"
+    override var mainUrl = "https://stream.myplayerku.my.id"
 }

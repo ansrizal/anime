@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.runBlocking
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
@@ -23,6 +24,7 @@ class MynimekuProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "latest-series/page/%d/" to "Series Terbaru",
         "full-list/mix/o:popular/page/%d/" to "Popular Series",
+        "a-z-list/page/%d/" to "List Anime",
         "full-list/mix/s:completed~t:BD,LA,MOVIE,MUSIC,ONA,OVA,SPECIAL,TV/page/%d/" to "Completed Series",
         "full-list/mix/s:on-going~t:BD,LA,MOVIE,MUSIC,ONA,OVA,SPECIAL,TV/page/%d/" to "On-Going Series",
         "full-list/mix/t:MOVIE/page/%d/" to "Anime Movie"
@@ -278,11 +280,58 @@ class MynimekuProvider : MainAPI() {
         )
 
         try {
-            val loaded = loadExtractor(serverUrl, referer, subtitleCallback, callback)
+            // First try registered extractors
+            val loaded = loadExtractor(serverUrl, referer, subtitleCallback) { link ->
+                runBlocking {
+                    callback.invoke(
+                        newExtractorLink(
+                            name = "$serverName (${link.name})",
+                            source = link.source,
+                            url = link.url,
+                            type = link.type
+                        ) {
+                            this.referer = link.referer
+                            this.headers = link.headers
+                            this.quality = link.quality
+                            this.extractorData = link.extractorData
+                        }
+                    )
+                }
+            }
             if (loaded) return
 
-            val response = app.get(serverUrl, headers = headers)
-            val responseText = response.text
+            // If not handled by registered extractor, check 301/302 redirect header
+            val res = app.get(serverUrl, headers = headers, allowRedirects = false)
+            val location = res.headers["Location"] ?: res.headers["location"]
+            val targetUrl = if (!location.isNullOrBlank()) {
+                fixUrl(location)
+            } else {
+                serverUrl
+            }
+
+            if (targetUrl != serverUrl) {
+                val loadedRedirect = loadExtractor(targetUrl, serverUrl, subtitleCallback) { link ->
+                    runBlocking {
+                        callback.invoke(
+                            newExtractorLink(
+                                name = "$serverName (${link.name})",
+                                source = link.source,
+                                url = link.url,
+                                type = link.type
+                            ) {
+                                this.referer = link.referer
+                                this.headers = link.headers
+                                this.quality = link.quality
+                                this.extractorData = link.extractorData
+                            }
+                        )
+                    }
+                }
+                if (loadedRedirect) return
+            }
+
+            // Fetch content if not redirected to external extractor
+            val responseText = if (res.code == 200) res.text else app.get(targetUrl, headers = headers).text
 
             val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
             val packedCode = packedRegex.find(responseText)?.value
@@ -293,9 +342,13 @@ class MynimekuProvider : MainAPI() {
             }
 
             val playerDoc = Jsoup.parse(contentToSearch)
+            var found = false
+
             playerDoc.select("iframe[src]").forEach { iframe ->
                 val iframeUrl = fixUrlNull(iframe.attr("src")) ?: return@forEach
-                loadExtractor(iframeUrl, serverUrl, subtitleCallback, callback)
+                if (loadExtractor(iframeUrl, targetUrl, subtitleCallback, callback)) {
+                    found = true
+                }
             }
 
             val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
@@ -304,11 +357,12 @@ class MynimekuProvider : MainAPI() {
                 M3u8Helper.generateM3u8(
                     serverName,
                     m3u8Url,
-                    referer = serverUrl,
+                    referer = targetUrl,
                     headers = headers
                 ).forEach { link ->
                     callback.invoke(link)
                 }
+                found = true
             }
 
             val mp4Regex = Regex("""["'](https?://[^"']+\.(?:mp4|mkv|webm)[^"']*)["']""")
@@ -317,46 +371,41 @@ class MynimekuProvider : MainAPI() {
                 val qualityStr = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(serverName)?.value ?: "Unknown"
                 callback.invoke(
                     newExtractorLink(
-                        serverName,
-                        serverName,
-                        videoUrl
+                        source = name,
+                        name = serverName,
+                        url = videoUrl
                     ) {
-                        this.referer = serverUrl
+                        this.referer = targetUrl
                         this.quality = getQualityFromName(qualityStr)
                     }
                 )
+                found = true
             }
 
-            val fileRegex = Regex("""(?:file|src|url)\s*:\s*["']([^"']+)["']""")
-            fileRegex.findAll(contentToSearch).forEach { match ->
-                val fileUrl = match.groupValues[1].replace("\\/", "/")
-                if (fileUrl.startsWith("http")) {
-                    if (fileUrl.contains(".m3u8")) {
-                        M3u8Helper.generateM3u8(
-                            serverName,
-                            fileUrl,
-                            referer = serverUrl,
-                            headers = headers
-                        ).forEach { link ->
-                            callback.invoke(link)
-                        }
-                    } else if (fileUrl.contains(".mp4") || fileUrl.contains("/stream/") || fileUrl.contains("/video/")) {
-                        callback.invoke(
-                            newExtractorLink(
-                                serverName,
-                                serverName,
-                                fileUrl
-                            ) {
-                                this.referer = serverUrl
-                                this.quality = getQualityFromName(serverName)
-                            }
-                        )
-                    } else {
-                        loadExtractor(fileUrl, serverUrl, subtitleCallback, callback)
+            if (!found && (targetUrl.startsWith("http://") || targetUrl.startsWith("https://"))) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = serverName,
+                        url = targetUrl
+                    ) {
+                        this.referer = serverUrl
+                        this.quality = getQualityFromName(serverName)
                     }
-                }
+                )
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = serverName,
+                    url = serverUrl
+                ) {
+                    this.referer = referer
+                    this.quality = getQualityFromName(serverName)
+                }
+            )
+        }
     }
 
     private fun getQualityFromName(name: String): Int {

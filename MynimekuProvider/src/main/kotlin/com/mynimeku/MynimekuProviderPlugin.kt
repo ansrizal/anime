@@ -16,6 +16,7 @@ class MynimekuProviderPlugin : Plugin() {
         registerMainAPI(MynimekuProvider())
         registerExtractorAPI(MyPlayerKuExtractor())
         registerExtractorAPI(MyDriveKuExtractor())
+        registerExtractorAPI(StreamMyPlayerKuExtractor())
         registerExtractorAPI(PixelDrain())
         registerExtractorAPI(Gofile())
         registerExtractorAPI(Krakenfiles())

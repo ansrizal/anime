@@ -155,9 +155,9 @@ class MynimekuProvider : MainAPI() {
             }
         }
 
-        // Prioritaskan selector yang sangat spesifik, hindari h1 generic
+        // --- PERBAIKAN SELECTOR TITLE ---
         val title = doc.selectFirst("h1.komik-series-hero__title")?.text()?.trim()
-            ?: doc.selectFirst("article.komik-series-page h1")?.text()?.trim() // h1 di dalam article series
+            ?: doc.selectFirst("article.komik-series-page h1")?.text()?.trim()
             ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.trim()?.removeSuffix(" - MyNimeku")
             ?: "Unknown"
 
@@ -170,6 +170,7 @@ class MynimekuProvider : MainAPI() {
         val synopsis = doc.select("div.komik-series-entry p, div.komik-series-hero__synopsis p, div.entry-content p")
             .text().trim()
 
+        // --- PERBAIKAN SELECTOR GENRE ---
         val genres = doc.select("div.komik-series-taxonomy__terms a, div.komik-series-taxonomy__row a, .genxed a")
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
@@ -232,14 +233,14 @@ class MynimekuProvider : MainAPI() {
 
         return newAnimeLoadResponse(title, animeUrl, tvType) {
             this.posterUrl = poster
-    
-    // Tampilkan genre di plot agar PASTI terlihat (jika aplikasi tidak render tags)
+
+            // Tampilkan genre di plot agar PASTI terlihat
             val genreText = if (genres.isNotEmpty()) {
                 "Genre: ${genres.joinToString(", ")}\n\n$synopsis"
             } else {
                 synopsis
             }
-    
+
             this.plot = genreText
             this.tags = genres
             this.year = year
@@ -263,24 +264,17 @@ class MynimekuProvider : MainAPI() {
         doc.select("button.mynimeku-episode-server-btn[data-player-url]").forEach { btn ->
             val playerUrl = fixUrlNull(btn.attr("data-player-url")) ?: return@forEach
             
-            // Mengambil teks kualitas dari tombol, contoh: "CLOUD 360P"
+            // Ambil teks kualitas (misal: "CLOUD 360P")
             val qualityText = btn.text().trim()
-            
-            // Mengambil tipe server dari atribut, contoh: "public" atau "private"
+            // Ambil tipe server (public/private)
             val serverType = btn.attr("data-player-type").trim()
             
-            // Menyusun label baru: (tipe) (host) kualitas
-            val hostName = "MyPlayerKu" // Nama host statis berdasarkan URL
-            
-            val finalLabel = buildString {
-                if (serverType.isNotBlank()) {
-                    append("($serverType) ")
-                }
-                if (hostName.isNotBlank()) {
-                    append("($hostName) ")
-                }
-                append(qualityText)
-            }.trim()
+            // Format nama menjadi: (public) CLOUD 360P
+            val finalLabel = if (serverType.isNotBlank()) {
+                "($serverType) $qualityText"
+            } else {
+                qualityText
+            }
 
             servers.add(finalLabel to playerUrl)
         }
@@ -322,20 +316,27 @@ class MynimekuProvider : MainAPI() {
             "Accept-Language" to "en-US,en;q=0.9,id;q=0.8"
         )
 
+        // 1. Ambil kualitas (misal: 360, 480, 720)
+        val detectedQuality = getQualityFromName(serverName)
+        
+        // 2. Ambil nama sumber (CLOUD, DRIVE, atau PROXY)
+        // Kita buang tanda kurung dan ambil kata pertama
+        val cleanName = serverName.replace(Regex("""\(.*?\)"""), "").trim() // Hasil: "CLOUD 360P"
+        val sourceName = cleanName.substringBefore(" ").uppercase() // Hasil: "CLOUD"
+
         try {
-            // First try registered extractors
             val loaded = loadExtractor(serverUrl, referer, subtitleCallback) { link ->
                 runBlocking {
                     callback.invoke(
                         newExtractorLink(
+                            source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                             name = serverName,
-                            source = link.source,
                             url = link.url,
                             type = link.type
                         ) {
                             this.referer = link.referer
                             this.headers = link.headers
-                            this.quality = link.quality
+                            this.quality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else link.quality
                             this.extractorData = link.extractorData
                         }
                     )
@@ -343,28 +344,23 @@ class MynimekuProvider : MainAPI() {
             }
             if (loaded) return
 
-            // If not handled by registered extractor, check 301/302 redirect header
             val res = app.get(serverUrl, headers = headers, allowRedirects = false)
             val location = res.headers["Location"] ?: res.headers["location"]
-            val targetUrl = if (!location.isNullOrBlank()) {
-                fixUrl(location)
-            } else {
-                serverUrl
-            }
+            val targetUrl = if (!location.isNullOrBlank()) fixUrl(location) else serverUrl
 
             if (targetUrl != serverUrl) {
                 val loadedRedirect = loadExtractor(targetUrl, serverUrl, subtitleCallback) { link ->
                     runBlocking {
                         callback.invoke(
                             newExtractorLink(
+                                source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                                 name = serverName,
-                                source = link.source,
                                 url = link.url,
                                 type = link.type
                             ) {
                                 this.referer = link.referer
                                 this.headers = link.headers
-                                this.quality = link.quality
+                                this.quality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else link.quality
                                 this.extractorData = link.extractorData
                             }
                         )
@@ -373,7 +369,6 @@ class MynimekuProvider : MainAPI() {
                 if (loadedRedirect) return
             }
 
-            // Fetch content if not redirected to external extractor
             val responseText = if (res.code == 200) res.text else app.get(targetUrl, headers = headers).text
 
             val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
@@ -398,11 +393,12 @@ class MynimekuProvider : MainAPI() {
             m3u8Regex.findAll(contentToSearch).forEach { match ->
                 val m3u8Url = match.groupValues[1].replace("\\/", "/")
                 M3u8Helper.generateM3u8(
-                    serverName,
+                    sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                     m3u8Url,
                     referer = targetUrl,
                     headers = headers
                 ).forEach { link ->
+                    link.quality = detectedQuality
                     callback.invoke(link)
                 }
                 found = true
@@ -411,15 +407,14 @@ class MynimekuProvider : MainAPI() {
             val mp4Regex = Regex("""["'](https?://[^"']+\.(?:mp4|mkv|webm)[^"']*)["']""")
             mp4Regex.findAll(contentToSearch).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
-                val qualityStr = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(serverName)?.value ?: "Unknown"
                 callback.invoke(
                     newExtractorLink(
-                        source = name,
+                        source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                         name = serverName,
                         url = videoUrl
                     ) {
                         this.referer = targetUrl
-                        this.quality = getQualityFromName(qualityStr)
+                        this.quality = detectedQuality
                     }
                 )
                 found = true
@@ -428,24 +423,24 @@ class MynimekuProvider : MainAPI() {
             if (!found && (targetUrl.startsWith("http://") || targetUrl.startsWith("https://"))) {
                 callback.invoke(
                     newExtractorLink(
-                        source = name,
+                        source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                         name = serverName,
                         url = targetUrl
                     ) {
                         this.referer = serverUrl
-                        this.quality = getQualityFromName(serverName)
+                        this.quality = detectedQuality
                     }
                 )
             }
         } catch (_: Exception) {
             callback.invoke(
                 newExtractorLink(
-                    source = name,
+                    source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
                     name = serverName,
                     url = serverUrl
                 ) {
                     this.referer = referer
-                    this.quality = getQualityFromName(serverName)
+                    this.quality = detectedQuality
                 }
             )
         }

@@ -104,23 +104,19 @@ class MynimekuProvider : MainAPI() {
 
         val statusText = selectFirst(".mynimeku-update-widget__status, .mynimeku-search-feed__status")?.text()?.trim().orEmpty()
 
-        return newAnimeLoadResponse(title, animeUrl, tvType) {
-            this.posterUrl = poster
-    
-            // Tampilkan genre di plot agar PASTI terlihat (jika aplikasi tidak render tags)
-            val genreText = if (genres.isNotEmpty()) {
-                "Genre: ${genres.joinToString(", ")}\n\n$synopsis"
-            } else {
-                synopsis
+        return newAnimeSearchResponse(cleanTitle, href, tvType) {
+            this.posterUrl = posterUrl
+            if (epNum != null) {
+                addSub(epNum)
             }
-    
-            this.plot = genreText
-            this.tags = genres
-            this.year = year
-            this.showStatus = status
-            this.score = Score.from10(rating)
-            addEpisodes(DubStatus.Subbed, episodes)
-         }
+            val metaInfo = listOfNotNull(
+                typeStr.ifBlank { null },
+                statusText.ifBlank { null }
+            ).joinToString(" • ")
+            if (metaInfo.isNotBlank()) {
+                this.otherName = metaInfo
+            }
+        }
     }
 
     private fun fixImageUrl(url: String?): String? {
@@ -236,7 +232,15 @@ class MynimekuProvider : MainAPI() {
 
         return newAnimeLoadResponse(title, animeUrl, tvType) {
             this.posterUrl = poster
-            this.plot = synopsis
+    
+    // Tampilkan genre di plot agar PASTI terlihat (jika aplikasi tidak render tags)
+            val genreText = if (genres.isNotEmpty()) {
+                "Genre: ${genres.joinToString(", ")}\n\n$synopsis"
+            } else {
+                synopsis
+            }
+    
+            this.plot = genreText
             this.tags = genres
             this.year = year
             this.showStatus = status

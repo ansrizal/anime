@@ -65,7 +65,7 @@ class MynimekuProvider : MainAPI() {
         if (href.isBlank() || href.contains("/page/")) return null
 
         // Skip comic/manga
-        val typeStr = selectFirst(".mynimeku-update-widget__type, .mynimeku-search-feed__type, .typez")?.text().orEmpty().uppercase()
+        val typeStr = selectFirst(".mynimeku-update-widget__type, .mynimeku-search-feed__type, .typez")?.text().orEmpty().trim().uppercase()
         if (typeStr.contains("MANGA") || typeStr.contains("MANHWA") || typeStr.contains("MANHUA") || typeStr.contains("DOUJINSHI") || typeStr.contains("ONE-SHOT") || href.contains("/komik/")) {
             return null
         }
@@ -96,12 +96,26 @@ class MynimekuProvider : MainAPI() {
             else -> TvType.Anime
         }
 
-        val epNum = selectFirst(".mynimeku-update-widget__latest-pill, .epx")?.text()
+        val epNum = selectFirst(".mynimeku-update-widget__latest-pill, .epx, .mynimeku-search-feed__latest")?.text()
             ?.let { Regex("""\d+""").find(it)?.value?.toIntOrNull() }
+            ?: selectFirst("a[href*='/episode/']")?.attr("href")
+                ?.let { Regex("""episode-(\d+)""", RegexOption.IGNORE_CASE).find(it)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            ?: Regex("""(?i)Episode\s*(\d+)""").find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        val statusText = selectFirst(".mynimeku-update-widget__status, .mynimeku-search-feed__status")?.text()?.trim().orEmpty()
 
         return newAnimeSearchResponse(cleanTitle, href, tvType) {
             this.posterUrl = posterUrl
-            addSub(epNum)
+            if (epNum != null) {
+                addSub(epNum)
+            }
+            val metaInfo = listOfNotNull(
+                typeStr.ifBlank { null },
+                statusText.ifBlank { null }
+            ).joinToString(" • ")
+            if (metaInfo.isNotBlank()) {
+                this.otherName = metaInfo
+            }
         }
     }
 

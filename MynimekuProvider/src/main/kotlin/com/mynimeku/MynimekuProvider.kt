@@ -328,7 +328,7 @@ class MynimekuProvider : MainAPI() {
                 runBlocking {
                     callback.invoke(
                         newExtractorLink(
-                            name = "$serverName (${link.name})",
+                            name = serverName,
                             source = link.source,
                             url = link.url,
                             type = link.type
@@ -357,7 +357,7 @@ class MynimekuProvider : MainAPI() {
                     runBlocking {
                         callback.invoke(
                             newExtractorLink(
-                                name = "$serverName (${link.name})",
+                                name = serverName,
                                 source = link.source,
                                 url = link.url,
                                 type = link.type

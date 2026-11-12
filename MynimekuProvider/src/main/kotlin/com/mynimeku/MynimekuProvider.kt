@@ -155,7 +155,10 @@ class MynimekuProvider : MainAPI() {
             }
         }
 
-        val title = doc.selectFirst("h1.komik-series-hero__title, h1.entry-title, h1")?.text()?.trim()
+        // Prioritaskan selector yang sangat spesifik, hindari h1 generic
+        val title = doc.selectFirst("h1.komik-series-hero__title")?.text()?.trim()
+            ?: doc.selectFirst("article.komik-series-page h1")?.text()?.trim() // h1 di dalam article series
+            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.trim()?.removeSuffix(" - MyNimeku")
             ?: "Unknown"
 
         val poster = fixImageUrl(

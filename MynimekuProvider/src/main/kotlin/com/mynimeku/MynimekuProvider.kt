@@ -104,19 +104,23 @@ class MynimekuProvider : MainAPI() {
 
         val statusText = selectFirst(".mynimeku-update-widget__status, .mynimeku-search-feed__status")?.text()?.trim().orEmpty()
 
-        return newAnimeSearchResponse(cleanTitle, href, tvType) {
-            this.posterUrl = posterUrl
-            if (epNum != null) {
-                addSub(epNum)
+        return newAnimeLoadResponse(title, animeUrl, tvType) {
+            this.posterUrl = poster
+    
+            // Tampilkan genre di plot agar PASTI terlihat (jika aplikasi tidak render tags)
+            val genreText = if (genres.isNotEmpty()) {
+                "Genre: ${genres.joinToString(", ")}\n\n$synopsis"
+            } else {
+                synopsis
             }
-            val metaInfo = listOfNotNull(
-                typeStr.ifBlank { null },
-                statusText.ifBlank { null }
-            ).joinToString(" • ")
-            if (metaInfo.isNotBlank()) {
-                this.otherName = metaInfo
-            }
-        }
+    
+            this.plot = genreText
+            this.tags = genres
+            this.year = year
+            this.showStatus = status
+            this.score = Score.from10(rating)
+            addEpisodes(DubStatus.Subbed, episodes)
+         }
     }
 
     private fun fixImageUrl(url: String?): String? {
@@ -170,9 +174,10 @@ class MynimekuProvider : MainAPI() {
         val synopsis = doc.select("div.komik-series-entry p, div.komik-series-hero__synopsis p, div.entry-content p")
             .text().trim()
 
-        val genres = doc.select("div.komik-series-taxonomy__terms a, .genxed a")
+        val genres = doc.select("div.komik-series-taxonomy__terms a, div.komik-series-taxonomy__row a, .genxed a")
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
+            .distinct()
 
         var rating: Double? = null
         var year: Int? = null

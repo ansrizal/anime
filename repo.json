@@ -1,0 +1,9 @@
+{
+    "name": "Ans Rizal Anime Repo",
+    "iconUrl": "https://raw.githubusercontent.com/ansrizal/anime/main/banner.png",
+    "description": "Koleksi provider CloudStream untuk anime dan film Sub Indo.",
+    "manifestVersion": 1,
+    "pluginLists": [
+        "https://raw.githubusercontent.com/ansrizal/anime/builds/plugins.json"
+    ]
+}

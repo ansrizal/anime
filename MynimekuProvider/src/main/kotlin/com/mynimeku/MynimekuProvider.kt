@@ -262,7 +262,9 @@ class MynimekuProvider : MainAPI() {
 
         // 1. Episode Player buttons
         doc.select("button.mynimeku-episode-server-btn[data-player-url]").forEach { btn ->
-            val playerUrl = fixUrlNull(btn.attr("data-player-url")) ?: return@forEach
+            // Bersihkan URL dari HTML entity &#038; menjadi &
+            val rawUrl = btn.attr("data-player-url").replace("&#038;", "&")
+            val playerUrl = fixUrlNull(rawUrl) ?: return@forEach
             
             // Ambil teks kualitas (misal: "CLOUD 360P")
             val qualityText = btn.text().trim()
@@ -325,6 +327,7 @@ class MynimekuProvider : MainAPI() {
         val sourceName = cleanName.substringBefore(" ").uppercase() // Hasil: "CLOUD"
 
         try {
+            // Coba gunakan extractor bawaan Cloudstream
             val loaded = loadExtractor(serverUrl, referer, subtitleCallback) { link ->
                 runBlocking {
                     callback.invoke(
@@ -344,44 +347,52 @@ class MynimekuProvider : MainAPI() {
             }
             if (loaded) return
 
-            val res = app.get(serverUrl, headers = headers, allowRedirects = false)
-            val location = res.headers["Location"] ?: res.headers["location"]
-            val targetUrl = if (!location.isNullOrBlank()) fixUrl(location) else serverUrl
+            // Jika gagal, coba ambil HTML dari URL player secara manual
+            val res = app.get(serverUrl, headers = headers, allowRedirects = true)
+            val targetUrl = res.url
+            val responseText = res.text
 
-            if (targetUrl != serverUrl) {
-                val loadedRedirect = loadExtractor(targetUrl, serverUrl, subtitleCallback) { link ->
-                    runBlocking {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
-                                name = serverName,
-                                url = link.url,
-                                type = link.type
-                            ) {
-                                this.referer = link.referer
-                                this.headers = link.headers
-                                this.quality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else link.quality
-                                this.extractorData = link.extractorData
-                            }
-                        )
+            // Ekstrak URL Base64 dari MyPlayerKu (jika ada)
+            val base64Regex = Regex("""myplayerku\.my\.id/(?:public|drive|private|proxy)/([A-Za-z0-9+/=]+)""")
+            val base64Match = base64Regex.find(serverUrl)
+            
+            if (base64Match != null) {
+                // Decode Base64 untuk mendapatkan ID video asli
+                val encodedId = base64Match.groupValues[1]
+                val decodedId = try {
+                    String(android.util.Base64.decode(encodedId, android.util.Base64.DEFAULT))
+                } catch (e: Exception) {
+                    ""
+                }
+
+                if (decodedId.isNotBlank()) {
+                    // Coba tembak API MyPlayerKu
+                    val apiUrl = "https://players.myplayerku.my.id/api/v1/video?id=$decodedId"
+                    val apiRes = app.get(apiUrl, headers = headers).text
+                    
+                    // Cari link m3u8 di response API
+                    val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                    val m3u8Match = m3u8Regex.find(apiRes)
+                    if (m3u8Match != null) {
+                        val m3u8Url = m3u8Match.groupValues[1].replace("\\/", "/")
+                        M3u8Helper.generateM3u8(
+                            sourceName,
+                            m3u8Url,
+                            referer = "https://players.myplayerku.my.id/",
+                            headers = headers
+                        ).forEach { link ->
+                            link.quality = detectedQuality
+                            callback.invoke(link)
+                        }
+                        return
                     }
                 }
-                if (loadedRedirect) return
             }
 
-            val responseText = if (res.code == 200) res.text else app.get(targetUrl, headers = headers).text
-
-            val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
-            val packedCode = packedRegex.find(responseText)?.value
-            val contentToSearch = if (packedCode != null) {
-                JsUnpacker(packedCode).unpack() ?: responseText
-            } else {
-                responseText
-            }
-
-            val playerDoc = Jsoup.parse(contentToSearch)
+            // Fallback jika API gagal: cari iframe di dalam HTML player
+            val playerDoc = Jsoup.parse(responseText)
             var found = false
-
+            
             playerDoc.select("iframe[src]").forEach { iframe ->
                 val iframeUrl = fixUrlNull(iframe.attr("src")) ?: return@forEach
                 if (loadExtractor(iframeUrl, targetUrl, subtitleCallback, callback)) {
@@ -389,11 +400,12 @@ class MynimekuProvider : MainAPI() {
                 }
             }
 
+            // Fallback terakhir: cari .m3u8 atau .mp4 di HTML
             val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-            m3u8Regex.findAll(contentToSearch).forEach { match ->
+            m3u8Regex.findAll(responseText).forEach { match ->
                 val m3u8Url = match.groupValues[1].replace("\\/", "/")
                 M3u8Helper.generateM3u8(
-                    sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
+                    sourceName,
                     m3u8Url,
                     referer = targetUrl,
                     headers = headers
@@ -405,11 +417,11 @@ class MynimekuProvider : MainAPI() {
             }
 
             val mp4Regex = Regex("""["'](https?://[^"']+\.(?:mp4|mkv|webm)[^"']*)["']""")
-            mp4Regex.findAll(contentToSearch).forEach { match ->
+            mp4Regex.findAll(responseText).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 callback.invoke(
                     newExtractorLink(
-                        source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
+                        source = sourceName,
                         name = serverName,
                         url = videoUrl
                     ) {
@@ -420,22 +432,26 @@ class MynimekuProvider : MainAPI() {
                 found = true
             }
 
-            if (!found && (targetUrl.startsWith("http://") || targetUrl.startsWith("https://"))) {
+            if (!found) {
+                // Jika benar-benar tidak ada, lemparkan URL player mentah
+                // Kadang Cloudstream bisa memutarnya jika tipenya didukung
                 callback.invoke(
                     newExtractorLink(
-                        source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
+                        source = sourceName,
                         name = serverName,
-                        url = targetUrl
+                        url = serverUrl
                     ) {
-                        this.referer = serverUrl
+                        this.referer = referer
                         this.quality = detectedQuality
                     }
                 )
             }
+
         } catch (_: Exception) {
+            // Jangan abaikan error, tapi tetap kirim URL agar user bisa mencoba "Buka di Browser"
             callback.invoke(
                 newExtractorLink(
-                    source = sourceName, // <-- Gunakan CLOUD/DRIVE/PROXY
+                    source = sourceName,
                     name = serverName,
                     url = serverUrl
                 ) {

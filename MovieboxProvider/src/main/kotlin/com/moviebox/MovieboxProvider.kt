@@ -41,7 +41,8 @@ class MovieboxProvider : MainAPI() {
         "5848753831881965888" to "Indonesian Horror Stories",
         "1164329479448281992" to "Thai-Drama",
         "7132534597631837112" to "Animated Film",
-        "1,ForYou" to "Movie ForYou",
+        "5549742004948601072" to "Trending Indo Dubbed", 
+        "5863917898430924656" to "Action & Crime",
         "1,Hottest" to "Movie Hottest",
         "1,Latest" to "Movie Latest",
         "1,Rating" to "Movie Rating",
@@ -108,6 +109,17 @@ class MovieboxProvider : MainAPI() {
         return app.get("$apiBase$path", headers = headers, referer = "$mainUrl/").text
     }
 
+    private suspend fun apiPostWithToken(path: String, data: String): String {
+    val token = getBearerToken()
+    val headers = baseHeaders + mapOf(
+        "Content-Type" to "application/json",
+        "Authorization" to "Bearer $token",
+        "X-Request-Lang" to "en",
+        "X-Client-Token" to clientTimeToken()
+    )
+    return app.post("$apiBase$path", json = JsonAsString(data), headers = headers, referer = "$mainUrl/").text ?: ""
+    }
+
     private suspend fun tokenGet(path: String): String {
         return app.get("$mainUrl$path", headers = baseHeaders).text
     }
@@ -163,13 +175,29 @@ class MovieboxProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val rankingId = request.data
-        val raw = apiGetWithToken("/wefeed-h5api-bff/ranking-list/content?id=$rankingId&page=$page&perPage=12")
+    val home = mutableListOf<SearchResponse>()
+
+    if (!request.data.contains(",")) {
+        // Kasus 1: data adalah rankingId (tanpa koma)
+        val raw = apiGetWithToken("/wefeed-h5api-bff/ranking-list/content?id=${request.data}&page=$page&perPage=12")
         val items = toSubjectList(raw)
             .mapNotNull { toSearchResponseFromSubject(it) }
             .distinctBy { it.url }
+        home.addAll(items)
+    } else {
+        // Kasus 2: data berformat "channelId,sort" (dengan koma)
+        val params = request.data.split(",")
+        val body = """{"channelId":"${params.first()}","page":$page,"perPage":28,"sort":"${params.last()}"}"""
+        val raw = apiPostWithToken("/wefeed-h5api-bff/subject/filter", body)
+        val root = tryParseJson<Map<String, Any?>>(raw)
+        val data = root?.get("data") as? Map<*, *>
+        val items = (data?.get("items") as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
+            .mapNotNull { toSearchResponseFromSubject(it) }
+            .distinctBy { it.url }
+        home.addAll(items)
+    }
 
-        return newHomePageResponse(request.name, items)
+    return newHomePageResponse(request.name, home)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {

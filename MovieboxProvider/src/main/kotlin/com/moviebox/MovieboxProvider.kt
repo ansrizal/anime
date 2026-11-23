@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson // Tambahan untuk parsing token
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -13,6 +14,7 @@ import com.lagradost.nicehttp.*
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.security.MessageDigest // Tambahan untuk generate X-Client-Token
 
 class MovieboxProvider : MainAPI() {
     override var mainUrl = "https://moviebox.ph"
@@ -30,21 +32,59 @@ class MovieboxProvider : MainAPI() {
         TvType.AsianDrama
     )
 
-    // JWT token untuk endpoint h5-api.aoneroom.com
-    private val authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjcyMjczODQ2OTQ1ODkyNDcwNzIsImF0cCI6MywiZXh0IjoiMTc4ODk1MDUyNSIsImV4cCI6MTc5NjcyNjUyNSwiaWF0IjoxNzg4OTUwMjI1fQ.5UOiHLYcY9GSNzm6J8aw0T5AqBRdyiSuQF4xHDwCTqU"
+    // --- MEKANISME TOKEN BARU (DINAMIS) ---
+    private var bearerToken: String? = null
 
-    private val apiHeaders = mapOf(
-        "authorization"           to "Bearer $authToken",
-        "accept"                  to "application/json",
-        "content-type"            to "application/json",
-        "origin"                  to mainUrl,
-        "referer"                 to "$mainUrl/",
-        "user-agent"              to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
-        "x-client-info"           to """{"timezone":"Asia/Jakarta"}""",
-        "x-request-lang"          to "en",
-        "x-no-high-risk-restrict" to "0",
-        "x-vip-restrict"          to "1"
-    )
+    private fun clientTimeToken(): String {
+        val ts = (System.currentTimeMillis() / 1000).toInt()
+        val rev = ts.toString().reversed()
+        val md5 = MessageDigest.getInstance("MD5").digest(rev.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "$ts,$md5"
+    }
+
+    private suspend fun getBearerToken(): String {
+        bearerToken?.let { return it }
+        val headers = mapOf(
+            "accept"                  to "application/json",
+            "content-type"            to "application/json",
+            "origin"                  to mainUrl,
+            "referer"                 to "$mainUrl/",
+            "user-agent"              to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+            "x-client-info"           to """{"timezone":"Asia/Jakarta"}""",
+            "x-request-lang"          to "en",
+            "x-no-high-risk-restrict" to "0",
+            "x-vip-restrict"          to "1",
+            "authorization"           to "",
+            "x-client-token"          to clientTimeToken()
+        )
+        val host = mainUrl.removePrefix("https://").removePrefix("http://")
+        val resp = app.get("$mainAPIUrl/wefeed-h5api-bff/home?host=$host", headers = headers, referer = "$mainUrl/")
+        val xUser = resp.headers["x-user"] ?: ""
+        val token = tryParseJson<Map<String, Any?>>(xUser)?.get("token")?.toString()
+        
+        if (!token.isNullOrBlank()) {
+            bearerToken = token
+        }
+        return bearerToken ?: ""
+    }
+
+    private suspend fun getApiHeaders(): Map<String, String> {
+        val token = getBearerToken()
+        return mapOf(
+            "authorization"           to "Bearer $token",
+            "accept"                  to "application/json",
+            "content-type"            to "application/json",
+            "origin"                  to mainUrl,
+            "referer"                 to "$mainUrl/",
+            "user-agent"              to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+            "x-client-info"           to """{"timezone":"Asia/Jakarta"}""",
+            "x-request-lang"          to "en",
+            "x-no-high-risk-restrict" to "0",
+            "x-vip-restrict"          to "1"
+        )
+    }
+    // --------------------------------------
 
     override val mainPage: List<MainPageData> = mainPageOf(
         "872031290915189720" to "Trending Now",
@@ -108,7 +148,7 @@ class MovieboxProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     // ================================================================
-    //  SEARCH â€” pakai endpoint BARU di h5-api.aoneroom.com (dengan JWT)
+    //  SEARCH — pakai endpoint BARU di h5-api.aoneroom.com (dengan JWT)
     //  Endpoint lama filmboom.top/web/subject/search sudah tidak bisa.
     // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
@@ -119,21 +159,22 @@ class MovieboxProvider : MainAPI() {
             "subjectType" to "0"   // 0 = All
         ).toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
 
+        // Hanya bagian headers yang diubah untuk menggunakan token dinamis
         return app.post(
             "$mainAPIUrl/wefeed-h5api-bff/subject/search",
             requestBody = body,
-            headers = apiHeaders
+            headers = getApiHeaders() 
         ).parsedSafe<Media>()?.data?.items?.map { it.toSearchResponse(this) }
             ?: emptyList()
     }
 
     // ================================================================
-    //  LOAD â€” tetap pakai endpoint LAMA (filmboom.top) yang terbukti
+    //  LOAD — tetap pakai endpoint LAMA (filmboom.top) yang terbukti
     //  berhasil memuat detail film.
     // ================================================================
     override suspend fun load(url: String): LoadResponse {
         val id = url.substringAfterLast("/")
-        val document = app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail?subjectId=$id")
+        val document = app.get("$secondAPIUrl/wefeed-h5api-bff/web/subject/detail?subjectId=$id")
             .parsedSafe<MediaDetail>()?.data
         val subject = document?.subject
         val title = subject?.title ?: ""
@@ -156,7 +197,7 @@ class MovieboxProvider : MainAPI() {
         }?.distinctBy { it.actor }
 
         val recommendations =
-            app.get("$secondAPIUrl/wefeed-h5-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
+            app.get("$secondAPIUrl/wefeed-h5api-bff/web/subject/detail-rec?subjectId=$id&page=1&perPage=12")
                 .parsedSafe<Media>()?.data?.items?.map {
                     it.toSearchResponse(this)
                 }
@@ -209,7 +250,7 @@ class MovieboxProvider : MainAPI() {
     }
 
     // ================================================================
-    //  LOAD LINKS â€” tetap pakai endpoint LAMA (filmboom.top)
+    //  LOAD LINKS — tetap pakai endpoint LAMA (filmboom.top)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -222,7 +263,7 @@ class MovieboxProvider : MainAPI() {
         val referer = "$secondAPIUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
 
         val streams = app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+            "$secondAPIUrl/wefeed-h5api-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
             referer = referer
         ).parsedSafe<Media>()?.data?.streams
 
@@ -244,7 +285,7 @@ class MovieboxProvider : MainAPI() {
         val format = streams?.first()?.format
 
         app.get(
-            "$secondAPIUrl/wefeed-h5-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
+            "$secondAPIUrl/wefeed-h5api-bff/web/subject/caption?format=$format&id=$id&subjectId=${media.id}",
             referer = referer
         ).parsedSafe<Media>()?.data?.captions?.map { subtitle ->
             subtitleCallback.invoke(

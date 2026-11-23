@@ -60,7 +60,7 @@ class KuronimeProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "/page/%d/" to "Episode Baru",
+        "$mainUrl/page/%d/" to "Episode Baru",
         "$mainUrl/anime/page/%d/" to "List Anime", 
         "$mainUrl/anime/page/%d/?status=ongoing&order=update" to "Ongoing Anime",
         "$mainUrl/anime/page/%d/?status=completed&order=update" to "Complete Anime",

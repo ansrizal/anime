@@ -10,7 +10,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson // Tambahan untuk 
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import com.lagradost.nicehttp.*
+import com.lagradost.nicehttp.JsonAsString
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -31,7 +31,27 @@ class MovieboxProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "872031290915189720" to "Trending",
         "4380734070238626200" to "K-Drama: New Release",
-        "6528093688173053896" to "Trending Indonesia"
+        "6528093688173053896" to "Trending Indonesia", 
+        "997144265920760504" to "Popular Movie",
+        "5283462032510044280" to "Latest Indonesian Drama",
+        "7736026911486755336" to "Western TV",
+        "8624142774394406504" to "Most Popular C-Drama",
+        "5404290953194750296" to "Trending Anime",
+        "5848753831881965888" to "Indonesian Horror Stories",
+        "1164329479448281992" to "Thai-Drama",
+        "7132534597631837112" to "Animated Film",
+        "1,ForYou" to "Movie ForYou",
+        "1,Hottest" to "Movie Hottest",
+        "1,Latest" to "Movie Latest",
+        "1,Rating" to "Movie Rating",
+        "2,ForYou" to "TVShow ForYou",
+        "2,Hottest" to "TVShow Hottest",
+        "2,Latest" to "TVShow Latest",
+        "2,Rating" to "TVShow Rating",
+        "1006,ForYou" to "Animation ForYou",
+        "1006,Hottest" to "Animation Hottest",
+        "1006,Latest" to "Animation Latest",
+        "1006,Rating" to "Animation Rating"
     )
 
     private val baseHeaders = mapOf(

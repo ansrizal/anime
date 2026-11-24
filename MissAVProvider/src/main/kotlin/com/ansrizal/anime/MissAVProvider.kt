@@ -47,7 +47,7 @@ class MissAVProvider : MainAPI() {
         "/id/genres/Beautiful%20Breasts" to "Beautiful Breasts",
         "/id/genres/Ntr" to "Ntr",
         "/id/genres/Fetish" to "Fetish",
-        "id/genres/Planning" to "Planning",
+        "/id/genres/Planning" to "Planning",
         "/id/genres/Incest" to "Incest",
         "/id/genres/Hit%20On%20Girls" to "Hit On Girls",
         "/id/genres/Bukkake" to "Bukkake",
@@ -91,7 +91,7 @@ class MissAVProvider : MainAPI() {
         val searchResponse = mutableListOf<SearchResponse>()
 
         for (i in 1..7) {
-            val document = app.get("$mainUrl/en/search/$query?page=$i").document
+            val document = app.get("$mainUrl/id/search/$query?page=$i").document
             //val document = app.get("${mainUrl}/page/$i/?s=$query").document
 
             val results = document.select(".thumbnail").mapNotNull { it.toSearchResult() }

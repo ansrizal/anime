@@ -63,7 +63,7 @@ class MissAVProvider : MainAPI() {
         val home = document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(request.name, home, hasNext = true)
+        return newHomePageResponse(request.name, home, isHorizontalImages = true, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {

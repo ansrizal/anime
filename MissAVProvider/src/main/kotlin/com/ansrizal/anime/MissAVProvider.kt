@@ -63,8 +63,10 @@ class MissAVProvider : MainAPI() {
         val home = document.select("div.thumbnail").mapNotNull {
             it.toSearchResult()
         }
-        return newHomePageResponse(HomePageList(request.name, home, responseList, isHorizontalImages = true),hasNext = true)
-
+        return newHomePageResponse(
+            HomePageList(request.name, home, isHorizontalImages = true),
+            hasNext = true
+        )
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -76,7 +78,7 @@ class MissAVProvider : MainAPI() {
     // Konversi ke landscape 16:9 menggunakan wsrv.nl (crop tengah)
         val posterUrl = rawPoster?.let { toLandscapePoster(it) }
 
-        return newAnimeSearchResponse(title, href, TvType.NSFW) {
+        return newMovieSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
         }
     }
@@ -111,7 +113,7 @@ class MissAVProvider : MainAPI() {
 
         val year = document.selectFirst("time")?.attr("datetime")?.split("-")?.firstOrNull()?.toIntOrNull()
 
-        return newAnimeLoadResponse(title, url, TvType.NSFW) {
+        return newMovieLoadResponse(title, url, TvType.NSFW) {
             this.posterUrl = poster
             this.plot = plot
             this.tags = (tags + actresses).distinct()

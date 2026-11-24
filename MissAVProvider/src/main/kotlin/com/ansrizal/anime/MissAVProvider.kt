@@ -70,7 +70,10 @@ class MissAVProvider : MainAPI() {
         val a = selectFirst("a.text-secondary") ?: selectFirst("a[href*='/id/']") ?: return null
         val title = a.text().trim().ifEmpty { selectFirst("img")?.attr("alt") } ?: return null
         val href = fixUrl(a.attr("href"))
-        val posterUrl = selectFirst("img")?.attr("data-src") ?: selectFirst("img")?.attr("src")
+        val rawPoster = selectFirst("img")?.attr("data-src") ?: selectFirst("img")?.attr("src")
+
+    // Konversi ke landscape 16:9 menggunakan wsrv.nl (crop tengah)
+        val posterUrl = rawPoster?.let { toLandscapePoster(it) }
 
         return newAnimeSearchResponse(title, href, TvType.NSFW) {
             this.posterUrl = posterUrl
@@ -94,8 +97,10 @@ class MissAVProvider : MainAPI() {
             ?: document.selectFirst("meta[property='og:title']")?.attr("content")
             ?: ""
         
-        val poster = document.selectFirst("video.player")?.attr("data-poster")
+        val rawPoster = document.selectFirst("video.player")?.attr("data-poster")
             ?: document.selectFirst("meta[property='og:image']")?.attr("content")
+
+        val poster = rawPoster?.let { toLandscapePoster(it) }
             
         val plot = document.selectFirst("div.mb-4 .text-secondary")?.text()?.trim()
             ?: document.selectFirst("meta[property='og:description']")?.attr("content")
@@ -116,6 +121,16 @@ class MissAVProvider : MainAPI() {
         }
     }
 
+    /**
+ * Mengubah URL poster potret menjadi landscape (16:9) menggunakan wsrv.nl.
+ * Crop dilakukan dari tengah (gravity center) agar wajah/subjek tetap terlihat.
+ */
+    private fun toLandscapePoster(url: String): String {
+        if (url.isBlank()) return url
+    // wsrv.nl: w=640, h=360 (16:9), fit=cover akan crop otomatis
+        return "https://wsrv.nl/?url=${java.net.URLEncoder.encode(url, "UTF-8")}&w=640&h=360&fit=cover&output=jpg&q=80"
+    }
+    
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
